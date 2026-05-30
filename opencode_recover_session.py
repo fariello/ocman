@@ -262,6 +262,13 @@ def extract_models_from_config(config: dict[str, Any]) -> list[ModelInfo]:
         base_url = options.get("baseURL", "")
         api_key = options.get("apiKey", "")
 
+        # Expand environment variable references in API key.
+        if isinstance(api_key, str):
+            if api_key.startswith("${") and api_key.endswith("}"):
+                api_key = os.environ.get(api_key[2:-1], "")
+            elif api_key.startswith("$"):
+                api_key = os.environ.get(api_key[1:], "")
+
         # For standard OpenAI provider, default baseURL.
         if not base_url and npm_package == "@ai-sdk/openai":
             base_url = "https://api.openai.com/v1"
@@ -397,7 +404,7 @@ def resolve_model(models: list[ModelInfo], model_spec: str) -> ModelInfo:
     # Try substring match.
     matches = [
         m for m in models
-        if model_spec in f"{m.provider_id}/{m.model_id}" or model_spec in m.name.lower()
+        if model_spec.lower() in f"{m.provider_id}/{m.model_id}".lower() or model_spec.lower() in m.name.lower()
     ]
 
     if not matches:
@@ -495,6 +502,13 @@ def call_compaction_api(
     """
 
     url = model.base_url.rstrip("/") + "/chat/completions"
+
+    # Refuse to send credentials over non-HTTPS (except localhost for dev).
+    if not url.startswith("https://") and "localhost" not in url and "127.0.0.1" not in url:
+        raise RecoveryError(
+            f"Refusing to send API key to non-HTTPS endpoint: {url}\n"
+            "Only HTTPS endpoints (or localhost) are supported for security."
+        )
     log(f"Calling API: {url}", verbosity)
     log(f"Model: {model.model_id}", verbosity)
 
@@ -2376,7 +2390,7 @@ how that affects confidence.
 12. Write the output as context and instructions for the opencode agent only.
 
 ---
-
+{prior_context_section}
 ## Transcript
 
 ```text
@@ -2579,7 +2593,7 @@ def load_prior_context_files(
         "contradicted by the current transcript.\n"
     )
 
-    return header + "\n\n---\n\n".join(sections) + "\n\n---\n\n"
+    return header + "\n\n---\n\n".join(sections) + "\n"
 
 
 def render_compact_prompt(
@@ -2631,21 +2645,23 @@ def render_compact_prompt(
 
     if prior_context:
         truncation_note += " Prior session context is included below."
+        prior_context_section = "\n" + prior_context + "\n"
+    else:
+        prior_context_section = ""
 
-    # Combine prior context + current transcript for the transcript_content field.
-    full_transcript_content = ""
-    if prior_context:
-        full_transcript_content += prior_context + "\n"
-    full_transcript_content += transcript
+    # Escape braces in user-provided strings to prevent str.format() crashes.
+    safe_session_id = session.session_id.replace("{", "{{").replace("}", "}}")
+    safe_session_title = session.title.replace("{", "{{").replace("}", "}}")
 
     return COMPACTION_USER_PROMPT_TEMPLATE.format(
-        session_id=session.session_id,
-        session_title=session.title,
+        session_id=safe_session_id,
+        session_title=safe_session_title,
         turn_count=turn_count,
         interaction_count=interaction_count,
         line_count=line_count,
         truncation_note=truncation_note,
-        transcript_content=full_transcript_content,
+        prior_context_section=prior_context_section,
+        transcript_content=transcript,
     )
 
 
@@ -2792,7 +2808,7 @@ def recover_from_export(
                 f"(skipped {skipped} older turns)."
             ))
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     safe_session_id = safe_filename(session.session_id)
     base_name = f"opencode-recovery-{safe_session_id}-{timestamp}"
 
@@ -3249,6 +3265,8 @@ def run_compaction(
         print(f"  Est cost: {color_dim('unknown (no cost info for this model)')}")
 
     print()
+    print(color_dim("  Note: The session transcript will be sent to the API endpoint above."))
+    print()
 
     # Ask for confirmation if interactive.
     if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
@@ -3269,7 +3287,7 @@ def run_compaction(
     )
 
     # Write the compacted output.
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
     safe_session_id = safe_filename(session.session_id)
     compacted_path = output_dir / f"opencode-recovery-{safe_session_id}-{timestamp}.compacted.md"
 
@@ -3329,6 +3347,8 @@ def main() -> None:
             "{line_count}", "<N>"
         ).replace(
             "{truncation_note}", "<truncation details or 'Complete (no truncation applied).'>"
+        ).replace(
+            "{prior_context_section}", "\n[... prior context from --input-compact/restart/transcript, if provided ...]\n"
         ))
         return
 
@@ -3386,6 +3406,24 @@ def main() -> None:
             print()
 
         if args.clean_previous:
+            # Warn if --clean-previous will delete files specified via --input-*.
+            prior_files = set(
+                p.resolve() for p in
+                args.input_compact + args.input_restart + args.input_transcript
+            )
+            if prior_files:
+                safe_id = safe_filename(session.session_id)
+                prefix = f"opencode-recovery-{safe_id}-"
+                if output_dir.is_dir():
+                    for entry in output_dir.iterdir():
+                        if entry.is_file() and entry.name.startswith(prefix):
+                            if entry.resolve() in prior_files:
+                                eprint(color_yellow(
+                                    f"Warning: --clean-previous will delete {entry.name}, "
+                                    f"which was specified as prior context input. "
+                                    f"Content was already loaded into memory."
+                                ))
+
             clean_previous_recovery_files(
                 output_dir=output_dir,
                 session_id=session.session_id,
@@ -3466,8 +3504,13 @@ def main() -> None:
             # If --use-model is specified, run compaction via LLM.
             compacted_path: Path | None = None
             if args.use_model:
+                # Find the compact prompt file from generated paths.
+                compact_prompt_file = next(
+                    (p for p in generated_paths if p.name.endswith(".compact-prompt.md")),
+                    generated_paths[-1],
+                )
                 compacted_path = run_compaction(
-                    compact_prompt_path=generated_paths[2],  # .compact-prompt.md
+                    compact_prompt_path=compact_prompt_file,
                     output_dir=output_dir,
                     session=session,
                     model_spec=args.use_model,
