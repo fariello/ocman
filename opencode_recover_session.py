@@ -2510,11 +2510,84 @@ the discrepancy before acting.
 """
 
 
+def load_prior_context_files(
+    input_compact: list[Path],
+    input_restart: list[Path],
+    input_transcript: list[Path],
+    verbosity: int,
+) -> str:
+    """
+    Load and format prior context files for inclusion in the compact prompt.
+
+    Files are concatenated in order: compacted files first, then restart files,
+    then transcript files. Each is labeled with its source type and filename.
+
+    Args:
+        input_compact:
+            Prior compacted recovery files.
+
+        input_restart:
+            Prior restart files.
+
+        input_transcript:
+            Prior transcript files.
+
+        verbosity:
+            Current verbosity level.
+
+    Returns:
+        Formatted prior context string, or empty string if no files provided.
+
+    Raises:
+        RecoveryError:
+            If a specified file cannot be read.
+    """
+
+    all_files: list[tuple[str, Path]] = []
+    for p in input_compact:
+        all_files.append(("compacted recovery", p))
+    for p in input_restart:
+        all_files.append(("restart context", p))
+    for p in input_transcript:
+        all_files.append(("transcript", p))
+
+    if not all_files:
+        return ""
+
+    sections: list[str] = []
+
+    for label, path in all_files:
+        log(f"Loading prior context ({label}): {path}", verbosity)
+        if not path.exists():
+            raise RecoveryError(f"Prior context file not found: {path}")
+        try:
+            content = path.read_text(encoding="utf-8").strip()
+        except OSError as error:
+            raise RecoveryError(
+                f"Could not read prior context file: {path}\n{error}"
+            ) from error
+
+        sections.append(
+            f"### Prior session {label}: `{path.name}`\n\n{content}"
+        )
+
+    header = (
+        "## Prior Session Context\n\n"
+        "The following was recovered from one or more previous sessions that "
+        "preceded the current transcript. Treat this as established context — "
+        "decisions, state, and constraints documented here remain valid unless "
+        "contradicted by the current transcript.\n"
+    )
+
+    return header + "\n\n---\n\n".join(sections) + "\n\n---\n\n"
+
+
 def render_compact_prompt(
     turns: list[Turn],
     source_name: str,
     session: SessionInfo,
     total_turns_before_truncation: int | None = None,
+    prior_context: str = "",
 ) -> str:
     """
     Render the compaction prompt with the transcript embedded.
@@ -2532,6 +2605,10 @@ def render_compact_prompt(
         total_turns_before_truncation:
             If the transcript was truncated, the original turn count.
             None means no truncation occurred.
+
+        prior_context:
+            Formatted prior context from previous session recoveries.
+            Prepended before the current transcript.
 
     Returns:
         The fully rendered compaction prompt (user message content).
@@ -2552,6 +2629,15 @@ def render_compact_prompt(
     else:
         truncation_note = "Complete (no truncation applied)."
 
+    if prior_context:
+        truncation_note += " Prior session context is included below."
+
+    # Combine prior context + current transcript for the transcript_content field.
+    full_transcript_content = ""
+    if prior_context:
+        full_transcript_content += prior_context + "\n"
+    full_transcript_content += transcript
+
     return COMPACTION_USER_PROMPT_TEMPLATE.format(
         session_id=session.session_id,
         session_title=session.title,
@@ -2559,7 +2645,7 @@ def render_compact_prompt(
         interaction_count=interaction_count,
         line_count=line_count,
         truncation_note=truncation_note,
-        transcript_content=transcript,
+        transcript_content=full_transcript_content,
     )
 
 
@@ -2597,6 +2683,10 @@ def recover_from_export(
     verbosity: int,
     max_lines: int | None = None,
     max_interactions: int | None = None,
+    prior_context: str = "",
+    output_transcript: Path | None = None,
+    output_restart: Path | None = None,
+    output_compact: Path | None = None,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -2625,6 +2715,18 @@ def recover_from_export(
 
         max_interactions:
             Maximum interactions. None means no limit.
+
+        prior_context:
+            Formatted prior context from previous session recoveries.
+
+        output_transcript:
+            Explicit output path for the transcript file. None uses default.
+
+        output_restart:
+            Explicit output path for the restart file. None uses default.
+
+        output_compact:
+            Explicit output path for the compact prompt file. None uses default.
 
     Returns:
         Paths to generated files.
@@ -2694,9 +2796,9 @@ def recover_from_export(
     safe_session_id = safe_filename(session.session_id)
     base_name = f"opencode-recovery-{safe_session_id}-{timestamp}"
 
-    transcript_path = output_dir / f"{base_name}.transcript.md"
-    restart_path = output_dir / f"{base_name}.restart.md"
-    compact_prompt_path = output_dir / f"{base_name}.compact-prompt.md"
+    transcript_path = output_transcript or (output_dir / f"{base_name}.transcript.md")
+    restart_path = output_restart or (output_dir / f"{base_name}.restart.md")
+    compact_prompt_path = output_compact or (output_dir / f"{base_name}.compact-prompt.md")
 
     log(f"Writing transcript to: {transcript_path}", verbosity)
     write_text(
@@ -2726,6 +2828,7 @@ def recover_from_export(
                 if total_turns_before_truncation > len(selected_turns)
                 else None
             ),
+            prior_context=prior_context,
         ),
     )
 
@@ -2866,6 +2969,63 @@ def parse_args() -> argparse.Namespace:
             "When exceeded, only the most recent interactions are kept. "
             "No limit by default."
         ),
+    )
+
+    parser.add_argument(
+        "--input-compact",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Prior compacted recovery file to include as context. "
+            "Content is prepended to the transcript when generating the compact prompt. "
+            "Can be specified multiple times for chained recoveries."
+        ),
+    )
+
+    parser.add_argument(
+        "--input-restart",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Prior restart file to include as context. "
+            "Content is prepended to the transcript when generating the compact prompt. "
+            "Can be specified multiple times."
+        ),
+    )
+
+    parser.add_argument(
+        "--input-transcript",
+        type=Path,
+        action="append",
+        default=[],
+        help=(
+            "Prior transcript file to include as context. "
+            "Content is prepended to the transcript when generating the compact prompt. "
+            "Can be specified multiple times."
+        ),
+    )
+
+    parser.add_argument(
+        "--output-compact",
+        type=Path,
+        default=None,
+        help="Explicit output path for the compact prompt file. Directory created if needed.",
+    )
+
+    parser.add_argument(
+        "--output-restart",
+        type=Path,
+        default=None,
+        help="Explicit output path for the restart context file. Directory created if needed.",
+    )
+
+    parser.add_argument(
+        "--output-transcript",
+        type=Path,
+        default=None,
+        help="Explicit output path for the transcript file. Directory created if needed.",
     )
 
     parser.add_argument(
@@ -3210,6 +3370,17 @@ def main() -> None:
         output_dir = args.out
         generated_paths: list[Path] = []
 
+        # Load prior context files BEFORE cleaning (in case they're in the output dir).
+        prior_context = load_prior_context_files(
+            input_compact=args.input_compact,
+            input_restart=args.input_restart,
+            input_transcript=args.input_transcript,
+            verbosity=verbosity,
+        )
+        if prior_context:
+            print(f"Loaded prior context: {color_cyan(f'{len(args.input_compact) + len(args.input_restart) + len(args.input_transcript)} file(s)')}")
+            print()
+
         if args.clean:
             clean_temp_files(verbosity=verbosity)
             print()
@@ -3243,6 +3414,10 @@ def main() -> None:
                     verbosity=verbosity,
                     max_lines=args.max_lines,
                     max_interactions=args.max_interactions,
+                    prior_context=prior_context,
+                    output_transcript=args.output_transcript,
+                    output_restart=args.output_restart,
+                    output_compact=args.output_compact,
                 )
 
                 print()
@@ -3273,6 +3448,10 @@ def main() -> None:
                     verbosity=verbosity,
                     max_lines=args.max_lines,
                     max_interactions=args.max_interactions,
+                    prior_context=prior_context,
+                    output_transcript=args.output_transcript,
+                    output_restart=args.output_restart,
+                    output_compact=args.output_compact,
                 )
 
                 log("Temporary export cleaned up.", verbosity)
