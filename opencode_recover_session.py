@@ -6,44 +6,62 @@ This utility helps recover from broken opencode sessions by:
 1. Listing available opencode sessions.
 2. Letting the user interactively select a session.
 3. Exporting the selected session to a temporary JSON file.
-4. Extracting user and assistant interactions.
-5. Generating restart-friendly Markdown files.
-6. Cleaning up temporary files, including after CTRL-C or failure.
+4. Extracting and consolidating user/assistant interactions.
+5. Generating restart-friendly Markdown files (transcript, restart, compact prompt).
+6. Optionally compacting the transcript via an LLM API call.
+7. Cleaning up temporary files, including after CTRL-C or failure.
 
-Example:
+Basic usage:
     ./opencode_recover_session.py
 
-Example with verbose output:
-    ./opencode_recover_session.py -v
-
-Example with very verbose output:
-    ./opencode_recover_session.py -vv
-
-Example with explicit output directory:
-    ./opencode_recover_session.py --out ./opencode-recovery
-
-Example preserving the temporary exported JSON:
-    ./opencode_recover_session.py --keep-temp
-
-Example non-interactive use with a known session ID:
-    ./opencode_recover_session.py --session SESSION_ID
-
-Example recovering a session from a different project directory:
+Recover a session from a different project directory:
     ./opencode_recover_session.py --session-dir /path/to/project
 
-Example cleaning up leftover temporary files before recovering:
-    ./opencode_recover_session.py --clean
+Non-interactive with a known session ID:
+    ./opencode_recover_session.py --session SESSION_ID
 
-Example removing previous recovery output for the selected session:
-    ./opencode_recover_session.py --clean-previous --session SESSION_ID
+Truncate to the most recent 50 interactions:
+    ./opencode_recover_session.py --session SESSION_ID --max-interactions 50
+
+Truncate to fit within 2000 output lines:
+    ./opencode_recover_session.py --session SESSION_ID --max-lines 2000
+
+Show available models for LLM compaction:
+    ./opencode_recover_session.py --show-models
+
+Compact a recovery via a cheap model:
+    ./opencode_recover_session.py --session SESSION_ID --use-model uri/its_direct/pt1-qwen3-32b-us
+
+Chain recoveries (include prior compacted context):
+    ./opencode_recover_session.py --session SESSION_ID \\
+        --input-compact ./opencode-recovery/previous-session.compacted.md
+
+Write output to explicit paths:
+    ./opencode_recover_session.py --session SESSION_ID \\
+        --output-transcript ./out/transcript.md \\
+        --output-restart ./out/restart.md \\
+        --output-compact ./out/compact-prompt.md
+
+Clean up before generating new output:
+    ./opencode_recover_session.py --session SESSION_ID --clean --clean-previous
+
+Show the compaction prompt template:
+    ./opencode_recover_session.py --show-compaction-prompt
 
 Notes:
-    This script does not call any external APIs.
+    Requires the `opencode` CLI to be installed and available on PATH.
 
-    It requires the `opencode` CLI to be installed and available on PATH.
+    Uses only Python standard library (no third-party packages).
 
-    It intentionally avoids third-party Python packages so that it can run on
-    a clean system Python installation.
+    When --use-model is specified, the session transcript is sent to an
+    external LLM API endpoint (configured in ~/.config/opencode/opencode.json).
+    The script shows a cost estimate and asks for confirmation before sending.
+
+    Output files:
+      *.transcript.md    - Raw consolidated transcript (user/assistant turns)
+      *.restart.md       - Transcript wrapped with instructions for a fresh agent
+      *.compact-prompt.md - Full prompt for LLM compaction (includes instructions)
+      *.compacted.md     - LLM-generated compact restart document (if --use-model)
 """
 
 from __future__ import annotations
