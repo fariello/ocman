@@ -1011,14 +1011,14 @@ class ModelSelectionScreen(Screen):
         self.app.pop_screen()
 
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
-        """Handle Enter on a model row — select it and proceed."""
+        """Handle Enter on a model row — select it and push context selection."""
         try:
             table = self.query_one("#model-table", DataTable)
             row_idx = table.cursor_row
             if row_idx is not None and 0 <= row_idx < len(self.filtered_models):
                 selected_model = self.filtered_models[row_idx]
-                # Push compaction screen.
-                self.app.push_screen(CompactionScreen(
+                # Push context selection screen.
+                self.app.push_screen(ContextSelectionScreen(
                     model=selected_model,
                     turns=self.turns,
                     session=self.session,
@@ -1027,6 +1027,276 @@ class ModelSelectionScreen(Screen):
                 ))
         except Exception:
             pass
+
+
+# ---------------------------------------------------------------------------
+# Context Selection Screen
+# ---------------------------------------------------------------------------
+
+class ContextSelectionScreen(Screen):
+    """
+    Select prior context files to include in the compaction prompt.
+
+    Discovers existing recovery files in the output directory and lets the
+    user toggle which ones to include. Also supports adding custom paths
+    and recovering another session inline.
+    """
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back", priority=True),
+        Binding("b", "go_back", "Back", priority=True),
+        Binding("p", "proceed", "Proceed", priority=True),
+        Binding("s", "skip", "Skip", priority=True),
+        Binding("a", "toggle_all", "Select All", priority=True),
+        Binding("n", "recover_another", "New Recovery", priority=True),
+        Binding("1", "toggle_1", "1", show=False, priority=True),
+        Binding("2", "toggle_2", "2", show=False, priority=True),
+        Binding("3", "toggle_3", "3", show=False, priority=True),
+        Binding("4", "toggle_4", "4", show=False, priority=True),
+        Binding("5", "toggle_5", "5", show=False, priority=True),
+        Binding("6", "toggle_6", "6", show=False, priority=True),
+        Binding("7", "toggle_7", "7", show=False, priority=True),
+        Binding("8", "toggle_8", "8", show=False, priority=True),
+        Binding("9", "toggle_9", "9", show=False, priority=True),
+        Binding("q", "quit", "Quit", priority=True),
+    ]
+
+    def __init__(
+        self,
+        model: ModelInfo,
+        turns: list[Turn],
+        session: SessionInfo,
+        generated_files: dict[str, Path],
+        est_input_tokens: int = 0,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.model = model
+        self.turns = turns
+        self.session = session
+        self.generated_files = generated_files
+        self.est_input_tokens = est_input_tokens
+        # Available files discovered in output dir.
+        self.available_files: list[dict] = []
+        # Selection state: index → selected.
+        self.selected: set[int] = set()
+        # Custom paths added by user.
+        self.custom_paths: list[Path] = []
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(
+            Static("Loading...", id="context-content"),
+            id="context-scroll",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._discover_files()
+        self._render()
+
+    def _discover_files(self) -> None:
+        """Find available recovery files in the output directory."""
+        app: OrsessionApp = self.app  # type: ignore
+        try:
+            recovery_files = discover_recovery_files(app.output_dir)
+        except (AttributeError, OSError):
+            recovery_files = []
+
+        # Exclude files from the CURRENT session's recovery (those are what
+        # we're building the prompt for — including them would be circular).
+        current_safe_id = safe_filename(self.session.session_id)
+
+        self.available_files = []
+        for rf in recovery_files:
+            # Skip files from the current session.
+            if rf.session_id == current_safe_id:
+                continue
+            # Only show compacted, restart, and transcript files (not compact-prompt).
+            if rf.file_type in ("compacted", "restart", "transcript"):
+                self.available_files.append({
+                    "path": rf.path,
+                    "session_id": rf.session_id,
+                    "file_type": rf.file_type,
+                    "timestamp": rf.timestamp,
+                    "line_count": rf.line_count,
+                    "size_bytes": rf.size_bytes,
+                })
+
+    def _render(self) -> None:
+        """Render the context selection UI."""
+        lines: list[str] = []
+
+        lines.append("[bold]Include prior session context?[/]")
+        lines.append("")
+        lines.append("[dim]Prior context helps the LLM understand work from earlier sessions.[/]")
+        lines.append("[dim]This is useful when chaining recoveries across forks or restarts.[/]")
+        lines.append("")
+
+        if self.available_files or self.custom_paths:
+            lines.append("[bold]Available recovery files:[/]")
+            lines.append("")
+
+            # Header.
+            lines.append(f"  {'#':<4} {'Sel':<4} {'Type':<12} {'Session':<25} {'Lines':<8}")
+            lines.append(f"  {'─'*4} {'─'*4} {'─'*12} {'─'*25} {'─'*8}")
+
+            for idx, finfo in enumerate(self.available_files):
+                selected = "✓" if idx in self.selected else " "
+                sel_style = "green" if idx in self.selected else "dim"
+                file_type = finfo["file_type"]
+                session_id = finfo["session_id"][:24]
+                line_count = finfo["line_count"]
+
+                lines.append(
+                    f"  {idx + 1:<4} [{sel_style}][{selected}][/]  "
+                    f"{file_type:<12} {session_id:<25} {line_count:<8}"
+                )
+
+            # Custom paths.
+            for idx, path in enumerate(self.custom_paths):
+                custom_idx = len(self.available_files) + idx
+                selected = "✓" if custom_idx in self.selected else " "
+                sel_style = "green" if custom_idx in self.selected else "dim"
+                lines.append(
+                    f"  {custom_idx + 1:<4} [{sel_style}][{selected}][/]  "
+                    f"{'custom':<12} {path.name:<25} {'?':<8}"
+                )
+
+            lines.append("")
+        else:
+            lines.append("[dim]No prior recovery files found in the output directory.[/]")
+            lines.append("[dim](Only files from other sessions are shown here.)[/]")
+            lines.append("")
+
+        # Summary of selections.
+        total_selected = len(self.selected)
+        if total_selected:
+            lines.append(f"  Selected: [green]{total_selected} file(s)[/]")
+        else:
+            lines.append(f"  Selected: [dim](none — compaction will use current session only)[/]")
+
+        lines.append("")
+        lines.append("─" * 50)
+        lines.append("")
+        lines.append("  [bold][1-9][/]   Toggle file by number")
+        lines.append("  [bold][a][/]     Select all / deselect all")
+        lines.append("  [bold][P][/]     Proceed to compaction")
+        lines.append("  [bold][s][/]     Skip context (proceed without)")
+        lines.append("  [bold][n][/]     Recover another session to include")
+        lines.append("  [bold][b][/]     Back to model selection")
+        lines.append("")
+
+        content = self.query_one("#context-content", Static)
+        content.update("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    def _toggle_index(self, idx: int) -> None:
+        """Toggle selection of a file by index."""
+        total = len(self.available_files) + len(self.custom_paths)
+        if 0 <= idx < total:
+            if idx in self.selected:
+                self.selected.discard(idx)
+            else:
+                self.selected.add(idx)
+            self._render()
+
+    def action_toggle_1(self) -> None: self._toggle_index(0)
+    def action_toggle_2(self) -> None: self._toggle_index(1)
+    def action_toggle_3(self) -> None: self._toggle_index(2)
+    def action_toggle_4(self) -> None: self._toggle_index(3)
+    def action_toggle_5(self) -> None: self._toggle_index(4)
+    def action_toggle_6(self) -> None: self._toggle_index(5)
+    def action_toggle_7(self) -> None: self._toggle_index(6)
+    def action_toggle_8(self) -> None: self._toggle_index(7)
+    def action_toggle_9(self) -> None: self._toggle_index(8)
+
+    def action_proceed(self) -> None:
+        """Proceed to compaction with selected context."""
+        self._do_proceed()
+
+    def action_skip(self) -> None:
+        """Skip context selection — proceed without prior context."""
+        self.selected.clear()
+        self._do_proceed()
+
+    def action_toggle_all(self) -> None:
+        """Toggle all files selected/deselected."""
+        total = len(self.available_files) + len(self.custom_paths)
+        if len(self.selected) == total and total > 0:
+            self.selected.clear()
+        else:
+            self.selected = set(range(total))
+        self._render()
+
+    def action_recover_another(self) -> None:
+        """Recover another session to include as context."""
+        self.app.notify(
+            "Recover-another-session sub-flow coming soon. "
+            "For now, use the CLI tool to generate files, then include them here.",
+            timeout=6,
+        )
+
+    def _do_proceed(self) -> None:
+        """Gather selected files and push CompactionScreen with context."""
+        # Build the prior context string from selected files.
+        prior_context = self._build_prior_context()
+
+        # Push compaction screen.
+        self.app.push_screen(CompactionScreen(
+            model=self.model,
+            turns=self.turns,
+            session=self.session,
+            generated_files=self.generated_files,
+            est_input_tokens=self.est_input_tokens,
+            prior_context=prior_context,
+        ))
+
+    def _build_prior_context(self) -> str:
+        """Read selected files and build a prior context string."""
+        if not self.selected:
+            return ""
+
+        sections: list[str] = []
+        all_items = list(self.available_files) + [
+            {"path": p, "file_type": "custom", "session_id": "custom"}
+            for p in self.custom_paths
+        ]
+
+        for idx in sorted(self.selected):
+            if idx >= len(all_items):
+                continue
+            item = all_items[idx]
+            path = item["path"]
+            file_type = item["file_type"]
+
+            try:
+                content = path.read_text(encoding="utf-8").strip()
+            except OSError:
+                continue
+
+            sections.append(
+                f"### Prior session {file_type}: `{path.name}`\n\n{content}"
+            )
+
+        if not sections:
+            return ""
+
+        header = (
+            "## Prior Session Context\n\n"
+            "The following was recovered from one or more previous sessions that "
+            "preceded the current transcript. Treat this as established context — "
+            "decisions, state, and constraints documented here remain valid unless "
+            "contradicted by the current transcript.\n"
+        )
+
+        return header + "\n\n---\n\n".join(sections) + "\n"
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
 
 
 # ---------------------------------------------------------------------------
@@ -1049,6 +1319,7 @@ class CompactionScreen(Screen):
         session: SessionInfo,
         generated_files: dict[str, Path],
         est_input_tokens: int = 0,
+        prior_context: str = "",
         **kwargs,
     ) -> None:
         super().__init__(**kwargs)
@@ -1057,6 +1328,7 @@ class CompactionScreen(Screen):
         self.session = session
         self.generated_files = generated_files
         self.est_input_tokens = est_input_tokens
+        self.prior_context = prior_context
         self.step = "confirm"  # confirm, running, complete, error
         self.compacted_path: Path | None = None
         self.actual_usage: dict = {}
@@ -1115,13 +1387,18 @@ class CompactionScreen(Screen):
             elif warning == "info":
                 lines.append("  [dim]ℹ Large input — may be slow or costly.[/]")
 
+        if self.prior_context:
+            context_lines = self.prior_context.count("\n") + 1
+            lines.append("")
+            lines.append(f"  [dim]Context:[/]    [green]Prior context included ({context_lines} lines)[/]")
+
         lines.append("")
         lines.append("  [dim]The session transcript will be sent to the API endpoint above.[/]")
         lines.append("")
         lines.append("─" * 40)
         lines.append("")
         lines.append("  [bold][y][/] Confirm and send")
-        lines.append("  [bold][b][/] Back to model selection")
+        lines.append("  [bold][b][/] Back to context selection")
         lines.append("")
 
         content = self.query_one("#compact-content", Static)
@@ -1222,13 +1499,18 @@ class CompactionScreen(Screen):
         self.step = "running"
         self._render_step()
 
-        # Build the prompt from the compact-prompt file if available,
-        # otherwise generate it.
-        compact_prompt_path = self.generated_files.get("compact_prompt")
-        if compact_prompt_path and compact_prompt_path.exists():
-            prompt_content = compact_prompt_path.read_text(encoding="utf-8")
+        # Build the prompt. If prior context was provided, regenerate the prompt
+        # with context included (the file on disk won't have it).
+        if self.prior_context:
+            prompt_content = render_compact_prompt(
+                self.turns, self.session, prior_context=self.prior_context,
+            )
         else:
-            prompt_content = render_compact_prompt(self.turns, self.session)
+            compact_prompt_path = self.generated_files.get("compact_prompt")
+            if compact_prompt_path and compact_prompt_path.exists():
+                prompt_content = compact_prompt_path.read_text(encoding="utf-8")
+            else:
+                prompt_content = render_compact_prompt(self.turns, self.session)
 
         try:
             result = call_compaction_api(self.model, prompt_content)
@@ -1591,6 +1873,15 @@ class OrsessionApp(App):
     #model-footer {
         height: auto;
         margin-top: 1;
+    }
+
+    #context-scroll {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #context-content {
+        width: 100%;
     }
 
     #compact-scroll {
