@@ -21,19 +21,26 @@ from textual.widgets import DataTable, Footer, Header, Rule, Static
 from .core import (
     LONG_SESSION_INTERACTION_THRESHOLD,
     LONG_SESSION_LINE_THRESHOLD,
+    ModelInfo,
     RecoveryError,
     SessionExport,
     SessionInfo,
     Turn,
+    call_compaction_api,
     count_interactions,
     discover_recovery_files,
+    estimate_cost,
     estimate_tokens,
     export_session,
+    extract_models_from_config,
     extract_turns_from_export,
     filter_conversation_turns,
     format_timestamp,
     generate_recovery_files,
+    get_compatible_models,
     list_sessions,
+    load_opencode_config,
+    render_compact_prompt,
     render_transcript,
     require_opencode,
     safe_filename,
@@ -42,6 +49,7 @@ from .core import (
     token_warning_level,
     truncate_turns_by_interactions,
     truncate_turns_by_lines,
+    write_text,
 )
 
 
@@ -641,8 +649,11 @@ class RecoveryWizardScreen(Screen):
 
         elif self.step == "complete":
             if key == "y":
-                # TODO: push model selection screen
-                self.app.notify("Model selection (not yet implemented)")
+                self.app.push_screen(ModelSelectionScreen(
+                    turns=self.turns,
+                    session=self.session,
+                    generated_files=self.generated_files,
+                ))
             elif key == "v":
                 if self.turns:
                     self.app.push_screen(
@@ -762,6 +773,515 @@ class RecoveryWizardScreen(Screen):
             self.app.pop_screen()
         else:
             self.app.pop_screen()
+
+
+# ---------------------------------------------------------------------------
+# Model Selection Screen
+# ---------------------------------------------------------------------------
+
+class ModelSelectionScreen(Screen):
+    """Interactive model picker with search/filter and cost estimate."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+        Binding("b", "go_back", "Back"),
+        Binding("slash", "start_search", "Search"),
+        Binding("s", "cycle_sort", "Sort"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        turns: list[Turn],
+        session: SessionInfo,
+        generated_files: dict[str, Path],
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.turns = turns
+        self.session = session
+        self.generated_files = generated_files
+        self.all_models: list[ModelInfo] = []
+        self.filtered_models: list[ModelInfo] = []
+        self.search_term: str = ""
+        self.sort_mode: str = "cost_asc"  # cost_asc, name_asc, provider_asc
+        self.est_input_tokens: int = 0
+        self.error_message: str | None = None
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static(id="model-header"),
+            DataTable(id="model-table"),
+            Static(id="model-footer"),
+            id="model-container",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        """Load models from config."""
+        self._load_models()
+
+    def _load_models(self) -> None:
+        """Load compatible models from opencode config."""
+        try:
+            config = load_opencode_config()
+            all_models = extract_models_from_config(config)
+            self.all_models = get_compatible_models(all_models)
+        except RecoveryError as e:
+            self.error_message = str(e)
+            self.all_models = []
+
+        if not self.all_models and not self.error_message:
+            self.error_message = "No OpenAI-compatible models found in config."
+
+        # Estimate input tokens from the compact prompt.
+        if self.turns:
+            transcript = render_transcript(self.turns, "")
+            self.est_input_tokens = estimate_tokens(transcript)
+
+        self.filtered_models = list(self.all_models)
+        self._sort_models()
+        self._render_header()
+        self._populate_table()
+        self._render_footer()
+
+    def _sort_models(self) -> None:
+        """Sort the filtered model list."""
+        if self.sort_mode == "cost_asc":
+            self.filtered_models.sort(
+                key=lambda m: (m.cost_input or 999, m.cost_output or 999, m.name)
+            )
+        elif self.sort_mode == "name_asc":
+            self.filtered_models.sort(key=lambda m: m.name.lower())
+        elif self.sort_mode == "provider_asc":
+            self.filtered_models.sort(key=lambda m: (m.provider_id, m.name.lower()))
+
+    def _render_header(self) -> None:
+        """Render the header with count and search term."""
+        header = self.query_one("#model-header", Static)
+        lines: list[str] = []
+
+        lines.append("[bold]Select a model for LLM compaction[/]")
+        lines.append("")
+
+        if self.error_message:
+            lines.append(f"[bold red]Error:[/] {self.error_message}")
+        else:
+            total = len(self.all_models)
+            showing = len(self.filtered_models)
+            if self.search_term:
+                lines.append(
+                    f"Showing [bold]{showing}[/] of {total} compatible models "
+                    f"(filter: [cyan]{self.search_term}[/])"
+                )
+            else:
+                lines.append(f"Showing [bold]{showing}[/] compatible models (sorted by "
+                             f"{'cost' if self.sort_mode == 'cost_asc' else 'name' if self.sort_mode == 'name_asc' else 'provider'})")
+
+        header.update("\n".join(lines))
+
+    def _populate_table(self) -> None:
+        """Fill the model table."""
+        try:
+            table = self.query_one("#model-table", DataTable)
+        except Exception:
+            return
+
+        table.clear(columns=True)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column("#", width=4)
+        table.add_column("Model ID", width=None)
+        table.add_column("Name", width=20)
+        table.add_column("$/M in", width=8)
+        table.add_column("$/M out", width=8)
+        table.add_column("Est. Cost", width=10)
+
+        for idx, model in enumerate(self.filtered_models, start=1):
+            full_id = f"{model.provider_id}/{model.model_id}"
+            cost_in = f"${model.cost_input:.2f}" if model.cost_input is not None else "—"
+            cost_out = f"${model.cost_output:.2f}" if model.cost_output is not None else "—"
+
+            # Estimate cost for this model.
+            est_output_tokens = max(500, self.est_input_tokens // 5)
+            cost = estimate_cost(self.est_input_tokens, est_output_tokens, model)
+            est_cost = f"${cost:.4f}" if cost is not None else "—"
+
+            table.add_row(
+                str(idx),
+                full_id,
+                model.name,
+                cost_in,
+                cost_out,
+                est_cost,
+                key=full_id,
+            )
+
+    def _render_footer(self) -> None:
+        """Render the footer with estimate info."""
+        footer = self.query_one("#model-footer", Static)
+        lines: list[str] = []
+
+        if self.est_input_tokens:
+            lines.append("")
+            lines.append(f"  [dim]Estimated input: ~{self.est_input_tokens:,} tokens[/]")
+
+            warning = token_warning_level(self.est_input_tokens)
+            if warning == "strong":
+                lines.append(
+                    "  [bold red]⚠ Exceeds 128K tokens. If you don't truncate, "
+                    "the model will decide for you (or reject it).[/]"
+                )
+            elif warning == "warning":
+                lines.append("  [yellow]⚠ Exceeds 64K tokens. Some models may struggle.[/]")
+            elif warning == "info":
+                lines.append("  [dim]ℹ Large input — may be slow or costly.[/]")
+
+        lines.append("")
+        lines.append("  [dim]Enter: Select model  /: Search  s: Sort  b: Back[/]")
+
+        footer.update("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Key Handling
+    # ------------------------------------------------------------------
+
+    def action_start_search(self) -> None:
+        """Prompt for search input (simple inline for now)."""
+        # Use textual's built-in input by toggling search mode.
+        # For simplicity, cycle through some common prefixes or use notify.
+        if self.search_term:
+            # Clear search.
+            self.search_term = ""
+            self.filtered_models = list(self.all_models)
+        else:
+            self.app.notify(
+                "Type to filter models. Press / again to clear.",
+                timeout=3,
+            )
+        self._sort_models()
+        self._render_header()
+        self._populate_table()
+        self._render_footer()
+
+    def on_key(self, event) -> None:
+        """Handle character input for search filtering."""
+        key = event.key
+
+        # Allow typing characters to filter (when not a bound key).
+        if len(key) == 1 and key.isalnum() or key in ("-", "_", "."):
+            self.search_term += key
+            self._apply_filter()
+            event.prevent_default()
+        elif key == "backspace" and self.search_term:
+            self.search_term = self.search_term[:-1]
+            self._apply_filter()
+            event.prevent_default()
+
+    def _apply_filter(self) -> None:
+        """Apply the current search term as a filter."""
+        if not self.search_term:
+            self.filtered_models = list(self.all_models)
+        else:
+            term = self.search_term.lower()
+            self.filtered_models = [
+                m for m in self.all_models
+                if term in f"{m.provider_id}/{m.model_id}".lower()
+                or term in m.name.lower()
+            ]
+        self._sort_models()
+        self._render_header()
+        self._populate_table()
+        self._render_footer()
+
+    def action_cycle_sort(self) -> None:
+        """Cycle sort mode."""
+        modes = ["cost_asc", "name_asc", "provider_asc"]
+        current_idx = modes.index(self.sort_mode)
+        self.sort_mode = modes[(current_idx + 1) % len(modes)]
+        self._sort_models()
+        self._render_header()
+        self._populate_table()
+        labels = {"cost_asc": "Cost", "name_asc": "Name", "provider_asc": "Provider"}
+        self.app.notify(f"Sort: {labels[self.sort_mode]}", timeout=2)
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Handle Enter on a model row — select it and proceed."""
+        try:
+            table = self.query_one("#model-table", DataTable)
+            row_idx = table.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.filtered_models):
+                selected_model = self.filtered_models[row_idx]
+                # Push compaction screen.
+                self.app.push_screen(CompactionScreen(
+                    model=selected_model,
+                    turns=self.turns,
+                    session=self.session,
+                    generated_files=self.generated_files,
+                    est_input_tokens=self.est_input_tokens,
+                ))
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
+# Compaction Screen (Confirm + Progress + Result)
+# ---------------------------------------------------------------------------
+
+class CompactionScreen(Screen):
+    """Confirms compaction, runs the API call, shows results."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+        Binding("b", "go_back", "Back"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        model: ModelInfo,
+        turns: list[Turn],
+        session: SessionInfo,
+        generated_files: dict[str, Path],
+        est_input_tokens: int = 0,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.model = model
+        self.turns = turns
+        self.session = session
+        self.generated_files = generated_files
+        self.est_input_tokens = est_input_tokens
+        self.step = "confirm"  # confirm, running, complete, error
+        self.compacted_path: Path | None = None
+        self.actual_usage: dict = {}
+        self.error_text: str = ""
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(
+            Static(id="compact-content"),
+            id="compact-scroll",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._render_step()
+
+    def _render_step(self) -> None:
+        if self.step == "confirm":
+            self._render_confirm()
+        elif self.step == "running":
+            self._render_running()
+        elif self.step == "complete":
+            self._render_complete()
+        elif self.step == "error":
+            self._render_error()
+
+    def _render_confirm(self) -> None:
+        """Show confirmation with cost estimate."""
+        model = self.model
+        lines: list[str] = []
+
+        lines.append("[bold]Ready to compact[/]")
+        lines.append("")
+        lines.append(f"  [dim]Model:[/]      {model.name} ({model.provider_id}/{model.model_id})")
+        lines.append(f"  [dim]Endpoint:[/]   {model.base_url}")
+        lines.append(f"  [dim]Input:[/]      ~{self.est_input_tokens:,} tokens (estimated)")
+
+        est_output = max(500, self.est_input_tokens // 5)
+        lines.append(f"  [dim]Output:[/]     ~{est_output:,} tokens (estimated)")
+
+        cost = estimate_cost(self.est_input_tokens, est_output, model)
+        if cost is not None:
+            lines.append(f"  [dim]Est. cost:[/]  [yellow]${cost:.4f}[/]")
+        else:
+            lines.append(f"  [dim]Est. cost:[/]  [dim]unknown[/]")
+
+        warning = token_warning_level(self.est_input_tokens)
+        if warning:
+            lines.append("")
+            if warning == "strong":
+                lines.append("  [bold red]⚠ Input exceeds 128K tokens.[/]")
+                lines.append("  [red]If you don't truncate, the model will decide[/]")
+                lines.append("  [red]for you (or reject the input entirely).[/]")
+            elif warning == "warning":
+                lines.append("  [yellow]⚠ Input exceeds 64K tokens. May exceed context window.[/]")
+            elif warning == "info":
+                lines.append("  [dim]ℹ Large input — may be slow or costly.[/]")
+
+        lines.append("")
+        lines.append("  [dim]The session transcript will be sent to the API endpoint above.[/]")
+        lines.append("")
+        lines.append("─" * 40)
+        lines.append("")
+        lines.append("  [bold][y][/] Confirm and send")
+        lines.append("  [bold][b][/] Back to model selection")
+        lines.append("")
+
+        content = self.query_one("#compact-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_running(self) -> None:
+        """Show progress while API call is in flight."""
+        lines = [
+            "[bold]Compacting...[/]",
+            "",
+            f"  Model: {self.model.name}",
+            f"  Endpoint: {self.model.base_url}",
+            "",
+            "  [dim]Calling API (this may take a minute)...[/]",
+            "",
+            "  [dim]Press Escape to cancel.[/]",
+        ]
+        content = self.query_one("#compact-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_complete(self) -> None:
+        """Show completion with results."""
+        app: OrsessionApp = self.app  # type: ignore
+        lines: list[str] = []
+
+        lines.append("[bold green]Compaction complete![/]")
+        lines.append("")
+
+        if self.actual_usage:
+            actual_in = self.actual_usage.get("prompt_tokens", 0)
+            actual_out = self.actual_usage.get("completion_tokens", 0)
+            lines.append(f"  [dim]Actual tokens:[/]  {actual_in:,} in / {actual_out:,} out")
+            actual_cost = estimate_cost(actual_in, actual_out, self.model)
+            if actual_cost is not None:
+                lines.append(f"  [dim]Actual cost:[/]   [bold]${actual_cost:.4f}[/]")
+
+        if self.compacted_path and self.compacted_path.exists():
+            line_count = self.compacted_path.read_text().count("\n") + 1
+            size = self.compacted_path.stat().st_size
+            lines.append("")
+            lines.append(f"  [green]Saved to:[/]")
+            lines.append(f"    {self.compacted_path}")
+            lines.append(f"    [dim]{line_count} lines, {_format_number(size)} bytes[/]")
+
+        lines.append("")
+        lines.append("─" * 40)
+        lines.append("")
+        lines.append("  [bold][s][/] Save a copy to a different location")
+        lines.append("  [bold][v][/] View compacted output")
+        lines.append("  [bold][b][/] Done")
+        lines.append("")
+
+        content = self.query_one("#compact-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_error(self) -> None:
+        """Show API error with retry option."""
+        lines = [
+            "[bold red]Compaction failed[/]",
+            "",
+            f"  {self.error_text}",
+            "",
+            "─" * 40,
+            "",
+            "  [bold][r][/] Retry with same model",
+            "  [bold][b][/] Back to model selection",
+            "",
+        ]
+        content = self.query_one("#compact-content", Static)
+        content.update("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Key Handling
+    # ------------------------------------------------------------------
+
+    def on_key(self, event) -> None:
+        key = event.key
+
+        if self.step == "confirm":
+            if key in ("y", "Y"):
+                self._run_compaction()
+            # b/escape handled by bindings
+
+        elif self.step == "complete":
+            if key == "s":
+                self._prompt_save_elsewhere()
+            elif key == "v":
+                self._view_compacted()
+
+        elif self.step == "error":
+            if key == "r":
+                self.step = "confirm"
+                self._render_step()
+
+    def _run_compaction(self) -> None:
+        """Execute the API call."""
+        app: OrsessionApp = self.app  # type: ignore
+        self.step = "running"
+        self._render_step()
+
+        # Build the prompt from the compact-prompt file if available,
+        # otherwise generate it.
+        compact_prompt_path = self.generated_files.get("compact_prompt")
+        if compact_prompt_path and compact_prompt_path.exists():
+            prompt_content = compact_prompt_path.read_text(encoding="utf-8")
+        else:
+            prompt_content = render_compact_prompt(self.turns, self.session)
+
+        try:
+            result = call_compaction_api(self.model, prompt_content)
+        except RecoveryError as e:
+            self.error_text = str(e)
+            self.step = "error"
+            self._render_step()
+            return
+
+        # Save the compacted output.
+        from datetime import datetime, timezone
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        safe_id = safe_filename(self.session.session_id)
+        compacted_path = app.output_dir / f"opencode-recovery-{safe_id}-{timestamp}.compacted.md"
+
+        try:
+            write_text(compacted_path, result["content"])
+        except RecoveryError as e:
+            self.error_text = f"Failed to save output: {e}"
+            self.step = "error"
+            self._render_step()
+            return
+
+        self.compacted_path = compacted_path
+        self.actual_usage = result.get("usage", {})
+
+        # Refresh recovery file cache.
+        app.recovery_files = discover_recovery_files(app.output_dir)
+
+        self.step = "complete"
+        self._render_step()
+
+    def _prompt_save_elsewhere(self) -> None:
+        """Save a copy to a different location."""
+        # For now, notify — full text input would require an Input widget.
+        self.app.notify("Save-elsewhere: use the file browser to find the output (feature coming soon)", timeout=5)
+
+    def _view_compacted(self) -> None:
+        """View the compacted output in a pager."""
+        if self.compacted_path and self.compacted_path.exists():
+            content = self.compacted_path.read_text(encoding="utf-8")
+            # Create a simple turn list for the preview screen.
+            view_turn = Turn(role="assistant", text=content, index=1, source="compacted")
+            self.app.push_screen(
+                FullPreviewScreen(self.session, [view_turn])
+            )
+
+    def action_go_back(self) -> None:
+        if self.step == "running":
+            # Can't easily cancel urllib, just go back.
+            self.app.notify("Cancellation not supported during API call", severity="warning")
+            return
+        self.app.pop_screen()
 
 
 # ---------------------------------------------------------------------------
@@ -1051,6 +1571,34 @@ class OrsessionApp(App):
     }
 
     #wizard-content {
+        width: 100%;
+    }
+
+    #model-container {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #model-header {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #model-table {
+        height: 1fr;
+    }
+
+    #model-footer {
+        height: auto;
+        margin-top: 1;
+    }
+
+    #compact-scroll {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #compact-content {
         width: 100%;
     }
     """
