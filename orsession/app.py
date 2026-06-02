@@ -144,10 +144,10 @@ class SessionDetailScreen(Screen):
                 )
             )
         except RecoveryError as e:
-            self._on_export_error(str(e))
+            self.app.call_later(self._on_export_error, str(e))
             return
 
-        self._on_export_complete(export, turns)
+        self.app.call_later(self._on_export_complete, export, turns)
 
     def _on_export_error(self, error_message: str) -> None:
         """Handle export failure (called on main thread)."""
@@ -731,7 +731,7 @@ class RecoveryWizardScreen(Screen):
                     cwd=app.session_dir,
                 )
             except RecoveryError as e:
-                self._on_pipeline_error(f"Export failed: {e}")
+                self.app.call_later(self._on_pipeline_error, f"Export failed: {e}")
                 return
 
         # Extract turns.
@@ -744,7 +744,7 @@ class RecoveryWizardScreen(Screen):
         )
 
         if not turns:
-            self._on_pipeline_error("No user/assistant turns found in export.")
+            self.app.call_later(self._on_pipeline_error, "No user/assistant turns found in export.")
             return
 
         # Apply truncation.
@@ -772,10 +772,10 @@ class RecoveryWizardScreen(Screen):
                 ),
             )
         except RecoveryError as e:
-            self._on_pipeline_error(f"Generation failed: {e}")
+            self.app.call_later(self._on_pipeline_error, f"Generation failed: {e}")
             return
 
-        self._on_pipeline_complete(turns, total_before, generated_files)
+        self.app.call_later(self._on_pipeline_complete, turns, total_before, generated_files)
 
     def _on_pipeline_error(self, message: str) -> None:
         """Handle pipeline failure (main thread)."""
@@ -1599,7 +1599,7 @@ class CompactionScreen(Screen):
         try:
             result = await asyncio.to_thread(call_compaction_api, self.model, prompt_content)
         except RecoveryError as e:
-            self._on_compaction_error(str(e))
+            self.app.call_later(self._on_compaction_error, str(e))
             return
 
         # Save the compacted output.
@@ -1610,10 +1610,10 @@ class CompactionScreen(Screen):
         try:
             write_text(compacted_path, result["content"])
         except RecoveryError as e:
-            self._on_compaction_error(f"Failed to save output: {e}")
+            self.app.call_later(self._on_compaction_error, f"Failed to save output: {e}")
             return
 
-        self._on_compaction_complete(compacted_path, result.get("usage", {}))
+        self.app.call_later(self._on_compaction_complete, compacted_path, result.get("usage", {}))
 
     def _on_compaction_error(self, error_message: str) -> None:
         """Handle API call failure (main thread)."""
