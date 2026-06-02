@@ -2303,12 +2303,19 @@ def main() -> None:
             print(f"Error: --session-dir is not a valid directory: {session_dir}", file=sys.stderr)
             sys.exit(1)
 
-    # Install signal handler to restore terminal on SIGTERM.
+    # Install signal handlers to restore terminal on any termination signal.
     def _handle_term(signum, frame):
         _restore_terminal()
         sys.exit(128 + signum)
 
     signal.signal(signal.SIGTERM, _handle_term)
+    signal.signal(signal.SIGHUP, _handle_term)
+    signal.signal(signal.SIGUSR1, _handle_term)
+    signal.signal(signal.SIGUSR2, _handle_term)
+
+    # Also register atexit to cover any exit path we missed.
+    import atexit
+    atexit.register(_restore_terminal)
 
     app = OrsessionApp(
         session_dir=session_dir,
