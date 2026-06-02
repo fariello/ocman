@@ -19,20 +19,29 @@ from textual.screen import Screen
 from textual.widgets import DataTable, Footer, Header, Rule, Static
 
 from .core import (
+    LONG_SESSION_INTERACTION_THRESHOLD,
+    LONG_SESSION_LINE_THRESHOLD,
     RecoveryError,
     SessionExport,
     SessionInfo,
     Turn,
+    count_interactions,
     discover_recovery_files,
+    estimate_tokens,
     export_session,
     extract_turns_from_export,
     filter_conversation_turns,
     format_timestamp,
-    count_interactions,
+    generate_recovery_files,
     list_sessions,
+    render_transcript,
     require_opencode,
+    safe_filename,
     session_duration,
     session_recovery_status,
+    token_warning_level,
+    truncate_turns_by_interactions,
+    truncate_turns_by_lines,
 )
 
 
@@ -263,8 +272,10 @@ class SessionDetailScreen(Screen):
         self.app.pop_screen()
 
     def action_recover(self) -> None:
-        """Start recovery for this session."""
-        self.app.notify(f"Recovery: {self.session.title} (not yet implemented)")
+        """Start recovery wizard for this session."""
+        self.app.push_screen(
+            RecoveryWizardScreen(self.session, export=self.export, turns=self.turns)
+        )
 
     def action_full_preview(self) -> None:
         """Open full preview screen."""
@@ -376,6 +387,381 @@ class FullPreviewScreen(Screen):
         app.timestamp_mode = TIMESTAMP_MODES[(current_idx + 1) % len(TIMESTAMP_MODES)]
         self._render_preview()
         self.app.notify(f"Timestamps: {app.timestamp_mode}", timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# Recovery Wizard Screen
+# ---------------------------------------------------------------------------
+
+class RecoveryWizardScreen(Screen):
+    """
+    Multi-step recovery wizard: configure → export → generate → complete.
+
+    Can be launched from Session Detail (with export already cached) or
+    directly from Session List (will export on demand).
+    """
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back"),
+        Binding("b", "go_back", "Back"),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def __init__(
+        self,
+        session: SessionInfo,
+        export: SessionExport | None = None,
+        turns: list[Turn] | None = None,
+        **kwargs,
+    ) -> None:
+        super().__init__(**kwargs)
+        self.session = session
+        self.export = export
+        self.turns = turns or []
+        # Configuration state.
+        self.include_tools = False
+        self.max_interactions: int | None = None
+        self.max_lines: int | None = None
+        self.clean_previous = False
+        # Progress state.
+        self.step = "configure"  # configure, exporting, generating, complete
+        self.generated_files: dict[str, Path] = {}
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield VerticalScroll(
+            Static(id="wizard-content"),
+            id="wizard-scroll",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._render_step()
+
+    def _render_step(self) -> None:
+        """Render the current wizard step."""
+        if self.step == "configure":
+            self._render_configure()
+        elif self.step == "exporting":
+            self._render_exporting()
+        elif self.step == "generating":
+            self._render_generating()
+        elif self.step == "complete":
+            self._render_complete()
+
+    def _render_configure(self) -> None:
+        """Render the configuration step."""
+        app: OrsessionApp = self.app  # type: ignore
+        session = self.session
+        lines: list[str] = []
+
+        lines.append(f"[bold]Recovering: {session.title}[/]")
+        lines.append(f"[dim]{session.session_id}[/]")
+        lines.append("")
+        lines.append("[bold]Step 1 of 3: Configure[/]")
+        lines.append("─" * 40)
+        lines.append("")
+
+        # Show current settings.
+        lines.append(f"  Output directory:  [cyan]{app.output_dir}[/]")
+        lines.append(f"  Include tools:     {'[green]Yes[/]' if self.include_tools else '[dim]No[/]'}")
+        lines.append(f"  Clean previous:    {'[green]Yes[/]' if self.clean_previous else '[dim]No[/]'}")
+
+        # Truncation.
+        if self.max_interactions:
+            lines.append(f"  Max interactions:  [yellow]{self.max_interactions}[/]")
+        elif self.max_lines:
+            lines.append(f"  Max lines:         [yellow]{self.max_lines}[/]")
+        else:
+            lines.append(f"  Truncation:        [dim]None (full session)[/]")
+
+        # Session size info (if we have turns already).
+        if self.turns:
+            turn_count = len(self.turns)
+            interactions = count_interactions(self.turns)
+            transcript = render_transcript(self.turns, "")
+            line_count = transcript.count("\n") + 1
+            est_tokens = estimate_tokens(transcript)
+
+            lines.append("")
+            lines.append(f"  [dim]Session size:[/]")
+            lines.append(f"    Turns:          {turn_count}")
+            lines.append(f"    Interactions:   {interactions}")
+            lines.append(f"    Est. lines:     {line_count}")
+            lines.append(f"    Est. tokens:    {est_tokens:,}")
+
+            # Warn if large.
+            if (line_count > LONG_SESSION_LINE_THRESHOLD
+                    or interactions > LONG_SESSION_INTERACTION_THRESHOLD):
+                lines.append("")
+                lines.append("  [yellow]⚠ This session is large. Consider truncation.[/]")
+                suggested = min(100, interactions)
+                lines.append(f"  [dim]Suggested: --max-interactions {suggested}[/]")
+
+            warning = token_warning_level(est_tokens)
+            if warning == "strong":
+                lines.append("")
+                lines.append("  [bold red]⚠ Input exceeds 128K tokens.[/]")
+                lines.append("  [red]If you don't choose how to truncate, the model will[/]")
+                lines.append("  [red]decide for you (or reject the input entirely).[/]")
+            elif warning == "warning":
+                lines.append("")
+                lines.append("  [yellow]⚠ Input exceeds 64K tokens. Many models' context[/]")
+                lines.append("  [yellow]windows may be exceeded. Consider truncation.[/]")
+        else:
+            lines.append("")
+            lines.append("  [dim]Session size will be calculated after export.[/]")
+
+        lines.append("")
+        lines.append("─" * 40)
+        lines.append("")
+        lines.append("  [bold][P][/] Proceed")
+        lines.append("  [bold][i][/] Toggle include tools")
+        lines.append("  [bold][d][/] Toggle clean previous files")
+        lines.append("  [bold][m][/] Set max interactions")
+        lines.append("  [bold][l][/] Set max lines")
+        lines.append("  [bold][x][/] Clear truncation limits")
+        lines.append("")
+
+        content = self.query_one("#wizard-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_exporting(self) -> None:
+        """Show export progress."""
+        lines = [
+            f"[bold]Recovering: {self.session.title}[/]",
+            "",
+            "[bold]Step 2 of 3: Exporting[/]",
+            "─" * 40,
+            "",
+            "  Exporting session from opencode...",
+            "",
+            "  [dim]This may take a moment for large sessions.[/]",
+        ]
+        content = self.query_one("#wizard-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_generating(self) -> None:
+        """Show generation progress."""
+        lines = [
+            f"[bold]Recovering: {self.session.title}[/]",
+            "",
+            "[bold]Step 2 of 3: Generating files[/]",
+            "─" * 40,
+            "",
+            "  Generating recovery files...",
+        ]
+        content = self.query_one("#wizard-content", Static)
+        content.update("\n".join(lines))
+
+    def _render_complete(self) -> None:
+        """Show completion with generated files."""
+        app: OrsessionApp = self.app  # type: ignore
+        lines: list[str] = []
+
+        lines.append(f"[bold]Recovering: {self.session.title}[/]")
+        lines.append("")
+        lines.append("[bold green]Step 3 of 3: Complete[/]")
+        lines.append("─" * 40)
+        lines.append("")
+
+        lines.append("  [green]Generated files:[/]")
+        for file_type, path in self.generated_files.items():
+            size = path.stat().st_size if path.exists() else 0
+            line_count = path.read_text().count("\n") + 1 if path.exists() else 0
+            label = file_type.replace("_", " ").title()
+            lines.append(f"    [green]✓[/] {label}")
+            lines.append(f"      [dim]{path.name}[/]")
+            lines.append(f"      [dim]{line_count} lines, {_format_number(size)} bytes[/]")
+
+        lines.append("")
+        lines.append(f"  Output directory: [cyan]{app.output_dir}[/]")
+
+        if self.turns:
+            turn_count = len(self.turns)
+            interactions = count_interactions(self.turns)
+            lines.append("")
+            lines.append(f"  Turns written: {turn_count} ({interactions} interactions)")
+
+        lines.append("")
+        lines.append("─" * 40)
+        lines.append("")
+        lines.append("  [bold][y][/] Generate LLM-compacted version (select model)")
+        lines.append("  [bold][v][/] View generated transcript")
+        lines.append("  [bold][b][/] Done (return to session list)")
+        lines.append("")
+
+        content = self.query_one("#wizard-content", Static)
+        content.update("\n".join(lines))
+
+    # ------------------------------------------------------------------
+    # Key Handling
+    # ------------------------------------------------------------------
+
+    def on_key(self, event) -> None:
+        """Handle step-specific key presses."""
+        key = event.key
+
+        if self.step == "configure":
+            if key in ("p", "P"):
+                self._do_proceed()
+            elif key == "i":
+                self.include_tools = not self.include_tools
+                # Re-extract turns if we have an export.
+                if self.export:
+                    self.turns = filter_conversation_turns(
+                        extract_turns_from_export(self.export, include_tools=self.include_tools)
+                    )
+                self._render_step()
+            elif key == "d":
+                self.clean_previous = not self.clean_previous
+                self._render_step()
+            elif key == "m":
+                # Toggle max interactions: None → 50 → 100 → None.
+                if self.max_interactions is None:
+                    self.max_interactions = 50
+                elif self.max_interactions == 50:
+                    self.max_interactions = 100
+                else:
+                    self.max_interactions = None
+                self._render_step()
+            elif key == "l":
+                # Toggle max lines: None → 1500 → 2500 → None.
+                if self.max_lines is None:
+                    self.max_lines = 1500
+                elif self.max_lines == 1500:
+                    self.max_lines = 2500
+                else:
+                    self.max_lines = None
+                self._render_step()
+            elif key == "x":
+                self.max_interactions = None
+                self.max_lines = None
+                self._render_step()
+
+        elif self.step == "complete":
+            if key == "y":
+                # TODO: push model selection screen
+                self.app.notify("Model selection (not yet implemented)")
+            elif key == "v":
+                if self.turns:
+                    self.app.push_screen(
+                        FullPreviewScreen(self.session, self.turns, self.export)
+                    )
+
+    # ------------------------------------------------------------------
+    # Recovery Logic
+    # ------------------------------------------------------------------
+
+    def _do_proceed(self) -> None:
+        """Run the export + generate pipeline."""
+        app: OrsessionApp = self.app  # type: ignore
+
+        # Step: Export (if not already done).
+        if not self.export:
+            self.step = "exporting"
+            self._render_step()
+            # Run export (blocking in this simple implementation).
+            try:
+                self.export = export_session(
+                    session_id=self.session.session_id,
+                    temp_dir=app.temp_dir,
+                    cwd=app.session_dir,
+                )
+            except RecoveryError as e:
+                self.app.notify(f"Export failed: {e}", severity="error", timeout=8)
+                self.step = "configure"
+                self._render_step()
+                return
+
+        # Extract turns.
+        self.turns = filter_conversation_turns(
+            extract_turns_from_export(self.export, include_tools=self.include_tools)
+        )
+
+        if not self.turns:
+            self.app.notify("No user/assistant turns found in export.", severity="error")
+            self.step = "configure"
+            self._render_step()
+            return
+
+        # Apply truncation.
+        total_before = len(self.turns)
+        if self.max_interactions:
+            self.turns = truncate_turns_by_interactions(self.turns, self.max_interactions)
+        if self.max_lines:
+            self.turns = truncate_turns_by_lines(self.turns, self.max_lines)
+
+        if len(self.turns) < total_before:
+            skipped = total_before - len(self.turns)
+            self.app.notify(
+                f"Truncated: keeping {len(self.turns)} of {total_before} turns ({skipped} omitted)",
+                timeout=5,
+            )
+
+        # Step: Generate.
+        self.step = "generating"
+        self._render_step()
+
+        # Clean previous if requested.
+        if self.clean_previous:
+            self._clean_previous_files(app)
+
+        # Generate files.
+        try:
+            export_name = (
+                self.export.export_path.name
+                if self.export.export_path
+                else f"opencode-session-{self.session.session_id}.json"
+            )
+            self.generated_files = generate_recovery_files(
+                turns=self.turns,
+                session=self.session,
+                output_dir=app.output_dir,
+                export_name=export_name,
+                total_turns_before_truncation=(
+                    total_before if total_before > len(self.turns) else None
+                ),
+            )
+        except RecoveryError as e:
+            self.app.notify(f"Generation failed: {e}", severity="error", timeout=8)
+            self.step = "configure"
+            self._render_step()
+            return
+
+        # Refresh recovery file cache.
+        app.recovery_files = discover_recovery_files(app.output_dir)
+
+        # Step: Complete.
+        self.step = "complete"
+        self._render_step()
+
+    def _clean_previous_files(self, app: OrsessionApp) -> None:
+        """Remove previous recovery files for this session."""
+        safe_id = safe_filename(self.session.session_id)
+        prefix = f"opencode-recovery-{safe_id}-"
+        removed = 0
+
+        if app.output_dir.is_dir():
+            for entry in app.output_dir.iterdir():
+                if entry.is_file() and entry.name.startswith(prefix):
+                    entry.unlink()
+                    removed += 1
+
+        if removed:
+            self.app.notify(f"Cleaned {removed} previous recovery file(s)", timeout=3)
+
+    # ------------------------------------------------------------------
+    # Actions
+    # ------------------------------------------------------------------
+
+    def action_go_back(self) -> None:
+        """Return to previous screen."""
+        if self.step == "complete":
+            # Go back to session list (skip detail).
+            self.app.pop_screen()
+        else:
+            self.app.pop_screen()
 
 
 # ---------------------------------------------------------------------------
@@ -535,12 +921,13 @@ class SessionListScreen(Screen):
     def action_recover(self) -> None:
         session = self._get_selected_session()
         if session:
-            self._update_status(f"Recovery: {session.title} (not yet implemented)")
+            self.app.push_screen(RecoveryWizardScreen(session))
 
     def action_quick_compact(self) -> None:
         session = self._get_selected_session()
         if session:
-            self._update_status(f"Quick compact: {session.title} (not yet implemented)")
+            # Quick compact: go straight to recovery, then model selection.
+            self.app.push_screen(RecoveryWizardScreen(session))
 
     def action_search(self) -> None:
         self._update_status("Search (not yet implemented)")
@@ -655,6 +1042,15 @@ class OrsessionApp(App):
     }
 
     #preview-content {
+        width: 100%;
+    }
+
+    #wizard-scroll {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #wizard-content {
         width: 100%;
     }
     """

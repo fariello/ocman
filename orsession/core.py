@@ -1232,3 +1232,197 @@ def safe_filename(value: str) -> str:
     if not value:
         return "session"
     return value[:80]
+
+
+# ---------------------------------------------------------------------------
+# Compaction Prompt
+# ---------------------------------------------------------------------------
+
+COMPACTION_USER_PROMPT_TEMPLATE: str = """\
+# Session Restart Document Generator
+
+You are an expert session-continuity assistant. You are converting a recovered \
+opencode transcript into a compact, precise Markdown restart document that \
+allows a fresh opencode coding agent to continue the work safely and efficiently.
+
+Your output will be saved to a file and read directly by a fresh opencode \
+agent at the start of a new session. That agent will have no other context. \
+It will rely entirely on your output.
+
+## Source Material
+
+- Original session ID: `{session_id}`
+- Original session title: `{session_title}`
+- Transcript: {turn_count} turns, {interaction_count} interactions, \
+{line_count} lines.
+- Truncation: {truncation_note}
+
+The transcript was recovered from an opencode session that became unusable \
+(compaction failure, context overflow, crash, or similar). It may contain \
+user messages, agent responses, partial tool-call details, repeated status \
+text, errors, incomplete sections, and references to files, commands, commits, \
+tests, or decisions. It may be incomplete.
+
+The most recent exchanges reflect the user's active working context at the \
+time the session ended.
+
+## Core Rules
+
+1. Do not invent information.
+2. Only include claims supported by the transcript.
+3. If something is likely but not certain, label it as "Inference:".
+4. Preserve exact file paths, command names, branch names, commit hashes, \
+package names, error messages, and version/tool details when they matter.
+5. Do not include long raw code blocks unless essential to understanding \
+the current state, a bug, or a decision. Prefer concise summaries.
+6. Capture objectives, constraints, preferences, and reasoning behind \
+important decisions.
+7. Identify what was completed, what remains, and what must not be redone.
+8. Preserve operational details the next coding agent would need.
+9. If the transcript is truncated or incomplete, say what is missing and \
+how that affects confidence.
+10. Do not include instructions for the user.
+11. Do not include a suggested message for the user to paste.
+12. Write the output as context and instructions for the opencode agent only.
+
+---
+{prior_context_section}
+## Transcript
+
+```text
+{transcript_content}
+```
+
+---
+
+## Output Requirements
+
+Now produce a single Markdown document with the following structure. \
+Consider the entire transcript for context, but give particular weight to \
+the most recent exchanges when determining current state, active intent, \
+and immediate next steps.
+
+# Restart Context for opencode
+
+## 1. Project Summary
+## 2. Current State
+## 3. Key Decisions and Constraints
+## 4. Files and Structure
+## 5. Technical Context
+## 6. Errors, Failures, and Workarounds
+## 7. What Not to Redo
+## 8. Immediate Next Steps for the Agent
+## 9. Open Questions and Risks
+## Agent Operating Guidance
+"""
+
+
+def render_compact_prompt(
+    turns: list[Turn],
+    session: SessionInfo,
+    total_turns_before_truncation: int | None = None,
+    prior_context: str = "",
+) -> str:
+    """
+    Render the compaction prompt with the transcript embedded.
+
+    Args:
+        turns: Conversation turns to include.
+        session: Selected session metadata.
+        total_turns_before_truncation: Original turn count if truncated.
+        prior_context: Formatted prior context string.
+
+    Returns:
+        The fully rendered compaction prompt.
+    """
+    transcript = render_transcript(turns, "Recovered transcript")
+    turn_count = len(turns)
+    interaction_count = count_interactions(turns)
+    line_count = transcript.count("\n") + 1
+
+    if total_turns_before_truncation is not None and total_turns_before_truncation > turn_count:
+        skipped = total_turns_before_truncation - turn_count
+        truncation_note = (
+            f"Truncated to the most recent {turn_count} turns "
+            f"({skipped} older turns omitted from a session of "
+            f"{total_turns_before_truncation} total turns)."
+        )
+    else:
+        truncation_note = "Complete (no truncation applied)."
+
+    if prior_context:
+        truncation_note += " Prior session context is included below."
+        prior_context_section = "\n" + prior_context + "\n"
+    else:
+        prior_context_section = ""
+
+    # Escape braces in user-provided strings.
+    safe_session_id = session.session_id.replace("{", "{{").replace("}", "}}")
+    safe_session_title = session.title.replace("{", "{{").replace("}", "}}")
+
+    return COMPACTION_USER_PROMPT_TEMPLATE.format(
+        session_id=safe_session_id,
+        session_title=safe_session_title,
+        turn_count=turn_count,
+        interaction_count=interaction_count,
+        line_count=line_count,
+        truncation_note=truncation_note,
+        prior_context_section=prior_context_section,
+        transcript_content=transcript,
+    )
+
+
+def generate_recovery_files(
+    turns: list[Turn],
+    session: SessionInfo,
+    output_dir: Path,
+    export_name: str = "export.json",
+    total_turns_before_truncation: int | None = None,
+    prior_context: str = "",
+) -> dict[str, Path]:
+    """
+    Generate all recovery files (transcript, restart, compact-prompt).
+
+    Args:
+        turns: Conversation turns to write.
+        session: Session metadata.
+        output_dir: Output directory.
+        export_name: Name of the source export file.
+        total_turns_before_truncation: Original count if truncated.
+        prior_context: Prior context string for compact prompt.
+
+    Returns:
+        Dict mapping file type to path: {"transcript": ..., "restart": ..., "compact_prompt": ...}
+    """
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    safe_id = safe_filename(session.session_id)
+    base_name = f"opencode-recovery-{safe_id}-{timestamp}"
+
+    transcript_path = output_dir / f"{base_name}.transcript.md"
+    restart_path = output_dir / f"{base_name}.restart.md"
+    compact_prompt_path = output_dir / f"{base_name}.compact-prompt.md"
+
+    write_text(
+        transcript_path,
+        render_transcript(turns, "Recovered opencode transcript"),
+    )
+
+    write_text(
+        restart_path,
+        render_restart_context(turns, export_name, session),
+    )
+
+    write_text(
+        compact_prompt_path,
+        render_compact_prompt(
+            turns, session,
+            total_turns_before_truncation=total_turns_before_truncation,
+            prior_context=prior_context,
+        ),
+    )
+
+    return {
+        "transcript": transcript_path,
+        "restart": restart_path,
+        "compact_prompt": compact_prompt_path,
+    }
