@@ -271,27 +271,60 @@ def load_opencode_config(verbosity: int = 0) -> dict[str, Any]:
 _ENV_VAR_PATTERN: re.Pattern[str] = re.compile(r"\{env:([^}]+)\}")
 """Matches opencode's {env:VAR_NAME} syntax for environment variable references."""
 
+_FILE_REF_PATTERN: re.Pattern[str] = re.compile(r"\{file:([^}]+)\}")
+"""Matches opencode's {file:PATH} syntax for reading secrets from files."""
+
+
+def _read_file_ref(path_str: str) -> str:
+    """
+    Read the contents of a file reference, expanding ~ to the user's home directory.
+
+    Args:
+        path_str:
+            File path, possibly starting with ~ for the home directory.
+
+    Returns:
+        File contents with trailing whitespace stripped, or an empty string
+        if the file cannot be read.
+    """
+
+    expanded = os.path.expanduser(path_str.strip())
+    try:
+        with open(expanded, "r", encoding="utf-8") as fh:
+            return fh.read().strip()
+    except (OSError, IOError):
+        return ""
+
 
 def expand_env_vars(value: str) -> str:
     """
-    Expand environment variable references in a config string value.
+    Expand environment variable and file references in a config string value.
 
-    Supports three formats:
-      - {env:VAR_NAME}  — opencode's preferred format
+    Supports four formats:
+      - {file:PATH}     — opencode's format for reading secrets from files
+      - {env:VAR_NAME}  — opencode's preferred format for env vars
       - ${VAR_NAME}     — shell-style with braces
       - $VAR_NAME       — shell-style without braces (only when the entire value is a reference)
 
     Args:
         value:
-            Config string that may contain env var references.
+            Config string that may contain env var or file references.
 
     Returns:
-        The expanded string, or the original if no env vars found or
-        the referenced variable is not set.
+        The expanded string, or the original if no references found or
+        the referenced variable/file is not available.
     """
 
     if not isinstance(value, str) or not value:
         return value
+
+    # opencode's {file:PATH} format — can appear anywhere in the string.
+    if "{file:" in value:
+        def replace_file(match: re.Match[str]) -> str:
+            file_path = match.group(1)
+            content = _read_file_ref(file_path)
+            return content if content else match.group(0)
+        return _FILE_REF_PATTERN.sub(replace_file, value)
 
     # opencode's {env:VAR_NAME} format — can appear anywhere in the string.
     if "{env:" in value:
