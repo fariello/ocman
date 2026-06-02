@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from . import __version__
 from pathlib import Path
 
+from rich.markup import escape as rich_escape
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -127,9 +128,12 @@ class SessionDetailScreen(Screen):
 
     def _on_export_complete(self, export: SessionExport, turns: list[Turn]) -> None:
         """Handle successful export (called on main thread)."""
+        app: OrsessionApp = self.app  # type: ignore
         self.export = export
         self.turns = turns
         self.loading = False
+        # Cache turn count for session list display.
+        app.session_turn_cache[self.session.session_id] = len(turns)
         self._render_detail()
 
     def _render_detail(self) -> None:
@@ -142,12 +146,12 @@ class SessionDetailScreen(Screen):
         lines: list[str] = []
 
         # Title.
-        lines.append(f"[bold]{session.title}[/]")
+        lines.append(f"[bold]{rich_escape(session.title)}[/]")
         lines.append("─" * min(60, len(session.title) + 4))
         lines.append("")
 
         # Metadata section.
-        lines.append(f"  [dim]ID:[/]        {session.session_id}")
+        lines.append(f"  [dim]ID:[/]        {rich_escape(session.session_id)}")
 
         if export and export.info:
             info = export.info
@@ -228,10 +232,10 @@ class SessionDetailScreen(Screen):
             lines.append("")
             for turn in first_turns:
                 ts = self._get_turn_timestamp(turn)
-                ts_display = f" [{format_timestamp(ts, ts_mode)}]" if ts else ""
+                ts_display = f" {rich_escape(format_timestamp(ts, ts_mode))}" if ts else ""
                 role_char = "U" if turn.role == "user" else "A"
                 role_style = "cyan" if turn.role == "user" else "dim"
-                preview = _collapse_preview(turn.text, 80)
+                preview = rich_escape(_collapse_preview(turn.text, 80))
                 lines.append(f"  [{role_style}]{role_char}{ts_display}:[/] {preview}")
             lines.append("")
 
@@ -247,10 +251,10 @@ class SessionDetailScreen(Screen):
                 lines.append("")
                 for turn in last_turns:
                     ts = self._get_turn_timestamp(turn)
-                    ts_display = f" [{format_timestamp(ts, ts_mode)}]" if ts else ""
+                    ts_display = f" {rich_escape(format_timestamp(ts, ts_mode))}" if ts else ""
                     role_char = "U" if turn.role == "user" else "A"
                     role_style = "cyan" if turn.role == "user" else "dim"
-                    preview = _collapse_preview(turn.text, 80)
+                    preview = rich_escape(_collapse_preview(turn.text, 80))
                     lines.append(f"  [{role_style}]{role_char}{ts_display}:[/] {preview}")
                 lines.append("")
         else:
@@ -357,7 +361,7 @@ class FullPreviewScreen(Screen):
         ts_mode = app.timestamp_mode
         lines: list[str] = []
 
-        lines.append(f"[bold]Full Preview: {self.session.title}[/]")
+        lines.append(f"[bold]Full Preview: {rich_escape(self.session.title)}[/]")
         lines.append(f"[dim]{len(self.turns)} turns, {count_interactions(self.turns)} interactions[/]")
         lines.append("")
         lines.append("─" * 60)
@@ -369,11 +373,11 @@ class FullPreviewScreen(Screen):
 
             # Try to get timestamp.
             ts = self._get_turn_timestamp(turn)
-            ts_display = f"  [dim][{format_timestamp(ts, ts_mode)}][/]" if ts else ""
+            ts_display = f"  [dim]{rich_escape(format_timestamp(ts, ts_mode))}[/]" if ts else ""
 
             lines.append(f"[{role_style}]### {turn.index}. {role_label}[/]{ts_display}")
             lines.append("")
-            lines.append(turn.text)
+            lines.append(rich_escape(turn.text))
             lines.append("")
 
         content = self.query_one("#preview-content", Static)
@@ -475,8 +479,8 @@ class RecoveryWizardScreen(Screen):
         session = self.session
         lines: list[str] = []
 
-        lines.append(f"[bold]Recovering: {session.title}[/]")
-        lines.append(f"[dim]{session.session_id}[/]")
+        lines.append(f"[bold]Recovering: {rich_escape(session.title)}[/]")
+        lines.append(f"[dim]{rich_escape(session.session_id)}[/]")
         lines.append("")
         lines.append("[bold]Step 1 of 3: Configure[/]")
         lines.append("─" * 40)
@@ -549,7 +553,7 @@ class RecoveryWizardScreen(Screen):
     def _render_exporting(self) -> None:
         """Show export progress."""
         lines = [
-            f"[bold]Recovering: {self.session.title}[/]",
+            f"[bold]Recovering: {rich_escape(self.session.title)}[/]",
             "",
             "[bold]Step 2 of 3: Exporting[/]",
             "─" * 40,
@@ -564,7 +568,7 @@ class RecoveryWizardScreen(Screen):
     def _render_generating(self) -> None:
         """Show generation progress."""
         lines = [
-            f"[bold]Recovering: {self.session.title}[/]",
+            f"[bold]Recovering: {rich_escape(self.session.title)}[/]",
             "",
             "[bold]Step 2 of 3: Generating files[/]",
             "─" * 40,
@@ -579,7 +583,7 @@ class RecoveryWizardScreen(Screen):
         app: OrsessionApp = self.app  # type: ignore
         lines: list[str] = []
 
-        lines.append(f"[bold]Recovering: {self.session.title}[/]")
+        lines.append(f"[bold]Recovering: {rich_escape(self.session.title)}[/]")
         lines.append("")
         lines.append("[bold green]Step 3 of 3: Complete[/]")
         lines.append("─" * 40)
@@ -1900,14 +1904,20 @@ class SessionListScreen(Screen):
         table.add_column(f"Title{indicators[0]}", width=None)
         table.add_column(f"Updated{indicators[1]}", width=16)
         table.add_column(f"Created{indicators[2]}", width=16)
-        table.add_column("Duration", width=10)
+        table.add_column("Turns", width=7)
+        table.add_column("Size", width=8)
 
         for idx, session in enumerate(app.sessions, start=1):
             status = session_recovery_status(session.session_id, app.recovery_files)
             title = session.title if len(session.title) <= 50 else session.title[:47] + "..."
             updated = format_timestamp(session.updated, app.timestamp_mode)
             created = format_timestamp(session.created, app.timestamp_mode)
-            duration = session_duration(session)
+
+            # Turn count: show cached value if available, else "?"
+            turn_count = app.session_turn_cache.get(session.session_id, "?")
+
+            # Size: check if opencode data file exists for this session
+            size_str = _get_session_data_size(session.session_id)
 
             table.add_row(
                 str(idx),
@@ -1915,7 +1925,8 @@ class SessionListScreen(Screen):
                 title,
                 updated,
                 created,
-                duration,
+                str(turn_count),
+                size_str,
                 key=session.session_id,
             )
 
@@ -2014,6 +2025,18 @@ def _format_number(n: int) -> str:
     if n >= 1_000:
         return f"{n / 1_000:.1f}K"
     return str(n)
+
+
+_OPENCODE_DATA_DIR = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
+
+
+def _get_session_data_size(session_id: str) -> str:
+    """Get the size of a session's local data file as a human-readable string."""
+    data_file = _OPENCODE_DATA_DIR / f"{session_id}.json"
+    if data_file.exists():
+        size = data_file.stat().st_size
+        return _format_number(size)
+    return "?"
 
 
 # ---------------------------------------------------------------------------
@@ -2164,6 +2187,8 @@ class OrsessionApp(App):
         self.sessions: list[SessionInfo] = []
         self.recovery_files: list = []
         self.error_message: str | None = None
+        # Cache of session_id → turn count (populated after drill-down).
+        self.session_turn_cache: dict[str, int] = {}
         # Shared temp directory for exports.
         self._temp_dir_obj = tempfile.TemporaryDirectory(prefix="orsession-")
         self.temp_dir = Path(self._temp_dir_obj.name)

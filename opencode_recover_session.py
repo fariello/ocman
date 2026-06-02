@@ -654,7 +654,7 @@ def call_compaction_api(
                 "content": prompt,
             },
         ],
-        "temperature": 0.2,
+        # "temperature": 0.2,  # Omitted: many models reject this parameter.
     }
 
     body = json.dumps(payload).encode("utf-8")
