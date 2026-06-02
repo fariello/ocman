@@ -101,7 +101,7 @@ class SessionDetailScreen(Screen):
         # Show what we know from the session list immediately (no export needed).
         self._render_metadata_only()
         # Then kick off the export for previews.
-        self._load_export_async()
+        self._load_export_in_background()
 
     def _render_metadata_only(self) -> None:
         """Render session metadata from list data (no export required)."""
@@ -124,26 +124,30 @@ class SessionDetailScreen(Screen):
         content_widget = self.query_one("#detail-content", Static)
         content_widget.update("\n".join(lines))
 
-    @work(thread=True)
-    def _load_export_async(self) -> None:
-        """Export the session in a background thread."""
+    @work(exclusive=True)
+    async def _load_export_in_background(self) -> None:
+        """Export the session in a background worker using asyncio.to_thread."""
+        import asyncio
         app: OrsessionApp = self.app  # type: ignore
 
         try:
-            export = export_session(
+            export = await asyncio.to_thread(
+                export_session,
                 session_id=self.session.session_id,
                 temp_dir=app.temp_dir,
                 cwd=app.session_dir,
-                timeout=30,  # Shorter timeout for detail view.
+                timeout=30,
             )
-            turns = filter_conversation_turns(
-                extract_turns_from_export(export, include_tools=False)
+            turns = await asyncio.to_thread(
+                lambda: filter_conversation_turns(
+                    extract_turns_from_export(export, include_tools=False)
+                )
             )
         except RecoveryError as e:
-            self.app.call_from_thread(self._on_export_error, str(e))
+            self._on_export_error(str(e))
             return
 
-        self.app.call_from_thread(self._on_export_complete, export, turns)
+        self._on_export_complete(export, turns)
 
     def _on_export_error(self, error_message: str) -> None:
         """Handle export failure (called on main thread)."""
@@ -711,30 +715,36 @@ class RecoveryWizardScreen(Screen):
         self._render_step()
         self._run_recovery_pipeline_async()
 
-    @work(thread=True)
-    def _run_recovery_pipeline_async(self) -> None:
-        """Export session, extract turns, apply truncation, generate recovery files (background)."""
+    @work(exclusive=True)
+    async def _run_recovery_pipeline_async(self) -> None:
+        """Export session, extract turns, apply truncation, generate recovery files."""
+        import asyncio
         app: OrsessionApp = self.app  # type: ignore
 
         # Step: Export (if not already done).
         if not self.export:
             try:
-                self.export = export_session(
+                self.export = await asyncio.to_thread(
+                    export_session,
                     session_id=self.session.session_id,
                     temp_dir=app.temp_dir,
                     cwd=app.session_dir,
                 )
             except RecoveryError as e:
-                self.app.call_from_thread(self._on_pipeline_error, f"Export failed: {e}")
+                self._on_pipeline_error(f"Export failed: {e}")
                 return
 
         # Extract turns.
-        turns = filter_conversation_turns(
-            extract_turns_from_export(self.export, include_tools=self.include_tools)
+        export = self.export
+        include_tools = self.include_tools
+        turns = await asyncio.to_thread(
+            lambda: filter_conversation_turns(
+                extract_turns_from_export(export, include_tools=include_tools)
+            )
         )
 
         if not turns:
-            self.app.call_from_thread(self._on_pipeline_error, "No user/assistant turns found in export.")
+            self._on_pipeline_error("No user/assistant turns found in export.")
             return
 
         # Apply truncation.
@@ -751,7 +761,8 @@ class RecoveryWizardScreen(Screen):
                 if self.export.export_path
                 else f"opencode-session-{self.session.session_id}.json"
             )
-            generated_files = generate_recovery_files(
+            generated_files = await asyncio.to_thread(
+                generate_recovery_files,
                 turns=turns,
                 session=self.session,
                 output_dir=app.output_dir,
@@ -761,12 +772,10 @@ class RecoveryWizardScreen(Screen):
                 ),
             )
         except RecoveryError as e:
-            self.app.call_from_thread(self._on_pipeline_error, f"Generation failed: {e}")
+            self._on_pipeline_error(f"Generation failed: {e}")
             return
 
-        self.app.call_from_thread(
-            self._on_pipeline_complete, turns, total_before, generated_files
-        )
+        self._on_pipeline_complete(turns, total_before, generated_files)
 
     def _on_pipeline_error(self, message: str) -> None:
         """Handle pipeline failure (main thread)."""
@@ -1569,9 +1578,10 @@ class CompactionScreen(Screen):
         self._render_step()
         self._run_compaction_async()
 
-    @work(thread=True)
-    def _run_compaction_async(self) -> None:
-        """Execute the API call in a background thread."""
+    @work(exclusive=True)
+    async def _run_compaction_async(self) -> None:
+        """Execute the API call in a background worker."""
+        import asyncio
         app: OrsessionApp = self.app  # type: ignore
 
         # Build the prompt.
@@ -1587,9 +1597,9 @@ class CompactionScreen(Screen):
                 prompt_content = render_compact_prompt(self.turns, self.session)
 
         try:
-            result = call_compaction_api(self.model, prompt_content)
+            result = await asyncio.to_thread(call_compaction_api, self.model, prompt_content)
         except RecoveryError as e:
-            self.app.call_from_thread(self._on_compaction_error, str(e))
+            self._on_compaction_error(str(e))
             return
 
         # Save the compacted output.
@@ -1600,12 +1610,10 @@ class CompactionScreen(Screen):
         try:
             write_text(compacted_path, result["content"])
         except RecoveryError as e:
-            self.app.call_from_thread(self._on_compaction_error, f"Failed to save output: {e}")
+            self._on_compaction_error(f"Failed to save output: {e}")
             return
 
-        self.app.call_from_thread(
-            self._on_compaction_complete, compacted_path, result.get("usage", {})
-        )
+        self._on_compaction_complete(compacted_path, result.get("usage", {}))
 
     def _on_compaction_error(self, error_message: str) -> None:
         """Handle API call failure (main thread)."""
