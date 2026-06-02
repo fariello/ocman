@@ -97,8 +97,32 @@ class SessionDetailScreen(Screen):
         yield Footer()
 
     def on_mount(self) -> None:
-        """Export and parse the session on mount."""
+        """Show metadata immediately, then start export in background."""
+        # Show what we know from the session list immediately (no export needed).
+        self._render_metadata_only()
+        # Then kick off the export for previews.
         self._load_export_async()
+
+    def _render_metadata_only(self) -> None:
+        """Render session metadata from list data (no export required)."""
+        app: OrsessionApp = self.app  # type: ignore
+        ts_mode = app.timestamp_mode
+        session = self.session
+        lines: list[str] = []
+
+        lines.append(f"[bold]{rich_escape(session.title)}[/]")
+        lines.append("─" * min(60, len(session.title) + 4))
+        lines.append("")
+        lines.append(f"  [dim]ID:[/]        {rich_escape(session.session_id)}")
+        lines.append(f"  [dim]Created:[/]   {format_timestamp(session.created, ts_mode)}")
+        lines.append(f"  [dim]Updated:[/]   {format_timestamp(session.updated, ts_mode)}")
+        lines.append(f"  [dim]Duration:[/]  {session_duration(session)}")
+        lines.append("")
+        lines.append("  [dim]Loading session export for previews...[/]")
+        lines.append("  [dim](Press b or Escape to go back)[/]")
+
+        content_widget = self.query_one("#detail-content", Static)
+        content_widget.update("\n".join(lines))
 
     @work(thread=True)
     def _load_export_async(self) -> None:
@@ -110,6 +134,7 @@ class SessionDetailScreen(Screen):
                 session_id=self.session.session_id,
                 temp_dir=app.temp_dir,
                 cwd=app.session_dir,
+                timeout=30,  # Shorter timeout for detail view.
             )
             turns = filter_conversation_turns(
                 extract_turns_from_export(export, include_tools=False)
@@ -1904,8 +1929,6 @@ class SessionListScreen(Screen):
         table.add_column(f"Title{indicators[0]}", width=None)
         table.add_column(f"Updated{indicators[1]}", width=16)
         table.add_column(f"Created{indicators[2]}", width=16)
-        table.add_column("Turns", width=7)
-        table.add_column("Size", width=8)
 
         for idx, session in enumerate(app.sessions, start=1):
             status = session_recovery_status(session.session_id, app.recovery_files)
@@ -1913,20 +1936,12 @@ class SessionListScreen(Screen):
             updated = format_timestamp(session.updated, app.timestamp_mode)
             created = format_timestamp(session.created, app.timestamp_mode)
 
-            # Turn count: show cached value if available, else "?"
-            turn_count = app.session_turn_cache.get(session.session_id, "?")
-
-            # Size: check if opencode data file exists for this session
-            size_str = _get_session_data_size(session.session_id)
-
             table.add_row(
                 str(idx),
                 status,
                 title,
                 updated,
                 created,
-                str(turn_count),
-                size_str,
                 key=session.session_id,
             )
 
@@ -2167,6 +2182,12 @@ class OrsessionApp(App):
     }
     """
 
+    # App-level bindings — these ALWAYS work regardless of focus.
+    BINDINGS = [
+        Binding("q", "quit", "Quit", priority=True),
+        Binding("ctrl+c", "quit", "Quit", show=False, priority=True),
+    ]
+
     # Shared app state.
     timestamp_mode: reactive[str] = reactive("medium")
     sort_mode: reactive[str] = reactive("updated_desc")
@@ -2252,8 +2273,19 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _restore_terminal() -> None:
+    """Reset terminal state — disables mouse tracking and restores normal mode."""
+    # Disable mouse tracking modes that textual enables.
+    sys.stdout.write("\033[?1000l\033[?1003l\033[?1006l")
+    # Reset terminal to normal state.
+    sys.stdout.write("\033[0m\033[?25h\033[?7h")
+    sys.stdout.flush()
+
+
 def main() -> None:
     """Main entry point for orsession."""
+    import signal
+
     args = parse_args()
 
     session_dir = args.session_dir
@@ -2263,11 +2295,23 @@ def main() -> None:
             print(f"Error: --session-dir is not a valid directory: {session_dir}", file=sys.stderr)
             sys.exit(1)
 
+    # Install signal handler to restore terminal on SIGTERM.
+    def _handle_term(signum, frame):
+        _restore_terminal()
+        sys.exit(128 + signum)
+
+    signal.signal(signal.SIGTERM, _handle_term)
+
     app = OrsessionApp(
         session_dir=session_dir,
         output_dir=args.out,
     )
-    app.run()
+    try:
+        app.run()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        _restore_terminal()
 
 
 if __name__ == "__main__":
