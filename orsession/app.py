@@ -124,24 +124,20 @@ class SessionDetailScreen(Screen):
         content_widget = self.query_one("#detail-content", Static)
         content_widget.update("\n".join(lines))
 
-    @work(exclusive=True)
-    async def _load_export_in_background(self) -> None:
-        """Export the session in a background worker using asyncio.to_thread."""
-        import asyncio
+    @work(thread=True)
+    def _load_export_in_background(self) -> None:
+        """Export the session in a background thread."""
         app: OrsessionApp = self.app  # type: ignore
 
         try:
-            export = await asyncio.to_thread(
-                export_session,
+            export = export_session(
                 session_id=self.session.session_id,
                 temp_dir=app.temp_dir,
                 cwd=app.session_dir,
                 timeout=30,
             )
-            turns = await asyncio.to_thread(
-                lambda: filter_conversation_turns(
-                    extract_turns_from_export(export, include_tools=False)
-                )
+            turns = filter_conversation_turns(
+                extract_turns_from_export(export, include_tools=False)
             )
         except RecoveryError as e:
             self.app.call_later(self._on_export_error, str(e))
@@ -716,17 +712,15 @@ class RecoveryWizardScreen(Screen):
         self._render_step()
         self._run_recovery_pipeline_async()
 
-    @work(exclusive=True)
-    async def _run_recovery_pipeline_async(self) -> None:
+    @work(thread=True, exclusive=True)
+    def _run_recovery_pipeline_async(self) -> None:
         """Export session, extract turns, apply truncation, generate recovery files."""
-        import asyncio
         app: OrsessionApp = self.app  # type: ignore
 
         # Step: Export (if not already done).
         if not self.export:
             try:
-                self.export = await asyncio.to_thread(
-                    export_session,
+                self.export = export_session(
                     session_id=self.session.session_id,
                     temp_dir=app.temp_dir,
                     cwd=app.session_dir,
@@ -736,12 +730,8 @@ class RecoveryWizardScreen(Screen):
                 return
 
         # Extract turns.
-        export = self.export
-        include_tools = self.include_tools
-        turns = await asyncio.to_thread(
-            lambda: filter_conversation_turns(
-                extract_turns_from_export(export, include_tools=include_tools)
-            )
+        turns = filter_conversation_turns(
+            extract_turns_from_export(self.export, include_tools=self.include_tools)
         )
 
         if not turns:
@@ -762,8 +752,7 @@ class RecoveryWizardScreen(Screen):
                 if self.export.export_path
                 else f"opencode-session-{self.session.session_id}.json"
             )
-            generated_files = await asyncio.to_thread(
-                generate_recovery_files,
+            generated_files = generate_recovery_files(
                 turns=turns,
                 session=self.session,
                 output_dir=app.output_dir,
@@ -1579,10 +1568,9 @@ class CompactionScreen(Screen):
         self._render_step()
         self._run_compaction_async()
 
-    @work(exclusive=True)
-    async def _run_compaction_async(self) -> None:
-        """Execute the API call in a background worker."""
-        import asyncio
+    @work(thread=True, exclusive=True)
+    def _run_compaction_async(self) -> None:
+        """Execute the API call in a background thread."""
         app: OrsessionApp = self.app  # type: ignore
 
         # Build the prompt.
@@ -1598,7 +1586,7 @@ class CompactionScreen(Screen):
                 prompt_content = render_compact_prompt(self.turns, self.session)
 
         try:
-            result = await asyncio.to_thread(call_compaction_api, self.model, prompt_content)
+            result = call_compaction_api(self.model, prompt_content)
         except RecoveryError as e:
             self.app.call_later(self._on_compaction_error, str(e))
             return
