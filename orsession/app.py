@@ -95,13 +95,12 @@ class SessionDetailScreen(Screen):
     def compose(self) -> ComposeResult:
         yield Header()
         if self.loading:
-            yield VerticalScroll(
-                Static(self._build_loading_text(), id="detail-content"),
-                id="detail-scroll",
-            )
+            yield Static(self._build_loading_text(), id="detail-header")
         else:
+            yield Static(self._build_header_text(), id="detail-header")
+            yield Static(self._build_separator(), id="detail-separator")
             yield VerticalScroll(
-                Static(self._build_detail_text(), id="detail-content"),
+                Static(self._build_exchanges_text(), id="detail-exchanges"),
                 id="detail-scroll",
             )
         yield Footer()
@@ -182,21 +181,25 @@ class SessionDetailScreen(Screen):
                 self.session, export=export, turns=turns, initial_scroll="bottom"
             ))
 
-    def _build_detail_text(self) -> str:
-        """Build compact header + all exchanges as a single scrollable list."""
+    def _get_ts_mode(self) -> str:
         try:
-            ts_mode = self.app.timestamp_mode  # type: ignore
-            term_width = self.app.size.width  # type: ignore
+            return self.app.timestamp_mode  # type: ignore
         except Exception:
-            ts_mode = "medium"
-            term_width = 120
-        preview_width = max(40, term_width - 26)
+            return "medium"
+
+    def _get_term_width(self) -> int:
+        try:
+            return self.app.size.width  # type: ignore
+        except Exception:
+            return 120
+
+    def _build_header_text(self) -> str:
+        """Build the fixed compact header (session metadata)."""
+        ts_mode = self._get_ts_mode()
         session = self.session
         export = self.export
-
         lines: list[str] = []
 
-        # ── Compact header ──
         lines.append(f"[bold]{rich_escape(session.title)}[/]")
 
         if export and export.info:
@@ -264,23 +267,28 @@ class SessionDetailScreen(Screen):
                          f"[dim]Created:[/] {format_timestamp(session.created, ts_mode)}  "
                          f"[dim]Updated:[/] {format_timestamp(session.updated, ts_mode)}")
 
-        # ── Separator ──
-        if not self.turns:
-            lines.append("")
-            lines.append("  [dim]No exchanges found.[/]")
-            return "\n".join(lines)
+        return "\n".join(lines)
 
-        lines.append("")
-        usable_width = max(20, term_width - 6)
+    def _build_separator(self) -> str:
+        """Build the separator bar with light blue background."""
+        term_width = self._get_term_width()
         sep_label = " ↓ Exchanges ↓ "
-        sep_remaining = max(0, usable_width - len(sep_label))
+        sep_remaining = max(0, term_width - len(sep_label))
         sep_left = sep_remaining // 2
         sep_right = sep_remaining - sep_left
-        lines.append(f"[on dark_blue]{'─' * sep_left}{sep_label}{'─' * sep_right}[/]")
-        lines.append("")
+        return f"[on dark_blue]{'─' * sep_left}{sep_label}{'─' * sep_right}[/]"
 
-        # ── All exchanges (single scrollable list) ──
-        total = len(self.turns)
+    def _build_exchanges_text(self) -> str:
+        """Build the scrollable exchanges list."""
+        ts_mode = self._get_ts_mode()
+        term_width = self._get_term_width()
+        preview_width = max(40, term_width - 26)
+
+        if not self.turns:
+            return "  [dim]No exchanges found.[/]"
+
+        import re
+        lines: list[str] = []
         search_lower = self.search_term.lower() if self.search_term else ""
 
         for turn in self.turns:
@@ -292,10 +300,7 @@ class SessionDetailScreen(Screen):
 
             # Highlight search matches in bold red.
             if search_lower and search_lower in preview_text.lower():
-                # Case-insensitive highlight.
-                import re
                 escaped = rich_escape(preview_text)
-                # Find match positions in the escaped text and wrap them.
                 pattern = re.compile(re.escape(rich_escape(self.search_term)), re.IGNORECASE)
                 escaped = pattern.sub(
                     lambda m: f"[bold red]{m.group(0)}[/bold red]", escaped
@@ -2209,12 +2214,23 @@ class OrsessionApp(App):
         content-align: center middle;
     }
 
-    #detail-scroll {
-        height: 1fr;
-        padding: 1 2;
+    #detail-header {
+        height: auto;
+        padding: 1 2 0 2;
     }
 
-    #detail-content {
+    #detail-separator {
+        height: 1;
+        padding: 0;
+        margin: 0 2;
+    }
+
+    #detail-scroll {
+        height: 1fr;
+        padding: 0 2;
+    }
+
+    #detail-exchanges {
         width: 100%;
     }
 
