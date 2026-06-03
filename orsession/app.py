@@ -270,13 +270,11 @@ class SessionDetailScreen(Screen):
         return "\n".join(lines)
 
     def _build_separator(self) -> str:
-        """Build the separator bar with light blue background."""
+        """Build the separator bar with light blue background, centered label."""
         term_width = self._get_term_width()
-        sep_label = " ↓ Exchanges ↓ "
-        sep_remaining = max(0, term_width - len(sep_label))
-        sep_left = sep_remaining // 2
-        sep_right = sep_remaining - sep_left
-        return f"[on dark_blue]{'─' * sep_left}{sep_label}{'─' * sep_right}[/]"
+        label = "↓ Exchanges ↓"
+        padded = label.center(term_width)
+        return f"[on dark_blue]{padded}[/]"
 
     def _build_exchanges_text(self) -> str:
         """Build the scrollable exchanges list."""
@@ -2222,7 +2220,7 @@ class OrsessionApp(App):
     #detail-separator {
         height: 1;
         padding: 0;
-        margin: 0 2;
+        margin: 0;
     }
 
     #detail-scroll {
