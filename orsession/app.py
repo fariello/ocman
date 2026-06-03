@@ -129,8 +129,11 @@ class SessionDetailScreen(Screen):
         lines.append("  [dim]Loading session export for previews...[/]")
         lines.append("  [dim](Press b or Escape to go back)[/]")
 
-        content_widget = self.query_one("#detail-content", Static)
-        content_widget.update("\n".join(lines))
+        try:
+            content_widget = self.query_one("#detail-content", Static)
+            content_widget.update("\n".join(lines))
+        except Exception:
+            pass
 
     def _export_thread_target(self) -> None:
         """Run export in a plain thread. Store result for polling."""
@@ -154,24 +157,26 @@ class SessionDetailScreen(Screen):
         if self._export_result is None:
             return  # Still running.
 
-        # Stop polling.
-        # (set_interval returns a Timer; we can't easily cancel, but
-        # setting _export_result to a sentinel prevents re-processing)
         result = self._export_result
         self._export_result = {"_done": True}  # Prevent re-entry.
 
         if "_done" in result:
             return
 
+        # Schedule the UI update on a fresh event loop tick (not inside
+        # this timer callback) to avoid re-entrant render deadlock.
         if "error" in result:
-            self._on_export_error(result["error"])
+            self.set_timer(0.01, lambda: self._on_export_error(result["error"]))
         else:
-            self._on_export_complete(result["export"], result["turns"])
+            self.set_timer(0.01, lambda: self._on_export_complete(result["export"], result["turns"]))
 
     def _on_export_error(self, error_message: str) -> None:
         """Handle export failure (called on main thread)."""
-        content_widget = self.query_one("#detail-content", Static)
-        content_widget.update(f"[bold red]Export failed:[/]\n\n{error_message}")
+        try:
+            content_widget = self.query_one("#detail-content", Static)
+            content_widget.update(f"[bold red]Export failed:[/]\n\n{rich_escape(error_message)}")
+        except Exception:
+            pass
         self.loading = False
 
     def _on_export_complete(self, export: SessionExport, turns: list[Turn]) -> None:
@@ -310,12 +315,12 @@ class SessionDetailScreen(Screen):
             lines.append("  [dim]No user/assistant turns found.[/]")
             lines.append("")
 
-        content_widget = self.query_one("#detail-content", Static)
         rendered = "\n".join(lines)
-        # Safeguard: if content is unreasonably large, truncate it.
-        if len(rendered) > 10000:
-            rendered = rendered[:10000] + "\n\n[dim]... (display truncated)[/]"
-        content_widget.update(rendered)
+        try:
+            content_widget = self.query_one("#detail-content", Static)
+            content_widget.update(rendered)
+        except Exception:
+            pass
 
     def _get_turn_timestamp(self, turn: Turn) -> str:
         """Try to find the timestamp for a turn from the export messages."""
