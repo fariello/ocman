@@ -273,8 +273,8 @@ class SessionDetailScreen(Screen):
             term_width = app.size.width
         except Exception:
             term_width = 120
-        # Prefix is "  U Jun-02 12:34: " — about 22 chars including markup overhead.
-        preview_width = max(40, term_width - 22)
+        # Prefix is "  U Jun-02 12:34: " — about 26 chars with padding.
+        preview_width = max(40, term_width - 26)
 
         if self.turns:
             first_turns = self.turns[:5]
