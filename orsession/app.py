@@ -99,8 +99,16 @@ class SessionDetailScreen(Screen):
         else:
             yield Static(self._build_header_text(), id="detail-header")
             yield Static(self._build_separator(), id="detail-separator")
+            exchanges_text = self._build_exchanges_text()
+            # Fall back to no-markup if the text confuses textual's parser.
+            try:
+                from textual.content import Content
+                Content.from_markup(exchanges_text)
+                use_markup = True
+            except Exception:
+                use_markup = False
             yield VerticalScroll(
-                Static(self._build_exchanges_text(), id="detail-exchanges"),
+                Static(exchanges_text, id="detail-exchanges", markup=use_markup),
                 id="detail-scroll",
             )
         yield Footer()
