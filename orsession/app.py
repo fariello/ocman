@@ -256,7 +256,7 @@ class SessionDetailScreen(Screen):
 
         # Preview: first exchanges.
         if self.turns:
-            first_turns = self.turns[:3]
+            first_turns = self.turns[:5]
             lines.append(f"  [bold]── First exchanges ──[/]")
             lines.append("")
             for turn in first_turns:
@@ -269,11 +269,12 @@ class SessionDetailScreen(Screen):
             lines.append("")
 
             # Preview: last exchanges.
-            last_turns = self.turns[-3:] if len(self.turns) > 3 else []
+            last_turns = self.turns[-15:] if len(self.turns) > 15 else []
             if last_turns:
                 # Make sure we don't duplicate if session is very short.
-                if len(self.turns) > 6:
-                    lines.append(f"  [dim]  ... ({len(self.turns) - 6} turns omitted) ...[/]")
+                omitted = len(self.turns) - 5 - len(last_turns)
+                if omitted > 0:
+                    lines.append(f"  [dim]  ... ({omitted} turns omitted) ...[/]")
                     lines.append("")
 
                 lines.append(f"  [bold]── Last exchanges ──[/]")
