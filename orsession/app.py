@@ -80,60 +80,55 @@ class SessionDetailScreen(Screen):
         Binding("q", "quit", "Quit"),
     ]
 
-    def __init__(self, session: SessionInfo, **kwargs) -> None:
+    def __init__(self, session: SessionInfo, export: SessionExport | None = None, turns: list[Turn] | None = None, **kwargs) -> None:
         super().__init__(**kwargs)
         self.session = session
-        self.export: SessionExport | None = None
-        self.turns: list[Turn] = []
-        self.loading = True
+        self.export = export
+        self.turns = turns or []
+        self.loading = export is None  # Only loading if we need to export.
 
     def compose(self) -> ComposeResult:
         yield Header()
-        yield VerticalScroll(
-            Static("Loading session...", id="detail-content"),
-            id="detail-scroll",
-        )
+        if self.loading:
+            # Show loading state — export will happen, then screen gets replaced.
+            yield VerticalScroll(
+                Static(self._build_loading_text(), id="detail-content"),
+                id="detail-scroll",
+            )
+        else:
+            # Already have export data — render full detail immediately.
+            yield VerticalScroll(
+                Static(self._build_detail_text(), id="detail-content"),
+                id="detail-scroll",
+            )
         yield Footer()
 
     def on_mount(self) -> None:
-        """Show metadata immediately, then start export in background."""
-        import threading
+        """Start export in background if needed."""
+        if self.loading:
+            import threading
+            self._export_result: dict | None = None
+            threading.Thread(target=self._export_thread_target, daemon=True).start()
+            self.set_interval(0.25, self._poll_export)
 
-        # Show what we know from the session list immediately (no export needed).
-        self._render_metadata_only()
-
-        # Start export in a plain thread — no textual worker API.
-        # Results are stored in instance vars; a timer polls for completion.
-        self._export_result: dict | None = None
-        self._export_thread = threading.Thread(
-            target=self._export_thread_target, daemon=True
-        )
-        self._export_thread.start()
-        self.set_interval(0.25, self._poll_export)
-
-    def _render_metadata_only(self) -> None:
-        """Render session metadata from list data (no export required)."""
+    def _build_loading_text(self) -> str:
+        """Build the loading screen text."""
         app: OrsessionApp = self.app  # type: ignore
         ts_mode = app.timestamp_mode
         session = self.session
-        lines: list[str] = []
-
-        lines.append(f"[bold]{rich_escape(session.title)}[/]")
-        lines.append("─" * min(60, len(session.title) + 4))
-        lines.append("")
-        lines.append(f"  [dim]ID:[/]        {rich_escape(session.session_id)}")
-        lines.append(f"  [dim]Created:[/]   {format_timestamp(session.created, ts_mode)}")
-        lines.append(f"  [dim]Updated:[/]   {format_timestamp(session.updated, ts_mode)}")
-        lines.append(f"  [dim]Duration:[/]  {session_duration(session)}")
-        lines.append("")
-        lines.append("  [dim]Loading session export for previews...[/]")
-        lines.append("  [dim](Press b or Escape to go back)[/]")
-
-        try:
-            content_widget = self.query_one("#detail-content", Static)
-            content_widget.update("\n".join(lines))
-        except Exception:
-            pass
+        lines = [
+            f"[bold]{rich_escape(session.title)}[/]",
+            "─" * min(60, len(session.title) + 4),
+            "",
+            f"  [dim]ID:[/]        {rich_escape(session.session_id)}",
+            f"  [dim]Created:[/]   {format_timestamp(session.created, ts_mode)}",
+            f"  [dim]Updated:[/]   {format_timestamp(session.updated, ts_mode)}",
+            f"  [dim]Duration:[/]  {session_duration(session)}",
+            "",
+            "  [dim]Loading session export for previews...[/]",
+            "  [dim](Press b or Escape to go back)[/]",
+        ]
+        return "\n".join(lines)
 
     def _export_thread_target(self) -> None:
         """Run export in a plain thread. Store result for polling."""
@@ -155,42 +150,36 @@ class SessionDetailScreen(Screen):
     def _poll_export(self) -> None:
         """Timer callback: check if export thread finished."""
         if self._export_result is None:
-            return  # Still running.
-
+            return
         result = self._export_result
-        self._export_result = {"_done": True}  # Prevent re-entry.
-
+        self._export_result = {"_done": True}
         if "_done" in result:
             return
 
-        # Schedule the UI update on a fresh event loop tick (not inside
-        # this timer callback) to avoid re-entrant render deadlock.
+        # Instead of updating the widget (which deadlocks textual-output
+        # on WSL), pop this screen and push a new one with the data.
         if "error" in result:
-            self.set_timer(0.01, lambda: self._on_export_error(result["error"]))
+            self.app.notify(f"Export failed: {result['error']}", severity="error", timeout=8)
+            self.loading = False
         else:
-            self.set_timer(0.01, lambda: self._on_export_complete(result["export"], result["turns"]))
+            app: OrsessionApp = self.app  # type: ignore
+            export = result["export"]
+            turns = result["turns"]
+            app.session_turn_cache[self.session.session_id] = len(turns)
+            # Replace this screen with a new one that has the data.
+            self.app.pop_screen()
+            self.app.push_screen(SessionDetailScreen(self.session, export=export, turns=turns))
 
     def _on_export_error(self, error_message: str) -> None:
-        """Handle export failure (called on main thread)."""
-        try:
-            content_widget = self.query_one("#detail-content", Static)
-            content_widget.update(f"[bold red]Export failed:[/]\n\n{rich_escape(error_message)}")
-        except Exception:
-            pass
-        self.loading = False
+        """Handle export failure."""
+        pass  # Handled in _poll_export via notify.
 
     def _on_export_complete(self, export: SessionExport, turns: list[Turn]) -> None:
-        """Handle successful export (called on main thread)."""
-        app: OrsessionApp = self.app  # type: ignore
-        self.export = export
-        self.turns = turns
-        self.loading = False
-        # Cache turn count for session list display.
-        app.session_turn_cache[self.session.session_id] = len(turns)
-        self._render_detail()
+        """Handle successful export."""
+        pass  # Handled in _poll_export via screen replacement.
 
-    def _render_detail(self) -> None:
-        """Render the full detail view with metadata and previews."""
+    def _build_detail_text(self) -> str:
+        """Build the full detail view text with metadata and previews."""
         app: OrsessionApp = self.app  # type: ignore
         ts_mode = app.timestamp_mode
         session = self.session
@@ -315,12 +304,7 @@ class SessionDetailScreen(Screen):
             lines.append("  [dim]No user/assistant turns found.[/]")
             lines.append("")
 
-        rendered = "\n".join(lines)
-        try:
-            content_widget = self.query_one("#detail-content", Static)
-            content_widget.update(rendered)
-        except Exception:
-            pass
+        return "\n".join(lines)
 
     def _get_turn_timestamp(self, turn: Turn) -> str:
         """Try to find the timestamp for a turn from the export messages."""
@@ -372,7 +356,9 @@ class SessionDetailScreen(Screen):
         current_idx = TIMESTAMP_MODES.index(app.timestamp_mode)
         app.timestamp_mode = TIMESTAMP_MODES[(current_idx + 1) % len(TIMESTAMP_MODES)]
         if not self.loading:
-            self._render_detail()
+            # Replace screen to re-render with new timestamp mode.
+            self.app.pop_screen()
+            self.app.push_screen(SessionDetailScreen(self.session, export=self.export, turns=self.turns))
         self.app.notify(f"Timestamps: {app.timestamp_mode}", timeout=2)
 
 
