@@ -278,11 +278,10 @@ class SessionDetailScreen(Screen):
         return "\n".join(lines)
 
     def _build_separator(self) -> str:
-        """Build the separator bar with light blue background, centered label."""
+        """Build the separator bar content (centered label, no markup colors — CSS handles bg)."""
         term_width = self._get_term_width()
         label = "↓ Exchanges ↓"
-        padded = label.center(term_width)
-        return f"[on dark_blue]{padded}[/]"
+        return label.center(term_width)
 
     def _build_exchanges_text(self) -> str:
         """Build the scrollable exchanges list."""
@@ -299,6 +298,13 @@ class SessionDetailScreen(Screen):
         search_lower = self.search_term.lower() if self.search_term else ""
 
         for turn in self.turns:
+            # Collapse text to single line.
+            collapsed = " ".join(turn.text.split())
+
+            # If searching, only show matching lines.
+            if search_lower and search_lower not in collapsed.lower():
+                continue
+
             ts = self._get_turn_timestamp(turn)
             ts_formatted = format_timestamp(ts, ts_mode) if ts else ""
             ts_display = f" {rich_escape(ts_formatted)}" if ts_formatted else ""
@@ -310,11 +316,8 @@ class SessionDetailScreen(Screen):
             prefix_len = 2 + 1 + (len(ts_formatted) + 1 if ts_formatted else 0) + 2
             preview_width = max(20, usable_width - prefix_len)
 
-            # Collapse text to single line.
-            collapsed = " ".join(turn.text.split())
-
             # Truncation: if searching, center on first match.
-            if search_lower and search_lower in collapsed.lower():
+            if search_lower:
                 match_pos = collapsed.lower().find(search_lower)
                 preview_text = self._truncate_around_match(
                     collapsed, match_pos, len(self.search_term), preview_width
@@ -337,6 +340,9 @@ class SessionDetailScreen(Screen):
                 preview = rich_escape(preview_text)
 
             lines.append(f"  [{role_style}]{role_char}{ts_display}:[/] {preview}")
+
+        if search_lower and not lines:
+            lines.append("  [dim]No matches found.[/]")
 
         return "\n".join(lines)
 
@@ -2290,6 +2296,9 @@ class OrsessionApp(App):
         height: 1;
         padding: 0;
         margin: 0;
+        background: #1a3a5c;
+        color: #a0c8e8;
+        text-align: center;
     }
 
     #detail-scroll {
