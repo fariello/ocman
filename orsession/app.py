@@ -2164,6 +2164,7 @@ class SessionListScreen(Screen):
         Binding("a", "toggle_all_sessions", "All/Top"),
         Binding("r", "recover", "Recover"),
         Binding("c", "quick_compact", "Quick Compact"),
+        Binding("d", "delete_session", "Delete"),
         Binding("g", "switch_project", "Projects"),
         Binding("f", "browse_files", "Files"),
     ]
@@ -2374,6 +2375,49 @@ class SessionListScreen(Screen):
             self.app.notify(f"Showing all sessions (+{child_count} subagent)", timeout=3)
         else:
             self.app.notify(f"Hiding {child_count} subagent sessions", timeout=3)
+
+    def action_delete_session(self) -> None:
+        """Delete the selected session (requires double-press to confirm)."""
+        session = self._get_selected_session()
+        if not session:
+            return
+        # Double-press confirmation pattern.
+        pending = getattr(self, "_pending_delete_session", None)
+        if pending == session.session_id:
+            # Second press — do the delete.
+            self._pending_delete_session = None
+            self._do_delete_session(session)
+        else:
+            # First press — show warning.
+            self._pending_delete_session = session.session_id
+            self.app.notify(
+                f"Press d again to DELETE: {session.title[:40]} (IRREVERSIBLE)",
+                severity="warning",
+                timeout=5,
+            )
+
+    def _do_delete_session(self, session: SessionInfo) -> None:
+        """Actually delete the session via opencode CLI."""
+        import subprocess
+        app: OrsessionApp = self.app  # type: ignore
+        session_dir = app.session_dir
+
+        try:
+            result = subprocess.run(
+                ["opencode", "session", "delete", session.session_id],
+                capture_output=True, text=True, timeout=30,
+                cwd=session_dir,
+            )
+            if result.returncode == 0:
+                # Remove from app.sessions and refresh table.
+                app.sessions = [s for s in app.sessions if s.session_id != session.session_id]
+                self._populate_table()
+                self.app.notify(f"Deleted: {session.title[:40]}", timeout=4)
+            else:
+                error = result.stderr.strip() or result.stdout.strip() or "Unknown error"
+                self.app.notify(f"Delete failed: {error[:60]}", severity="error", timeout=6)
+        except Exception as e:
+            self.app.notify(f"Delete failed: {e}", severity="error", timeout=6)
 
     # ------------------------------------------------------------------
     # Helpers
