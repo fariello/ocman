@@ -1745,7 +1745,7 @@ def list_sessions_for_project(project_id: str) -> list[SessionInfo]:
         conn = sqlite3.connect(str(OPENCODE_DB_PATH))
         cursor = conn.cursor()
         cursor.execute("""
-            SELECT id, title, time_created, time_updated, directory
+            SELECT id, title, time_created, time_updated, directory, parent_id
             FROM session
             WHERE project_id = ?
             ORDER BY time_updated DESC
@@ -1753,13 +1753,13 @@ def list_sessions_for_project(project_id: str) -> list[SessionInfo]:
 
         sessions: list[SessionInfo] = []
         for row in cursor.fetchall():
-            sid, title, created, updated, directory = row
+            sid, title, created, updated, directory, parent_id = row
             sessions.append(SessionInfo(
                 session_id=sid,
                 title=title or "(untitled)",
                 created=str(created) if created else "unknown",
                 updated=str(updated) if updated else "unknown",
-                raw={"directory": directory or ""},
+                raw={"directory": directory or "", "parent_id": parent_id or ""},
             ))
         conn.close()
         return sessions

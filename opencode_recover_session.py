@@ -3208,7 +3208,7 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
                        s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
                        s.summary_additions, s.summary_deletions, s.summary_files,
-                       s.slug, s.model, s.agent, p.worktree
+                       s.slug, s.model, s.agent, p.worktree, s.parent_id
                 FROM session s
                 LEFT JOIN project p ON p.id = s.project_id
                 WHERE s.project_id = ?
@@ -3219,7 +3219,7 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
                        s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
                        s.summary_additions, s.summary_deletions, s.summary_files,
-                       s.slug, s.model, s.agent, p.worktree
+                       s.slug, s.model, s.agent, p.worktree, s.parent_id
                 FROM session s
                 LEFT JOIN project p ON p.id = s.project_id
                 ORDER BY s.time_updated DESC
@@ -3244,6 +3244,7 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 "model": row[13] or "",
                 "agent": row[14] or "",
                 "project_dir": row[15] or "",
+                "parent_id": row[16] or "",
             })
         conn.close()
         return sessions
@@ -3503,6 +3504,12 @@ Examples:
         "--list-sessions",
         action="store_true",
         help="List sessions for the current project context and exit.",
+    )
+
+    parser.add_argument(
+        "--all-sessions",
+        action="store_true",
+        help="Include subagent/child sessions in --list-sessions (hidden by default).",
     )
 
     parser.add_argument(
@@ -3879,20 +3886,32 @@ def main() -> None:
 
     # Handle --list-sessions early.
     if args.list_sessions:
-        sessions = db_list_sessions(_project_id)
-        if not sessions:
+        all_sessions = db_list_sessions(_project_id)
+        if not all_sessions:
             if _project_id:
                 die(f"No sessions found for project: {_project_dir}")
             else:
-                sessions = db_list_sessions()
-                if not sessions:
+                all_sessions = db_list_sessions()
+                if not all_sessions:
                     die("No sessions found.")
 
-        if _project_dir:
-            print(color_bold(f"Sessions for {_project_dir} ({len(sessions)}):"))
+        # Filter child sessions unless --all-sessions.
+        show_all = args.all_sessions
+        if show_all:
+            sessions = all_sessions
         else:
-            print(color_bold(f"All sessions ({len(sessions)}):"))
+            sessions = [s for s in all_sessions if not s["parent_id"]]
+
+        top_count = sum(1 for s in all_sessions if not s["parent_id"])
+        child_count = sum(1 for s in all_sessions if s["parent_id"])
+
+        if _project_dir:
+            print(color_bold(f"Sessions for {_project_dir} ({top_count} sessions, {child_count} subagent):"))
+        else:
+            print(color_bold(f"All sessions ({top_count} sessions, {child_count} subagent):"))
             print("  (No project context. Use --project to filter, or run from a project directory.)")
+        if not show_all and child_count:
+            print(f"  ({child_count} subagent sessions hidden. Use --all-sessions to show them.)")
         print()
         for idx, s in enumerate(sessions, start=1):
             title = s["title"]
@@ -3900,7 +3919,8 @@ def main() -> None:
                 title = title[:57] + "..."
             updated = _fmt_ts(s["updated"])
             project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
-            print(f"  {idx:>3}. {color_bold(title)}{project_hint}")
+            prefix = "⤷ " if s["parent_id"] else ""
+            print(f"  {idx:>3}. {prefix}{color_bold(title)}{project_hint}")
             sid = s["id"]
             print(f"       ID: {sid}  Updated: {updated}")
         print()

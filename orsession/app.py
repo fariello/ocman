@@ -2161,6 +2161,7 @@ class SessionListScreen(Screen):
         Binding("q", "quit", "Quit"),
         Binding("t", "cycle_timestamps", "Timestamps"),
         Binding("s", "cycle_sort", "Sort"),
+        Binding("a", "toggle_all_sessions", "All/Top"),
         Binding("r", "recover", "Recover"),
         Binding("c", "quick_compact", "Quick Compact"),
         Binding("g", "switch_project", "Projects"),
@@ -2282,9 +2283,20 @@ class SessionListScreen(Screen):
         table.add_column(f"Created{indicators[2]}", width=16)
         table.add_column("Size", width=8)
 
-        for idx, session in enumerate(app.sessions, start=1):
+        # Filter sessions based on show_all_sessions flag.
+        visible_sessions = app.sessions
+        if not app.show_all_sessions:
+            visible_sessions = [s for s in app.sessions if not s.raw.get("parent_id")]
+
+        # Store for row selection mapping.
+        self._visible_sessions = visible_sessions
+
+        for idx, session in enumerate(visible_sessions, start=1):
             status = session_recovery_status(session.session_id, app.recovery_files)
+            is_child = bool(session.raw.get("parent_id"))
             title = session.title if len(session.title) <= 50 else session.title[:47] + "..."
+            if is_child:
+                title = f"⤷ {title}"
             updated = format_timestamp(session.updated, app.timestamp_mode)
             created = format_timestamp(session.created, app.timestamp_mode)
             size_str = _get_session_data_size(session.session_id)
@@ -2352,18 +2364,31 @@ class SessionListScreen(Screen):
     def action_switch_project(self) -> None:
         self.app.push_screen(ProjectListScreen())
 
+    def action_toggle_all_sessions(self) -> None:
+        """Toggle showing/hiding subagent sessions."""
+        app: OrsessionApp = self.app  # type: ignore
+        app.show_all_sessions = not app.show_all_sessions
+        self._populate_table()
+        child_count = sum(1 for s in app.sessions if s.raw.get("parent_id"))
+        if app.show_all_sessions:
+            self.app.notify(f"Showing all sessions (+{child_count} subagent)", timeout=3)
+        else:
+            self.app.notify(f"Hiding {child_count} subagent sessions", timeout=3)
+
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
 
     def _get_selected_session(self) -> SessionInfo | None:
         """Get the currently highlighted session."""
-        app: OrsessionApp = self.app  # type: ignore
+        visible = getattr(self, "_visible_sessions", None)
+        if not visible:
+            return None
         try:
             table = self.query_one("#session-table", DataTable)
             row_key = table.cursor_row
-            if row_key is not None and 0 <= row_key < len(app.sessions):
-                return app.sessions[row_key]
+            if row_key is not None and 0 <= row_key < len(visible):
+                return visible[row_key]
         except Exception:
             pass
         return None
@@ -2592,6 +2617,8 @@ class OrsessionApp(App):
         self.error_message: str | None = None
         # Cache of session_id → turn count (populated after drill-down).
         self.session_turn_cache: dict[str, int] = {}
+        # Whether to show child/subagent sessions.
+        self.show_all_sessions: bool = False
         # Shared temp directory for exports.
         self._temp_dir_obj = tempfile.TemporaryDirectory(prefix="orsession-")
         self.temp_dir = Path(self._temp_dir_obj.name)
