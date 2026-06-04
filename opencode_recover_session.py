@@ -3549,6 +3549,12 @@ Examples:
     )
 
     parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Delete the session specified by --session. Shows details and asks for confirmation.",
+    )
+
+    parser.add_argument(
         "--show-models",
         action="store_true",
         help="Show available models from opencode config and exit.",
@@ -3925,6 +3931,104 @@ def main() -> None:
             print(f"       ID: {sid}  Updated: {updated}")
         print()
         print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
+        return
+
+    # Handle --delete (requires --session).
+    if args.delete:
+        session_spec = args.session
+        if not session_spec:
+            die("--delete requires --session (or -s) to identify the session.\n"
+                "Use --list-sessions to see available sessions.")
+
+        sessions = db_list_sessions(_project_id)
+        if not sessions:
+            die("No sessions found. Try --list-projects first.")
+
+        session_data = resolve_session_spec(session_spec, sessions)
+        if not session_data:
+            die(f"Session not found: {session_spec!r}\n"
+                "Try a number from --list-sessions, a session ID, or a title substring.")
+
+        # Compute duration.
+        created = session_data["created"]
+        updated = session_data["updated"]
+        duration = ""
+        if created and updated:
+            try:
+                delta_ms = int(updated) - int(created)
+                delta_min = delta_ms // 60000
+                if delta_min < 60:
+                    duration = f"{delta_min}m"
+                else:
+                    hours = delta_min // 60
+                    duration = f"{hours}h {delta_min % 60}m"
+            except (ValueError, TypeError):
+                pass
+
+        # Get size from session_diff file.
+        diff_file = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff" / f"{session_data['id']}.json"
+        size_str = ""
+        if diff_file.exists():
+            size_bytes = diff_file.stat().st_size
+            if size_bytes >= 1_000_000:
+                size_str = f"{size_bytes / 1_000_000:.1f}M"
+            elif size_bytes >= 1_000:
+                size_str = f"{size_bytes / 1_000:.1f}K"
+            else:
+                size_str = f"{size_bytes} bytes"
+
+        print()
+        print(color_red("About to DELETE session:"))
+        print()
+        print(f"  Title:        {color_bold(session_data['title'])}")
+        print(f"  ID:           {session_data['id']}")
+        print(f"  Created:      {_fmt_ts(created)}")
+        print(f"  Updated:      {_fmt_ts(updated)}")
+        if duration:
+            print(f"  Duration:     {duration}")
+        if size_str:
+            print(f"  Size:         {size_str}")
+        if session_data["cost"]:
+            print(f"  Cost:         ${session_data['cost']:.2f}")
+        tok_parts = []
+        if session_data["tokens_input"]:
+            tok_parts.append(f"{session_data['tokens_input']:,} in")
+        if session_data["tokens_output"]:
+            tok_parts.append(f"{session_data['tokens_output']:,} out")
+        if tok_parts:
+            print(f"  Tokens:       {' / '.join(tok_parts)}")
+        if session_data["project_dir"]:
+            print(f"  Directory:    {session_data['project_dir']}")
+        print()
+        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
+        print()
+
+        try:
+            confirmation = input("Type 'yes' to confirm deletion: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+        if confirmation != "yes":
+            print("Cancelled.")
+            return
+
+        # Delete via opencode CLI.
+        require_opencode()
+        session_dir = Path(session_data["project_dir"]) if session_data["project_dir"] else None
+        if session_dir and not session_dir.is_dir():
+            session_dir = None
+
+        try:
+            run_command(
+                ("opencode", "session", "delete", session_data["id"]),
+                verbosity=verbosity,
+                check=True,
+                cwd=session_dir,
+            )
+            print(color_green("Session deleted."))
+        except RecoveryError as e:
+            die(f"Delete failed: {e}")
         return
 
     # Handle --details, --head, --tail (all require --session or -s).
