@@ -74,6 +74,8 @@ TIMESTAMP_MODES = ("medium", "short", "long")
 class SessionDetailScreen(Screen):
     """Detailed view of a single session: compact header + all exchanges scrollable."""
 
+    SCREEN_TITLE = "Session Detail"
+
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("b", "go_back", "Back"),
@@ -514,6 +516,8 @@ class SessionDetailScreen(Screen):
 class FullPreviewScreen(Screen):
     """Scrollable full transcript preview."""
 
+    SCREEN_TITLE = "Full Preview"
+
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("b", "go_back", "Back"),
@@ -609,6 +613,8 @@ class FullPreviewScreen(Screen):
 class RecoveryWizardScreen(Screen):
     """
     Multi-step recovery wizard: configure → export → generate → complete.
+
+    SCREEN_TITLE = "Recovery Wizard"
 
     Can be launched from Session Detail (with export already cached) or
     directly from Session List (will export on demand).
@@ -1040,6 +1046,8 @@ class RecoveryWizardScreen(Screen):
 class ModelSelectionScreen(Screen):
     """Interactive model picker with search/filter and cost estimate."""
 
+    SCREEN_TITLE = "Model Selection"
+
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
         Binding("b", "go_back", "Back"),
@@ -1294,6 +1302,8 @@ class ModelSelectionScreen(Screen):
 class ContextSelectionScreen(Screen):
     """
     Select prior context files to include in the compaction prompt.
+
+    SCREEN_TITLE = "Context Selection"
 
     Discovers existing recovery files in the output directory and lets the
     user toggle which ones to include. Also supports adding custom paths
@@ -1567,6 +1577,8 @@ class ContextSelectionScreen(Screen):
 
 class CompactionScreen(Screen):
     """Confirms compaction, runs the API call, shows results."""
+
+    SCREEN_TITLE = "Compaction"
 
     BINDINGS = [
         Binding("escape", "go_back", "Back"),
@@ -1874,6 +1886,8 @@ class CompactionScreen(Screen):
 class FileBrowserScreen(Screen):
     """Browse, view, and delete existing recovery files."""
 
+    SCREEN_TITLE = "File Browser"
+
     BINDINGS = [
         Binding("escape", "go_back", "Back", priority=True),
         Binding("b", "go_back", "Back", priority=True),
@@ -2056,6 +2070,8 @@ class FileBrowserScreen(Screen):
 class ProjectListScreen(Screen):
     """Browse all known opencode projects and switch between them."""
 
+    SCREEN_TITLE = "Projects"
+
     BINDINGS = [
         Binding("escape", "go_back", "Back", priority=True),
         Binding("b", "go_back", "Back", show=False, priority=True),
@@ -2138,6 +2154,8 @@ class ProjectListScreen(Screen):
 
 class SessionListScreen(Screen):
     """Home screen showing all sessions in a sortable table."""
+
+    SCREEN_TITLE = "Sessions"
 
     BINDINGS = [
         Binding("q", "quit", "Quit"),
@@ -2557,6 +2575,22 @@ class OrsessionApp(App):
     def on_mount(self) -> None:
         """Push the initial screen."""
         self.push_screen(SessionListScreen())
+
+    def push_screen(self, screen, *args, **kwargs):
+        """Override to update sub_title when screens change."""
+        result = super().push_screen(screen, *args, **kwargs)
+        title = getattr(screen, "SCREEN_TITLE", "")
+        if title:
+            self.sub_title = title
+        return result
+
+    def pop_screen(self, *args, **kwargs):
+        """Override to update sub_title when screens change."""
+        result = super().pop_screen(*args, **kwargs)
+        title = getattr(self.screen, "SCREEN_TITLE", "")
+        if title:
+            self.sub_title = title
+        return result
 
     def on_unmount(self) -> None:
         """Clean up temp directory."""
