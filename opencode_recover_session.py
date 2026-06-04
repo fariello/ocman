@@ -4092,7 +4092,6 @@ def main() -> None:
                 session_dir = None
 
             log("Exporting session for exchange preview...", verbosity)
-            import tempfile
             with tempfile.TemporaryDirectory(prefix="orsession-") as td:
                 try:
                     export_path = write_export_to_temp(
@@ -4208,7 +4207,13 @@ def main() -> None:
                 raise RecoveryError(
                     f"Invalid session ID: {args.session!r} (must not start with '-')."
                 )
-            session = find_session_by_id(sessions, args.session)
+            # Try to resolve via DB first (supports number, title substring, ID).
+            db_sessions = db_list_sessions(_project_id)
+            resolved = resolve_session_spec(args.session, db_sessions) if db_sessions else None
+            if resolved:
+                session = find_session_by_id(sessions, resolved["id"])
+            else:
+                session = find_session_by_id(sessions, args.session)
             print(f"Selected session from --session: {color_dim(session.session_id)}")
         else:
             session = prompt_for_session(sessions)
