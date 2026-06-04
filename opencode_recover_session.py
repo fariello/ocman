@@ -3251,6 +3251,20 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
         return []
 
 
+
+def _fmt_ts(epoch_ms) -> str:
+    """Format an epoch-ms timestamp as YYYY-MM-DD HH:MM."""
+    if not epoch_ms:
+        return "—"
+    try:
+        from datetime import datetime, timezone
+        epoch_s = int(epoch_ms) / 1000.0
+        dt = datetime.fromtimestamp(epoch_s, tz=timezone.utc)
+        return dt.strftime("%Y-%m-%d %H:%M")
+    except (ValueError, OSError, OverflowError):
+        return str(epoch_ms)
+
+
 def resolve_project(spec: str) -> dict[str, Any] | None:
     """Resolve a project by number (from --list-projects), ID, directory path, or substring match."""
     projects = db_list_projects()
@@ -3322,13 +3336,16 @@ def parse_args() -> argparse.Namespace:
         description="Export and recover opencode sessions. Generates restart-ready Markdown files and optionally compacts them via an LLM.",
         epilog="""\
 Examples:
-  %(prog)s --list-projects                     List all projects
-  %(prog)s --project 3 --list-sessions         List sessions for project #3
-  %(prog)s --project pubrun --details 1        Show details for session #1
-  %(prog)s --project pubrun --details 1 --tail 5   Show last 5 exchanges
-  %(prog)s -s SESSION_ID -mi 50                Recover with max 50 interactions
-  %(prog)s -s SESSION_ID -m uri/its_direct/pt1-qwen3-32b-us   Recover + compact
-  %(prog)s --show-models                       List available LLM models
+  %(prog)s --list-projects                       List all projects
+  %(prog)s --project 3 --list-sessions           List sessions in project #3
+  %(prog)s --list-sessions                       List sessions (auto-detects project from CWD)
+  %(prog)s -s 1 --details                        Show details for session #1
+  %(prog)s -s 1 --tail 5                         Show last 5 exchanges of session #1
+  %(prog)s -s 1 --head 3 --tail 3                Show first 3 + last 3 exchanges
+  %(prog)s -s SESSION_ID -mi 50                  Recover with max 50 interactions
+  %(prog)s -s SESSION_ID --compact               Recover + compact (interactive model selection)
+  %(prog)s -s SESSION_ID --compact uri/its_direct/pt1-qwen3-32b-us   Recover + compact with model
+  %(prog)s --show-models                         List available LLM models
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -3475,21 +3492,23 @@ Examples:
         "--project",
         type=str,
         default=None,
-        help="Specify a project by ID, directory path, or substring. Used with --list-sessions or --details.",
+        help=(
+            "Specify a project by number (from --list-projects), ID, directory path, "
+            "or substring. If not specified and the current directory is a known project, "
+            "that project is used automatically."
+        ),
     )
 
     parser.add_argument(
         "--list-sessions",
         action="store_true",
-        help="List sessions for the specified --project (or all if no project given) and exit.",
+        help="List sessions for the current project context and exit.",
     )
 
     parser.add_argument(
         "--details",
-        type=str,
-        default=None,
-        metavar="SESSION",
-        help="Show details about a session (by number from listing, session ID, or title substring).",
+        action="store_true",
+        help="Show details about the session specified by --session.",
     )
 
     parser.add_argument(
@@ -3497,7 +3516,7 @@ Examples:
         type=int,
         default=None,
         metavar="N",
-        help="Show the first (oldest) N exchanges. Used with --details.",
+        help="Show the first (oldest) N exchanges. Requires --session.",
     )
 
     parser.add_argument(
@@ -3505,7 +3524,21 @@ Examples:
         type=int,
         default=None,
         metavar="N",
-        help="Show the last (newest) N exchanges. Used with --details.",
+        help="Show the last (newest) N exchanges. Requires --session.",
+    )
+
+    parser.add_argument(
+        "--compact",
+        type=str,
+        nargs="?",
+        const="",
+        default=None,
+        metavar="MODEL",
+        help=(
+            "Generate an LLM-compacted restart summary. Optionally specify a model "
+            "(e.g., uri/its_direct/pt1-qwen3-32b-us). If no model is given, "
+            "prompts for selection. Use --show-models to see available options."
+        ),
     )
 
     parser.add_argument(
@@ -3524,12 +3557,7 @@ Examples:
         "-m", "--use-model",
         type=str,
         default=None,
-        help=(
-            "Use the specified model to generate a compacted restart summary. "
-            "Format: provider/model_id (e.g., uri/its_direct/pt1-qwen3-32b-us). "
-            "Only OpenAI-compatible providers are supported. "
-            "Use --show-models to see available options."
-        ),
+        help=argparse.SUPPRESS,  # Deprecated: use --compact instead.
     )
 
     parser.add_argument(
@@ -3790,6 +3818,15 @@ def main() -> None:
     args = parse_args()
     verbosity = args.verbose
 
+    # Bridge --compact to --use-model for backward compatibility.
+    if args.compact is not None:
+        if args.compact:  # --compact MODEL
+            args.use_model = args.compact
+        else:  # --compact (no model specified — interactive selection)
+            args.use_model = "__interactive__"
+    elif not hasattr(args, 'use_model') or args.use_model is None:
+        args.use_model = None
+
     # Handle --list-projects early.
     if args.list_projects:
         projects = db_list_projects()
@@ -3801,7 +3838,7 @@ def main() -> None:
             directory = p["directory"]
             if len(directory) > 70:
                 directory = "..." + directory[-67:]
-            updated = format_timestamp(str(p["last_updated"]))
+            updated = _fmt_ts(p["last_updated"])
             count = p["session_count"]
             print(f"  {idx:>3}. {color_bold(directory)}")
             print(f"       {count} sessions, last active: {updated}")
@@ -3809,86 +3846,95 @@ def main() -> None:
         print("Use --project <number_or_directory> with --list-sessions to see sessions.")
         return
 
+    # ── Resolve project context ──
+    # If --project specified, resolve it. Otherwise, auto-detect from CWD.
+    _project_id: str | None = None
+    _project_dir: str | None = None
+
+    if args.project:
+        proj = resolve_project(args.project)
+        if not proj:
+            die(f"Project not found: {args.project!r}\nUse --list-projects to see available projects.")
+        _project_id = proj["id"]
+        _project_dir = proj["directory"]
+    else:
+        # Auto-detect: check if CWD matches a known project.
+        cwd_str = str(Path.cwd())
+        projects = db_list_projects()
+        for p in projects:
+            if p["directory"] == cwd_str:
+                _project_id = p["id"]
+                _project_dir = p["directory"]
+                break
+
     # Handle --list-sessions early.
     if args.list_sessions:
-        project_id = None
-        project_dir = None
-        if args.project:
-            proj = resolve_project(args.project)
-            if not proj:
-                die(f"Project not found: {args.project!r}\nUse --list-projects to see available projects.")
-            project_id = proj["id"]
-            project_dir = proj["directory"]
-
-        sessions = db_list_sessions(project_id)
+        sessions = db_list_sessions(_project_id)
         if not sessions:
-            if project_id:
-                die(f"No sessions found for project: {project_dir}")
+            if _project_id:
+                die(f"No sessions found for project: {_project_dir}")
             else:
-                eprint(color_yellow("No project specified. Showing all sessions across all projects."))
-                eprint(color_dim("Tip: Use --list-projects to see projects, then --project <dir> --list-sessions."))
-                eprint()
                 sessions = db_list_sessions()
                 if not sessions:
                     die("No sessions found.")
 
-        header = f"Sessions for {project_dir}" if project_dir else "All sessions"
-        print(color_bold(f"{header} ({len(sessions)}):"))
+        if _project_dir:
+            print(color_bold(f"Sessions for {_project_dir} ({len(sessions)}):"))
+        else:
+            print(color_bold(f"All sessions ({len(sessions)}):"))
+            print("  (No project context. Use --project to filter, or run from a project directory.)")
         print()
         for idx, s in enumerate(sessions, start=1):
             title = s["title"]
             if len(title) > 60:
                 title = title[:57] + "..."
-            updated = format_timestamp(str(s["updated"]))
-            project_hint = f"  [{s['project_dir'][:30]}]" if not project_id and s["project_dir"] else ""
+            updated = _fmt_ts(s["updated"])
+            project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
             print(f"  {idx:>3}. {color_bold(title)}{project_hint}")
             sid = s["id"]
             print(f"       ID: {sid}  Updated: {updated}")
         print()
-        print("Use --details <number_or_id_or_title> to see session details.")
+        print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
         return
 
-    # Handle --details early.
-    if args.details:
-        # Resolve the project context for session listing.
-        project_id = None
-        if args.project:
-            proj = resolve_project(args.project)
-            if proj:
-                project_id = proj["id"]
+    # Handle --details, --head, --tail (all require --session or -s).
+    if args.details or args.head is not None or args.tail is not None:
+        session_spec = args.session
+        if not session_spec:
+            die("--details, --head, and --tail require --session (or -s) to identify the session.\n"
+                "Use --list-sessions to see available sessions.")
 
-        sessions = db_list_sessions(project_id)
+        sessions = db_list_sessions(_project_id)
         if not sessions:
             die("No sessions found. Try --list-projects first.")
 
-        session_data = resolve_session_spec(args.details, sessions)
+        session_data = resolve_session_spec(session_spec, sessions)
         if not session_data:
             die(
-                f"Session not found: {args.details!r}\n"
+                f"Session not found: {session_spec!r}\n"
                 "Try a number from --list-sessions, a session ID, or a title substring."
             )
 
         # Display session details.
         print(color_bold(session_data["title"]))
-        print(f"  {color_dim('ID:')}        {session_data['id']}")
+        print(f"  ID:        {session_data['id']}")
         if session_data["slug"]:
-            print(f"  {color_dim('Slug:')}      {session_data['slug']}")
-        print(f"  {color_dim('Created:')}   {format_timestamp(str(session_data['created']))}")
-        print(f"  {color_dim('Updated:')}   {format_timestamp(str(session_data['updated']))}")
+            print(f"  Slug:      {session_data['slug']}")
+        print(f"  Created:   {_fmt_ts(session_data['created'])}")
+        print(f"  Updated:   {_fmt_ts(session_data['updated'])}")
         if session_data["model"]:
             model_str = session_data["model"]
-            # Parse JSON model field if present.
             try:
                 model_obj = json.loads(model_str)
                 if isinstance(model_obj, dict):
                     model_str = f"{model_obj.get('id', '')} ({model_obj.get('providerID', '')})"
             except (json.JSONDecodeError, TypeError):
                 pass
-            print(f"  {color_dim('Model:')}     {model_str}")
+            print(f"  Model:     {model_str}")
         if session_data["agent"]:
-            print(f"  {color_dim('Agent:')}     {session_data['agent']}")
+            print(f"  Agent:     {session_data['agent']}")
         if session_data["cost"]:
-            print(f"  {color_dim('Cost:')}      ${session_data['cost']:.2f}")
+            print(f"  Cost:      ${session_data['cost']:.2f}")
         tok_parts = []
         if session_data["tokens_input"]:
             tok_parts.append(f"{session_data['tokens_input']:,} in")
@@ -3897,11 +3943,11 @@ def main() -> None:
         if session_data["tokens_cache_read"]:
             tok_parts.append(f"{session_data['tokens_cache_read']:,} cache")
         if tok_parts:
-            print(f"  {color_dim('Tokens:')}    {' / '.join(tok_parts)}")
+            print(f"  Tokens:    {' / '.join(tok_parts)}")
         if session_data["additions"] or session_data["deletions"]:
-            print(f"  {color_dim('Changes:')}   +{session_data['additions']} -{session_data['deletions']} ({session_data['files']} files)")
+            print(f"  Changes:   +{session_data['additions']} -{session_data['deletions']} ({session_data['files']} files)")
         if session_data["project_dir"]:
-            print(f"  {color_dim('Directory:')} {session_data['project_dir']}")
+            print(f"  Directory: {session_data['project_dir']}")
 
         # If --head or --tail, export and show exchanges.
         if args.head is not None or args.tail is not None:
@@ -3927,19 +3973,18 @@ def main() -> None:
                     turns = filter_conversation_turns(turns)
 
                     if not turns:
-                        print(color_dim("  No exchanges found."))
+                        print("  No exchanges found.")
                         return
 
                     total = len(turns)
                     interactions = count_interactions(turns)
-                    print(f"  {color_dim('Exchanges:')} {interactions}  {color_dim('Turns:')} {total}")
+                    print(f"  Exchanges: {interactions}  Turns: {total}")
                     print()
 
                     show_turns: list[Turn] = []
                     if args.head is not None and args.tail is not None:
                         head_turns = turns[:args.head]
                         tail_turns = turns[-args.tail:] if args.tail <= total else turns
-                        # Avoid overlap.
                         if args.head + args.tail >= total:
                             show_turns = turns
                         else:
@@ -3949,17 +3994,16 @@ def main() -> None:
                     elif args.head is not None:
                         show_turns = turns[:args.head]
                         if args.head < total:
-                            print(color_dim(f"  Showing first {args.head} of {total} exchanges:"))
+                            print(f"  Showing first {args.head} of {total} exchanges:")
                     elif args.tail is not None:
                         show_turns = turns[-args.tail:]
                         if args.tail < total:
-                            print(color_dim(f"  Showing last {args.tail} of {total} exchanges:"))
+                            print(f"  Showing last {args.tail} of {total} exchanges:")
 
                     print()
                     for turn in show_turns:
                         role_char = "U" if turn.role == "user" else "A" if turn.role == "assistant" else "·"
                         role_color = color_cyan if turn.role == "user" else color_dim
-                        # Collapse to single line.
                         collapsed = " ".join(turn.text.split())
                         if len(collapsed) > 120:
                             collapsed = collapsed[:117] + "..."
@@ -4166,21 +4210,48 @@ def main() -> None:
                 print(f"  {color_cyan(str(path))}")
                 pass
 
-            # If --use-model is specified, run compaction via LLM.
+            # If --compact (or --use-model) is specified, run compaction via LLM.
             compacted_path: Path | None = None
-            if args.use_model:
-                # Find the compact prompt file from generated paths.
-                compact_prompt_file = next(
-                    (p for p in generated_paths if p.name.endswith(".compact-prompt.md")),
-                    generated_paths[-1],
-                )
-                compacted_path = run_compaction(
-                    compact_prompt_path=compact_prompt_file,
-                    output_dir=output_dir,
-                    session=session,
-                    model_spec=args.use_model,
-                    verbosity=verbosity,
-                )
+            model_spec = args.use_model
+            if model_spec:
+                # Interactive model selection if no model specified.
+                if model_spec == "__interactive__":
+                    try:
+                        config = load_opencode_config(verbosity=verbosity)
+                        models = extract_models_from_config(config)
+                        display_models(models)
+                        selection = input("Select model (number or name): ").strip()
+                        if not selection:
+                            print("Compaction cancelled.")
+                            model_spec = None
+                        else:
+                            # Resolve by number or name.
+                            compatible = [m for m in models if m.compatible and m.api_key and m.base_url]
+                            compatible.sort(key=lambda m: (m.cost_input or 999, m.name))
+                            if selection.isdigit():
+                                idx = int(selection) - 1
+                                if 0 <= idx < len(compatible):
+                                    model_spec = f"{compatible[idx].provider_id}/{compatible[idx].model_id}"
+                                else:
+                                    print(f"Invalid number. Must be 1-{len(compatible)}.")
+                                    model_spec = None
+                            else:
+                                model_spec = selection
+                    except (RecoveryError, EOFError, KeyboardInterrupt):
+                        model_spec = None
+
+                if model_spec:
+                    compact_prompt_file = next(
+                        (p for p in generated_paths if p.name.endswith(".compact-prompt.md")),
+                        generated_paths[-1],
+                    )
+                    compacted_path = run_compaction(
+                        compact_prompt_path=compact_prompt_file,
+                        output_dir=output_dir,
+                        session=session,
+                        model_spec=model_spec,
+                        verbosity=verbosity,
+                    )
                 if compacted_path:
                     generated_paths.append(compacted_path)
                     print()
