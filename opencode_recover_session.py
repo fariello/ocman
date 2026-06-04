@@ -3858,14 +3858,24 @@ def main() -> None:
         _project_id = proj["id"]
         _project_dir = proj["directory"]
     else:
-        # Auto-detect: check if CWD matches a known project.
-        cwd_str = str(Path.cwd())
+        # Auto-detect: check if CWD matches a known project (or is a subdirectory of one).
+        cwd_path = Path.cwd()
+        cwd_str = str(cwd_path)
         projects = db_list_projects()
+        # First try exact match.
         for p in projects:
             if p["directory"] == cwd_str:
                 _project_id = p["id"]
                 _project_dir = p["directory"]
                 break
+        # Then try parent directory match (CWD is a subdirectory of a project).
+        if not _project_id:
+            for p in projects:
+                proj_path = p["directory"]
+                if proj_path != "/" and cwd_str.startswith(proj_path + "/"):
+                    _project_id = p["id"]
+                    _project_dir = p["directory"]
+                    break
 
     # Handle --list-sessions early.
     if args.list_sessions:
