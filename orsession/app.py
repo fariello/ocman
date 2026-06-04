@@ -2185,14 +2185,35 @@ class SessionListScreen(Screen):
             self._populate_table()
 
     def _load_sessions(self) -> None:
-        """Fetch sessions from opencode and populate the table."""
+        """Fetch sessions from database and populate the table."""
         app: OrsessionApp = self.app  # type: ignore
         container = self.query_one("#main-content")
         container.remove_children()
 
         try:
-            require_opencode()
-            app.sessions = list_sessions(cwd=app.session_dir)
+            # Try database query first (shows all sessions, not just opencode CLI's filtered set).
+            if not app.sessions:
+                projects = list_projects()
+                project_id = None
+                session_dir = app.session_dir or Path.cwd()
+                session_dir_str = str(session_dir)
+                # Match CWD or subdirectory to a project.
+                for p in projects:
+                    if p.directory == session_dir_str:
+                        project_id = p.project_id
+                        break
+                if not project_id:
+                    for p in projects:
+                        if p.directory != "/" and session_dir_str.startswith(p.directory + "/"):
+                            project_id = p.project_id
+                            break
+                if project_id:
+                    app.sessions = list_sessions_for_project(project_id)
+
+            # Fall back to opencode CLI if DB query returned nothing.
+            if not app.sessions:
+                require_opencode()
+                app.sessions = list_sessions(cwd=app.session_dir)
         except RecoveryError as e:
             app.error_message = str(e)
             container.mount(Static(
