@@ -1140,7 +1140,7 @@ If you identify meaningful risks, note them clearly in your continuation plan an
 # ---------------------------------------------------------------------------
 
 _RECOVERY_FILE_PATTERN = re.compile(
-    r"^opencode-recovery-(.+?)-(\d{8}-\d{6}Z)\.(transcript|restart|compact-prompt|compacted)\.md$"
+    r"^(?:opencode-recovery-(.+?)-(\d{8}-\d{6}Z?)|(\d{8}-\d{6})-(.+?))\.(transcript|restart|compact-prompt|compacted)\.md$"
 )
 
 
@@ -1157,9 +1157,16 @@ def discover_recovery_files(output_dir: Path) -> list[RecoveryFile]:
         if not match:
             continue
 
-        session_id_fragment = match.group(1)
-        timestamp = match.group(2)
-        file_type = match.group(3)
+        # Old pattern: groups 1,2 set. New pattern: groups 3,4 set. File type: group 5.
+        if match.group(1):
+            # Old pattern: opencode-recovery-SESSION-TIMESTAMP.type.md
+            session_id_fragment = match.group(1)
+            timestamp = match.group(2)
+        else:
+            # New pattern: TIMESTAMP-SESSION.type.md
+            timestamp = match.group(3)
+            session_id_fragment = match.group(4)
+        file_type = match.group(5)
 
         stat = entry.stat()
         try:

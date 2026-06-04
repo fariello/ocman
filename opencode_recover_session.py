@@ -3796,9 +3796,9 @@ def run_compaction(
     )
 
     # Write the compacted output.
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_session_id = safe_filename(session.session_id)
-    compacted_path = output_dir / f"opencode-recovery-{safe_session_id}-{timestamp}.compacted.md"
+    compacted_path = output_dir / f"{timestamp}-{safe_session_id}.compacted.md"
 
     write_text(compacted_path, response_text)
 

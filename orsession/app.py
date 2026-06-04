@@ -1813,9 +1813,9 @@ class CompactionScreen(Screen):
             return
 
         # Save the compacted output.
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         safe_id = safe_filename(self.session.session_id)
-        compacted_path = app.output_dir / f"opencode-recovery-{safe_id}-{timestamp}.compacted.md"
+        compacted_path = app.output_dir / f"{timestamp}-{safe_id}.compacted.md"
 
         try:
             write_text(compacted_path, result["content"])
