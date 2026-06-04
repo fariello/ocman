@@ -2523,12 +2523,53 @@ def main() -> None:
         session_dir=session_dir,
         output_dir=args.out,
     )
+
+    # Capture stderr during app run to catch textual internal errors
+    # (e.g., MarkupError during screen stack teardown on WSL).
+    import io
+    captured_stderr = io.StringIO()
+    original_stderr = sys.stderr
+    verbose = args.verbose
+
     try:
+        if not verbose:
+            sys.stderr = captured_stderr
         app.run()
     except KeyboardInterrupt:
         pass
-    finally:
+    except Exception as e:
+        # Unexpected error — restore stderr and report.
+        sys.stderr = original_stderr
         _restore_terminal()
+        print(f"\norsession encountered an unexpected error: {e}", file=sys.stderr)
+        print("Run with -v for full error details.", file=sys.stderr)
+        if verbose:
+            import traceback
+            traceback.print_exc()
+        sys.exit(1)
+    finally:
+        sys.stderr = original_stderr
+        _restore_terminal()
+
+        # If there were captured errors, check if they're worth reporting.
+        if not verbose:
+            errors = captured_stderr.getvalue()
+            if errors and "Error" in errors:
+                # Write to a log file for debugging.
+                error_log = Path("/tmp/orsession-errors.log")
+                try:
+                    error_log.write_text(errors, encoding="utf-8")
+                except OSError:
+                    pass
+                # Notify user briefly.
+                print(
+                    f"\nNote: orsession encountered non-fatal rendering issues during exit.",
+                    file=sys.stderr,
+                )
+                print(
+                    f"Details saved to: {error_log}",
+                    file=sys.stderr,
+                )
 
 
 if __name__ == "__main__":
