@@ -669,8 +669,16 @@ class RecoveryWizardScreen(Screen):
         lines.append(f"[dim]{rich_escape(session.session_id)}[/]")
         lines.append("")
         lines.append("[bold]Step 1 of 3: Configure[/]")
+        lines.append("[dim]Keys: P=Proceed  i=Tools  d=Clean  m=MaxInteractions  l=MaxLines  x=ClearLimits  b=Back  q=Quit[/]")
         lines.append("─" * 40)
         lines.append("")
+
+        # Show existing recovery files for this session.
+        existing = [f for f in app.recovery_files
+                    if f.session_id == safe_filename(session.session_id)]
+        if existing:
+            lines.append(f"  [yellow]Existing files:[/]  {len(existing)} recovery file(s) already exist for this session")
+            lines.append("")
 
         # Show current settings.
         lines.append(f"  Output directory:  [cyan]{app.output_dir}[/]")
@@ -772,6 +780,7 @@ class RecoveryWizardScreen(Screen):
         lines.append(f"[bold]Recovering: {rich_escape(self.session.title)}[/]")
         lines.append("")
         lines.append("[bold green]Step 3 of 3: Complete[/]")
+        lines.append("[dim]Keys: y=Compact via LLM  v=View transcript  b=Done  q=Quit[/]")
         lines.append("─" * 40)
         lines.append("")
 
