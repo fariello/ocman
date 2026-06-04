@@ -3341,17 +3341,28 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Export and recover opencode sessions. Generates restart-ready Markdown files and optionally compacts them via an LLM.",
         epilog="""\
+Short forms:
+  -lp  --list-projects       -ls  --list-sessions    -P   --project
+  -D   --details             -H   --head             -T   --tail
+  -C   --compact             -A   --all-sessions     -sm  --show-models
+  -s   --session             -d   --session-dir      -o   --out
+  -ct  --clean-tmp           -cp  --clean-previous   -k   --keep-temp
+  -ml  --max-lines           -mi  --max-interactions -t   --include-tools
+  -ic  --input-compact       -ir  --input-restart    -it  --input-transcript
+  -oc  --output-compact      -or  --output-restart   -ot  --output-transcript
+
 Examples:
-  %(prog)s --list-projects                       List all projects
-  %(prog)s --project 3 --list-sessions           List sessions in project #3
-  %(prog)s --list-sessions                       List sessions (auto-detects project from CWD)
-  %(prog)s -s 1 --details                        Show details for session #1
-  %(prog)s -s 1 --tail 5                         Show last 5 exchanges of session #1
-  %(prog)s -s 1 --head 3 --tail 3                Show first 3 + last 3 exchanges
+  %(prog)s -lp                                   List all projects
+  %(prog)s -P 3 -ls                              List sessions in project #3
+  %(prog)s -ls                                   List sessions (auto-detects project from CWD)
+  %(prog)s -s 1 -D                               Show details for session #1
+  %(prog)s -s 1 -T 5                             Show last 5 exchanges
+  %(prog)s -s 1 -H 3 -T 3                        Show first 3 + last 3 exchanges
   %(prog)s -s SESSION_ID -mi 50                  Recover with max 50 interactions
-  %(prog)s -s SESSION_ID --compact               Recover + compact (interactive model selection)
-  %(prog)s -s SESSION_ID --compact uri/its_direct/pt1-qwen3-32b-us   Recover + compact with model
-  %(prog)s --show-models                         List available LLM models
+  %(prog)s -s SESSION_ID -C                       Recover + compact (interactive model pick)
+  %(prog)s -s SESSION_ID -C uri/its_direct/pt1-qwen3-32b-us   Recover + compact
+  %(prog)s -sm                                   List available LLM models
+  %(prog)s -s 1 --delete                         Delete session #1
 """,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
@@ -3386,13 +3397,14 @@ Examples:
     )
 
     parser.add_argument(
-        "-c", "--clean",
+        "-ct", "--clean-tmp",
         action="store_true",
-        help="Remove leftover temporary export files from previous runs.",
+        dest="clean",
+        help="Remove leftover temporary export files from /tmp.",
     )
 
     parser.add_argument(
-        "--clean-previous",
+        "-cp", "--clean-previous",
         action="store_true",
         help="Remove previous persisted recovery files for the selected session before generating new ones.",
     )
@@ -3489,13 +3501,13 @@ Examples:
     )
 
     parser.add_argument(
-        "--list-projects",
+        "-lp", "--list-projects",
         action="store_true",
         help="List all known opencode projects and exit.",
     )
 
     parser.add_argument(
-        "--project",
+        "-P", "--project",
         type=str,
         default=None,
         help=(
@@ -3506,25 +3518,25 @@ Examples:
     )
 
     parser.add_argument(
-        "--list-sessions",
+        "-ls", "--list-sessions",
         action="store_true",
         help="List sessions for the current project context and exit.",
     )
 
     parser.add_argument(
-        "--all-sessions",
+        "-A", "--all-sessions",
         action="store_true",
         help="Include subagent/child sessions in --list-sessions (hidden by default).",
     )
 
     parser.add_argument(
-        "--details",
+        "-D", "--details",
         action="store_true",
         help="Show details about the session specified by --session.",
     )
 
     parser.add_argument(
-        "--head",
+        "-H", "--head",
         type=int,
         default=None,
         metavar="N",
@@ -3532,7 +3544,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--tail",
+        "-T", "--tail",
         type=int,
         default=None,
         metavar="N",
@@ -3540,7 +3552,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--compact",
+        "-C", "--compact",
         type=str,
         nargs="?",
         const="",
@@ -3560,7 +3572,7 @@ Examples:
     )
 
     parser.add_argument(
-        "--show-models",
+        "-sm", "--show-models",
         action="store_true",
         help="Show available models from opencode config and exit.",
     )
