@@ -3268,6 +3268,56 @@ def _fmt_ts(epoch_ms) -> str:
         return str(epoch_ms)
 
 
+def print_projects(
+    projects: list[dict[str, Any]],
+    *,
+    title: str | None = None,
+    blank_after_title: bool = True,
+) -> None:
+    """Print known opencode projects in the standard compact format."""
+    if title is None:
+        title = f"Projects ({len(projects)}):"
+    print(color_bold(title))
+    if blank_after_title:
+        print()
+    for idx, p in enumerate(projects, start=1):
+        directory = p["directory"]
+        if len(directory) > 70:
+            directory = "..." + directory[-67:]
+        updated = _fmt_ts(p["last_updated"])
+        count = p["session_count"]
+        print(f"  {idx:>3}. {color_bold(directory)}")
+        print(f"       {count} sessions, last active: {updated}")
+
+
+def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
+    """Show a useful navigation screen when CWD is not an opencode project."""
+    command = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "opencode_recover_session.py"
+    cwd = Path.cwd()
+
+    print(color_bold("opencode session recovery"))
+
+    if projects:
+        print_projects(projects, title=f"Known projects ({len(projects)}):", blank_after_title=False)
+        print("Next steps:")
+        print(f"{command} --project 1 --list-sessions # List sessions for the first project")
+        print(f"{command} --project 1 # Recover from the first project")
+        print(f"{command} --list-sessions # List all sessions for all projects")
+        print(f"{command} --session-dir /path/to/project # Select a project by directory")
+        print()
+        print("I ran `opencode_recover_session.py --list-projects` for you because no opencode project context was found for:")
+        print(f"  {cwd}")
+    else:
+        print("No known opencode projects found.")
+        print()
+        print("Next steps:")
+        print("Run from an opencode project directory")
+        print(f"{command} --session-dir /path/to/project # Select a project by directory")
+        print()
+        print("No opencode project context was found for:")
+        print(f"  {cwd}")
+
+
 def resolve_project(spec: str) -> dict[str, Any] | None:
     """Resolve a project by number (from --list-projects), ID, directory path, or substring match."""
     projects = db_list_projects()
@@ -3376,7 +3426,7 @@ Examples:
         help=(
             "Directory where the opencode session was originally run. "
             "opencode commands will be executed with this as the working directory. "
-            "Defaults to the current directory."
+            "Defaults to the resolved project directory."
         ),
     )
 
@@ -3850,16 +3900,7 @@ def main() -> None:
         projects = db_list_projects()
         if not projects:
             die("No projects found. Is opencode installed and has it been used?")
-        print(color_bold(f"Projects ({len(projects)}):"))
-        print()
-        for idx, p in enumerate(projects, start=1):
-            directory = p["directory"]
-            if len(directory) > 70:
-                directory = "..." + directory[-67:]
-            updated = _fmt_ts(p["last_updated"])
-            count = p["session_count"]
-            print(f"  {idx:>3}. {color_bold(directory)}")
-            print(f"       {count} sessions, last active: {updated}")
+        print_projects(projects)
         print()
         print("Use --project <number_or_directory> with --list-sessions to see sessions.")
         return
@@ -4210,6 +4251,16 @@ def main() -> None:
         if not session_dir.is_dir():
             die(f"--session-dir is not a valid directory: {session_dir}")
 
+    opencode_cwd = session_dir
+    if opencode_cwd is None and _project_dir:
+        project_path = Path(_project_dir)
+        if project_path.is_dir():
+            opencode_cwd = project_path
+
+    if opencode_cwd is None:
+        print_no_project_context_help(db_list_projects())
+        return
+
     try:
         print(color_bold("opencode session recovery"))
         if _project_dir:
@@ -4219,7 +4270,7 @@ def main() -> None:
 
         require_opencode()
 
-        sessions = list_sessions(verbosity=verbosity, cwd=session_dir)
+        sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
 
         if args.session:
             if args.session.startswith("-"):
@@ -4310,7 +4361,7 @@ def main() -> None:
                     session_id=session.session_id,
                     temp_dir=temp_dir,
                     verbosity=verbosity,
-                    cwd=session_dir,
+                    cwd=opencode_cwd,
                 )
 
                 generated_paths = recover_from_export(
@@ -4344,7 +4395,7 @@ def main() -> None:
                     session_id=session.session_id,
                     temp_dir=temp_dir,
                     verbosity=verbosity,
-                    cwd=session_dir,
+                    cwd=opencode_cwd,
                 )
 
                 generated_paths = recover_from_export(
