@@ -3050,13 +3050,13 @@ def recover_from_export(
                 f"(skipped {skipped} older turns)."
             ))
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_session_id = safe_filename(session.session_id)
-    base_name = f"opencode-recovery-{safe_session_id}-{timestamp}"
+    base_name = f"opencode-{timestamp}-{safe_session_id}"
 
     transcript_path = output_transcript or (output_dir / f"{base_name}.transcript.md")
     restart_path = output_restart or (output_dir / f"{base_name}.restart.md")
-    compact_prompt_path = output_compact or (output_dir / f"{base_name}.compact-prompt.md")
+    compact_prompt_path = output_compact or (output_dir / f"{base_name}.prompt.md")
 
     log(f"Writing transcript to: {transcript_path}", verbosity)
     write_text(
@@ -3690,11 +3690,13 @@ def clean_previous_recovery_files(
         return
 
     safe_id = safe_filename(session_id)
-    prefix = f"opencode-recovery-{safe_id}-"
+    old_prefix = f"opencode-recovery-{safe_id}-"
+    new_suffix = f"-{safe_id}."
     removed = 0
 
     for entry in output_dir.iterdir():
-        if entry.is_file() and entry.name.startswith(prefix):
+        if entry.is_file() and (entry.name.startswith(old_prefix) or
+                                 (entry.name.startswith("opencode-") and new_suffix in entry.name)):
             log(f"Removing previous recovery file: {entry}", verbosity)
             entry.unlink()
             removed += 1
@@ -3798,7 +3800,7 @@ def run_compaction(
     # Write the compacted output.
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_session_id = safe_filename(session.session_id)
-    compacted_path = output_dir / f"{timestamp}-{safe_session_id}.compacted.md"
+    compacted_path = output_dir / f"opencode-{timestamp}-{safe_session_id}.compacted.md"
 
     write_text(compacted_path, response_text)
 

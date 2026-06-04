@@ -1,5 +1,52 @@
 # Changelog
 
+## [0.2.0] - 2026-06-04
+
+### Added
+
+- **CLI**: `--list-projects`, `--project`, `--list-sessions`, `--details`,
+  `--head N`, `--tail N` for browsing sessions without the TUI.
+- **CLI**: `--compact [MODEL]` replaces `--use-model`. Interactive model
+  selection when no model specified.
+- **CLI**: `--delete` to delete a session with confirmation.
+- **CLI**: `--all-sessions` to show subagent/child sessions (hidden by default).
+- **CLI**: CWD auto-detects project (including from subdirectories).
+- **TUI**: Project switching (`g` key) — browse all projects from database.
+- **TUI**: Session deletion (`d` key, then `y` to confirm).
+- **TUI**: Subagent session toggle (`a` key) — hidden by default, shown with ⤷.
+- **TUI**: Session Detail redesign — fixed header, scrollable exchanges,
+  `f`/`l` scroll to top/bottom, `/` search with bold red highlights.
+- **TUI**: Screen titles in header bar for all screens.
+- **TUI**: Sessions loaded from SQLite database (shows all sessions, not
+  just the filtered subset from `opencode session list`).
+- File backup before overwrite (`.01.bak`, `.02.bak`, etc.).
+- `COMPACTION_MAJOR_ISSUE` tag for one-shot prompt safety.
+
+### Changed
+
+- **File naming**: All output files now named `opencode-YYYYMMDD-HHMMSS-SESSION_ID.<type>.md`
+  (was `opencode-recovery-SESSION_ID-TIMESTAMP.<type>.md`).
+- **Prompt type**: `.compact-prompt.md` renamed to `.prompt.md`.
+- **Model list**: `--show-models` now shows only compatible models, sorted by
+  name, numbered for selection.
+- **Timestamps**: CLI listings show `YYYY-MM-DD HH:MM` (no epoch numbers).
+- **Colors**: CLI listings use bold for emphasis, no dim/grey for info text.
+- Prompts upgraded to v3 (no "ask questions" language, one-shot enforcement).
+
+### Fixed
+
+- **Critical**: TUI deadlock on WSL — uses plain threads + polling instead of
+  textual's worker API (which deadlocks on WSL due to futex contention).
+- **Critical**: TUI freeze on detail view — never calls `Static.update()`;
+  uses screen replacement pattern instead.
+- **Critical**: Terminal corruption on kill — signal handlers + atexit restore
+  terminal state (mouse tracking, cursor visibility).
+- Rich markup escaping for all user content (session titles, turn text).
+- Search key passthrough (typing during `/` search no longer triggers bindings).
+- Preview line width adapts to actual timestamp length per line.
+- Subprocess timeouts (30s for detail export, 120s for recovery export).
+- Textual rendering errors suppressed on exit (logged to `/tmp/orsession-errors.log`).
+
 ## [0.1.1] - 2026-06-02
 
 ### Security

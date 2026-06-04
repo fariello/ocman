@@ -1140,7 +1140,7 @@ If you identify meaningful risks, note them clearly in your continuation plan an
 # ---------------------------------------------------------------------------
 
 _RECOVERY_FILE_PATTERN = re.compile(
-    r"^(?:opencode-recovery-(.+?)-(\d{8}-\d{6}Z?)|(\d{8}-\d{6})-(.+?))\.(transcript|restart|compact-prompt|compacted)\.md$"
+    r"^(?:opencode-recovery-(.+?)-(\d{8}-\d{6}Z?)|opencode-(\d{8}-\d{6})-(.+?))\.(transcript|restart|prompt|compact-prompt|compacted)\.md$"
 )
 
 
@@ -1631,13 +1631,13 @@ def generate_recovery_files(
     Returns:
         Dict mapping file type to path: {"transcript": ..., "restart": ..., "compact_prompt": ...}
     """
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     safe_id = safe_filename(session.session_id)
-    base_name = f"opencode-recovery-{safe_id}-{timestamp}"
+    base_name = f"opencode-{timestamp}-{safe_id}"
 
     transcript_path = output_dir / f"{base_name}.transcript.md"
     restart_path = output_dir / f"{base_name}.restart.md"
-    compact_prompt_path = output_dir / f"{base_name}.compact-prompt.md"
+    compact_prompt_path = output_dir / f"{base_name}.prompt.md"
 
     write_text(
         transcript_path,
