@@ -182,6 +182,9 @@ OPENCODE_CONFIG_PATHS: tuple[Path, ...] = (
     Path("opencode.jsonc"),
 )
 
+# opencode database path.
+OPENCODE_DB_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
 
 @dataclass
 class ModelInfo:
@@ -3134,6 +3137,173 @@ def install_signal_handlers(temp_dir_holder: dict[str, Path | None], verbosity_h
     pass
 
 
+# ---------------------------------------------------------------------------
+# Project / Session Database Queries
+# ---------------------------------------------------------------------------
+
+
+def _get_sqlite():
+    """Get a working sqlite3 module."""
+    try:
+        import pysqlite3 as sqlite3
+        return sqlite3
+    except ImportError:
+        pass
+    try:
+        import sqlite3
+        return sqlite3
+    except ImportError:
+        return None
+
+
+def db_list_projects() -> list[dict[str, Any]]:
+    """Query all projects with sessions from the opencode database."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
+                   COALESCE(MAX(s.time_updated), 0) as last_updated
+            FROM project p
+            LEFT JOIN session s ON s.project_id = p.id
+            GROUP BY p.id
+            HAVING session_count > 0
+            ORDER BY last_updated DESC
+        """)
+        projects = []
+        for row in cursor.fetchall():
+            projects.append({
+                "id": row[0],
+                "directory": row[1] or "/",
+                "name": row[2] or "",
+                "session_count": row[3],
+                "last_updated": row[4],
+            })
+        conn.close()
+        return projects
+    except Exception:
+        return []
+
+
+def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
+    """
+    Query sessions from the opencode database.
+
+    If project_id is given, returns sessions for that project.
+    Otherwise returns all sessions across all projects.
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return []
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        if project_id:
+            cursor.execute("""
+                SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                       s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                       s.summary_additions, s.summary_deletions, s.summary_files,
+                       s.slug, s.model, s.agent, p.worktree
+                FROM session s
+                LEFT JOIN project p ON p.id = s.project_id
+                WHERE s.project_id = ?
+                ORDER BY s.time_updated DESC
+            """, (project_id,))
+        else:
+            cursor.execute("""
+                SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                       s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                       s.summary_additions, s.summary_deletions, s.summary_files,
+                       s.slug, s.model, s.agent, p.worktree
+                FROM session s
+                LEFT JOIN project p ON p.id = s.project_id
+                ORDER BY s.time_updated DESC
+            """)
+
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append({
+                "id": row[0],
+                "title": row[1] or "(untitled)",
+                "created": row[2],
+                "updated": row[3],
+                "directory": row[4] or "",
+                "cost": row[5],
+                "tokens_input": row[6],
+                "tokens_output": row[7],
+                "tokens_cache_read": row[8],
+                "additions": row[9],
+                "deletions": row[10],
+                "files": row[11],
+                "slug": row[12] or "",
+                "model": row[13] or "",
+                "agent": row[14] or "",
+                "project_dir": row[15] or "",
+            })
+        conn.close()
+        return sessions
+    except Exception:
+        return []
+
+
+def resolve_project(spec: str) -> dict[str, Any] | None:
+    """Resolve a project by ID, directory path, or substring match."""
+    projects = db_list_projects()
+    if not projects:
+        return None
+
+    # Exact ID match.
+    for p in projects:
+        if p["id"] == spec:
+            return p
+
+    # Exact directory match.
+    for p in projects:
+        if p["directory"] == spec:
+            return p
+
+    # Directory ends-with match (for partial paths).
+    for p in projects:
+        if p["directory"].endswith(spec):
+            return p
+
+    # Substring match on directory.
+    matches = [p for p in projects if spec.lower() in p["directory"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+def resolve_session_spec(spec: str, sessions: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """
+    Resolve a session by number (from listing), ID, or title substring.
+    """
+    # Try as a number (1-based index from listing).
+    if spec.isdigit():
+        idx = int(spec) - 1
+        if 0 <= idx < len(sessions):
+            return sessions[idx]
+
+    # Exact ID match.
+    for s in sessions:
+        if s["id"] == spec:
+            return s
+
+    # Title substring match (case-insensitive).
+    matches = [s for s in sessions if spec.lower() in s["title"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    # If multiple title matches, return None (ambiguous).
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     """
     Parse command-line arguments.
@@ -3276,6 +3446,49 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         default=None,
         help="Explicit output path for the transcript file. Directory created if needed.",
+    )
+
+    parser.add_argument(
+        "--list-projects",
+        action="store_true",
+        help="List all known opencode projects and exit.",
+    )
+
+    parser.add_argument(
+        "--project",
+        type=str,
+        default=None,
+        help="Specify a project by ID, directory path, or substring. Used with --list-sessions or --details.",
+    )
+
+    parser.add_argument(
+        "--list-sessions",
+        action="store_true",
+        help="List sessions for the specified --project (or all if no project given) and exit.",
+    )
+
+    parser.add_argument(
+        "--details",
+        type=str,
+        default=None,
+        metavar="SESSION",
+        help="Show details about a session (by number from listing, session ID, or title substring).",
+    )
+
+    parser.add_argument(
+        "--head",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show the first (oldest) N exchanges. Used with --details.",
+    )
+
+    parser.add_argument(
+        "--tail",
+        type=int,
+        default=None,
+        metavar="N",
+        help="Show the last (newest) N exchanges. Used with --details.",
     )
 
     parser.add_argument(
@@ -3559,6 +3772,185 @@ def main() -> None:
 
     args = parse_args()
     verbosity = args.verbose
+
+    # Handle --list-projects early.
+    if args.list_projects:
+        projects = db_list_projects()
+        if not projects:
+            die("No projects found. Is opencode installed and has it been used?")
+        print(color_bold(f"Projects ({len(projects)}):"))
+        print()
+        for idx, p in enumerate(projects, start=1):
+            directory = p["directory"]
+            if len(directory) > 70:
+                directory = "..." + directory[-67:]
+            updated = format_timestamp(str(p["last_updated"]))
+            print(f"  {color_cyan(f'{idx:>3}.')} {directory}")
+            count = p["session_count"]
+            print(f"       {color_dim(f'{count} sessions, last active: {updated}')}")
+        print()
+        print(color_dim("Use --project <directory_or_id> with --list-sessions to see sessions."))
+        return
+
+    # Handle --list-sessions early.
+    if args.list_sessions:
+        project_id = None
+        project_dir = None
+        if args.project:
+            proj = resolve_project(args.project)
+            if not proj:
+                die(f"Project not found: {args.project!r}\nUse --list-projects to see available projects.")
+            project_id = proj["id"]
+            project_dir = proj["directory"]
+
+        sessions = db_list_sessions(project_id)
+        if not sessions:
+            if project_id:
+                die(f"No sessions found for project: {project_dir}")
+            else:
+                eprint(color_yellow("No project specified. Showing all sessions across all projects."))
+                eprint(color_dim("Tip: Use --list-projects to see projects, then --project <dir> --list-sessions."))
+                eprint()
+                sessions = db_list_sessions()
+                if not sessions:
+                    die("No sessions found.")
+
+        header = f"Sessions for {project_dir}" if project_dir else "All sessions"
+        print(color_bold(f"{header} ({len(sessions)}):"))
+        print()
+        for idx, s in enumerate(sessions, start=1):
+            title = s["title"]
+            if len(title) > 60:
+                title = title[:57] + "..."
+            updated = format_timestamp(str(s["updated"]))
+            project_hint = f"  [{s['project_dir'][:30]}]" if not project_id and s["project_dir"] else ""
+            print(f"  {color_cyan(f'{idx:>3}.')} {color_bold(title)}{color_dim(project_hint)}")
+            sid = s["id"]
+            print(f"       {color_dim(f'ID: {sid}  Updated: {updated}')}")
+        print()
+        print(color_dim("Use --details <number_or_id_or_title> to see session details."))
+        return
+
+    # Handle --details early.
+    if args.details:
+        # Resolve the project context for session listing.
+        project_id = None
+        if args.project:
+            proj = resolve_project(args.project)
+            if proj:
+                project_id = proj["id"]
+
+        sessions = db_list_sessions(project_id)
+        if not sessions:
+            die("No sessions found. Try --list-projects first.")
+
+        session_data = resolve_session_spec(args.details, sessions)
+        if not session_data:
+            die(
+                f"Session not found: {args.details!r}\n"
+                "Try a number from --list-sessions, a session ID, or a title substring."
+            )
+
+        # Display session details.
+        print(color_bold(session_data["title"]))
+        print(f"  {color_dim('ID:')}        {session_data['id']}")
+        if session_data["slug"]:
+            print(f"  {color_dim('Slug:')}      {session_data['slug']}")
+        print(f"  {color_dim('Created:')}   {format_timestamp(str(session_data['created']))}")
+        print(f"  {color_dim('Updated:')}   {format_timestamp(str(session_data['updated']))}")
+        if session_data["model"]:
+            model_str = session_data["model"]
+            # Parse JSON model field if present.
+            try:
+                model_obj = json.loads(model_str)
+                if isinstance(model_obj, dict):
+                    model_str = f"{model_obj.get('id', '')} ({model_obj.get('providerID', '')})"
+            except (json.JSONDecodeError, TypeError):
+                pass
+            print(f"  {color_dim('Model:')}     {model_str}")
+        if session_data["agent"]:
+            print(f"  {color_dim('Agent:')}     {session_data['agent']}")
+        if session_data["cost"]:
+            print(f"  {color_dim('Cost:')}      ${session_data['cost']:.2f}")
+        tok_parts = []
+        if session_data["tokens_input"]:
+            tok_parts.append(f"{session_data['tokens_input']:,} in")
+        if session_data["tokens_output"]:
+            tok_parts.append(f"{session_data['tokens_output']:,} out")
+        if session_data["tokens_cache_read"]:
+            tok_parts.append(f"{session_data['tokens_cache_read']:,} cache")
+        if tok_parts:
+            print(f"  {color_dim('Tokens:')}    {' / '.join(tok_parts)}")
+        if session_data["additions"] or session_data["deletions"]:
+            print(f"  {color_dim('Changes:')}   +{session_data['additions']} -{session_data['deletions']} ({session_data['files']} files)")
+        if session_data["project_dir"]:
+            print(f"  {color_dim('Directory:')} {session_data['project_dir']}")
+
+        # If --head or --tail, export and show exchanges.
+        if args.head is not None or args.tail is not None:
+            print()
+            require_opencode()
+            session_dir = Path(session_data["project_dir"]) if session_data["project_dir"] else None
+            if session_dir and not session_dir.is_dir():
+                session_dir = None
+
+            log("Exporting session for exchange preview...", verbosity)
+            import tempfile
+            with tempfile.TemporaryDirectory(prefix="orsession-") as td:
+                try:
+                    export_path = write_export_to_temp(
+                        session_id=session_data["id"],
+                        temp_dir=Path(td),
+                        verbosity=verbosity,
+                        cwd=session_dir,
+                    )
+                    data = load_export_file(export_path, verbosity=verbosity)
+
+                    turns = find_turns(data, include_tools=False, verbosity=verbosity)
+                    turns = filter_conversation_turns(turns)
+
+                    if not turns:
+                        print(color_dim("  No exchanges found."))
+                        return
+
+                    total = len(turns)
+                    interactions = count_interactions(turns)
+                    print(f"  {color_dim('Exchanges:')} {interactions}  {color_dim('Turns:')} {total}")
+                    print()
+
+                    show_turns: list[Turn] = []
+                    if args.head is not None and args.tail is not None:
+                        head_turns = turns[:args.head]
+                        tail_turns = turns[-args.tail:] if args.tail <= total else turns
+                        # Avoid overlap.
+                        if args.head + args.tail >= total:
+                            show_turns = turns
+                        else:
+                            show_turns = head_turns
+                            show_turns.append(Turn(role="system", text=f"... ({total - args.head - args.tail} exchanges omitted) ...", index=0, source=""))
+                            show_turns.extend(tail_turns)
+                    elif args.head is not None:
+                        show_turns = turns[:args.head]
+                        if args.head < total:
+                            print(color_dim(f"  Showing first {args.head} of {total} exchanges:"))
+                    elif args.tail is not None:
+                        show_turns = turns[-args.tail:]
+                        if args.tail < total:
+                            print(color_dim(f"  Showing last {args.tail} of {total} exchanges:"))
+
+                    print()
+                    for turn in show_turns:
+                        role_char = "U" if turn.role == "user" else "A" if turn.role == "assistant" else "·"
+                        role_color = color_cyan if turn.role == "user" else color_dim
+                        # Collapse to single line.
+                        collapsed = " ".join(turn.text.split())
+                        if len(collapsed) > 120:
+                            collapsed = collapsed[:117] + "..."
+                        print(f"  {role_color(role_char)}: {collapsed}")
+
+                except RecoveryError as e:
+                    die(str(e))
+        return
 
     # Handle --show-models early (no session needed).
     if args.show_models:
