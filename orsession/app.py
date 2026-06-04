@@ -42,8 +42,11 @@ from .core import (
     format_timestamp,
     generate_recovery_files,
     get_compatible_models,
+    list_projects,
     list_sessions,
+    list_sessions_for_project,
     load_opencode_config,
+    ProjectInfo,
     render_compact_prompt,
     render_transcript,
     require_opencode,
@@ -2047,6 +2050,89 @@ class FileBrowserScreen(Screen):
 
 
 # ---------------------------------------------------------------------------
+# Project List Screen
+# ---------------------------------------------------------------------------
+
+class ProjectListScreen(Screen):
+    """Browse all known opencode projects and switch between them."""
+
+    BINDINGS = [
+        Binding("escape", "go_back", "Back", priority=True),
+        Binding("b", "go_back", "Back", show=False, priority=True),
+        Binding("q", "quit", "Quit"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Header()
+        yield Container(
+            Static(id="project-header"),
+            DataTable(id="project-table"),
+            id="project-container",
+        )
+        yield Footer()
+
+    def on_mount(self) -> None:
+        self._load_projects()
+
+    def _load_projects(self) -> None:
+        """Load projects from the database."""
+        self.projects = list_projects()
+
+        header = self.query_one("#project-header", Static)
+        header.update(f"[bold]All Projects[/] ({len(self.projects)} with sessions)")
+
+        table = self.query_one("#project-table", DataTable)
+        table.clear(columns=True)
+        table.cursor_type = "row"
+        table.zebra_stripes = True
+
+        table.add_column("#", width=4)
+        table.add_column("Directory", width=None)
+        table.add_column("Sessions", width=10)
+        table.add_column("Last Active", width=16)
+
+        for idx, proj in enumerate(self.projects, start=1):
+            directory = proj.directory
+            if len(directory) > 70:
+                directory = "..." + directory[-67:]
+            last_active = format_timestamp(str(proj.last_updated), "medium") if proj.last_updated else "—"
+            table.add_row(
+                str(idx),
+                directory,
+                str(proj.session_count),
+                last_active,
+                key=proj.project_id,
+            )
+
+    def action_go_back(self) -> None:
+        self.app.pop_screen()
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """Switch to the selected project."""
+        try:
+            table = self.query_one("#project-table", DataTable)
+            row_idx = table.cursor_row
+            if row_idx is not None and 0 <= row_idx < len(self.projects):
+                selected = self.projects[row_idx]
+                app: OrsessionApp = self.app  # type: ignore
+                # Update the app's session directory.
+                new_dir = Path(selected.directory) if selected.directory != "/" else None
+                app.session_dir = new_dir
+                # Load sessions for this project directly from DB.
+                app.sessions = list_sessions_for_project(selected.project_id)
+                app.recovery_files = discover_recovery_files(app.output_dir)
+                # Pop back to session list (which will show the new sessions).
+                self.app.pop_screen()
+                # Notify the session list to refresh.
+                self.app.notify(
+                    f"Switched to: {selected.directory} ({selected.session_count} sessions)",
+                    timeout=4,
+                )
+        except Exception:
+            pass
+
+
+# ---------------------------------------------------------------------------
 # Session List Screen (default)
 # ---------------------------------------------------------------------------
 
@@ -2059,9 +2145,8 @@ class SessionListScreen(Screen):
         Binding("s", "cycle_sort", "Sort"),
         Binding("r", "recover", "Recover"),
         Binding("c", "quick_compact", "Quick Compact"),
-        Binding("slash", "search", "Search"),
+        Binding("g", "switch_project", "Projects"),
         Binding("f", "browse_files", "Files"),
-        Binding("question_mark", "help", "Help"),
     ]
 
     def compose(self) -> ComposeResult:
@@ -2072,6 +2157,14 @@ class SessionListScreen(Screen):
     def on_mount(self) -> None:
         """Load sessions on startup."""
         self._load_sessions()
+
+    def on_screen_resume(self) -> None:
+        """Refresh when returning from another screen (e.g., project switch)."""
+        app: OrsessionApp = self.app  # type: ignore
+        if app.sessions:
+            # Sessions might have been updated by project switch.
+            self._sort_sessions()
+            self._populate_table()
 
     def _load_sessions(self) -> None:
         """Fetch sessions from opencode and populate the table."""
@@ -2214,8 +2307,8 @@ class SessionListScreen(Screen):
     def action_browse_files(self) -> None:
         self.app.push_screen(FileBrowserScreen())
 
-    def action_help(self) -> None:
-        self._update_status("Help (not yet implemented)")
+    def action_switch_project(self) -> None:
+        self.app.push_screen(ProjectListScreen())
 
     # ------------------------------------------------------------------
     # Helpers
@@ -2385,6 +2478,20 @@ class OrsessionApp(App):
 
     #context-content {
         width: 100%;
+    }
+
+    #project-container {
+        height: 1fr;
+        padding: 1 2;
+    }
+
+    #project-header {
+        height: auto;
+        margin-bottom: 1;
+    }
+
+    #project-table {
+        height: 1fr;
     }
 
     #filebrowser-container {

@@ -1656,3 +1656,112 @@ def generate_recovery_files(
         "restart": restart_path,
         "compact_prompt": compact_prompt_path,
     }
+
+
+# ---------------------------------------------------------------------------
+# Project Discovery (direct database access)
+# ---------------------------------------------------------------------------
+
+OPENCODE_DB_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+
+@dataclass
+class ProjectInfo:
+    """Represents an opencode project."""
+
+    project_id: str
+    directory: str
+    name: str
+    session_count: int
+    last_updated: int  # epoch ms
+
+
+def list_projects() -> list[ProjectInfo]:
+    """
+    Query all known projects from the opencode database.
+
+    Returns projects sorted by most recently updated first.
+    Falls back to empty list if database is unavailable.
+    """
+    if not OPENCODE_DB_PATH.exists():
+        return []
+
+    try:
+        import pysqlite3 as sqlite3
+    except ImportError:
+        try:
+            import sqlite3
+        except ImportError:
+            return []
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
+                   COALESCE(MAX(s.time_updated), 0) as last_updated
+            FROM project p
+            LEFT JOIN session s ON s.project_id = p.id
+            GROUP BY p.id
+            ORDER BY last_updated DESC
+        """)
+
+        projects: list[ProjectInfo] = []
+        for row in cursor.fetchall():
+            proj_id, worktree, name, count, updated = row
+            if count == 0:
+                continue  # Skip projects with no sessions.
+            projects.append(ProjectInfo(
+                project_id=proj_id,
+                directory=worktree or "/",
+                name=name or "",
+                session_count=count,
+                last_updated=updated or 0,
+            ))
+        conn.close()
+        return projects
+    except Exception:
+        return []
+
+
+def list_sessions_for_project(project_id: str) -> list[SessionInfo]:
+    """
+    Query sessions for a specific project directly from the database.
+
+    Returns sessions sorted by most recently updated first.
+    """
+    if not OPENCODE_DB_PATH.exists():
+        return []
+
+    try:
+        import pysqlite3 as sqlite3
+    except ImportError:
+        try:
+            import sqlite3
+        except ImportError:
+            return []
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT id, title, time_created, time_updated, directory
+            FROM session
+            WHERE project_id = ?
+            ORDER BY time_updated DESC
+        """, (project_id,))
+
+        sessions: list[SessionInfo] = []
+        for row in cursor.fetchall():
+            sid, title, created, updated, directory = row
+            sessions.append(SessionInfo(
+                session_id=sid,
+                title=title or "(untitled)",
+                created=str(created) if created else "unknown",
+                updated=str(updated) if updated else "unknown",
+                raw={"directory": directory or ""},
+            ))
+        conn.close()
+        return sessions
+    except Exception:
+        return []
