@@ -431,7 +431,10 @@ def extract_models_from_config(config: dict[str, Any]) -> list[ModelInfo]:
 
 def display_models(models: list[ModelInfo]) -> None:
     """
-    Display available models in a compact table format.
+    Display available models in a numbered table, sorted by name.
+
+    Only shows models with compatible APIs. Models are numbered so
+    the user can select by number or by full model ID.
 
     Args:
         models:
@@ -439,61 +442,63 @@ def display_models(models: list[ModelInfo]) -> None:
     """
 
     if not models:
-        print(color_dim("No models found in opencode config."))
+        print("No models found in opencode config.")
         return
 
-    # Sort by input cost then output cost (low to high), then by name.
-    def sort_key(m: ModelInfo) -> tuple[float, float, str]:
-        return (m.cost_input or 999, m.cost_output or 999, m.name)
+    # Filter to compatible models with API keys only.
+    compatible = [m for m in models if m.compatible and m.api_key and m.base_url]
 
-    sorted_models = sorted(models, key=sort_key)
+    if not compatible:
+        print("No compatible models found (need OpenAI-compatible API with a configured key).")
+        return
+
+    # Sort by name.
+    compatible.sort(key=lambda m: m.name.lower())
 
     # Compute column widths.
-    id_col = "MODEL (--use-model)"
+    num_col = "#"
     name_col = "NAME"
-    cost_col = "COST (in/out)"
-    compat_col = "API"
+    id_col = "MODEL (--compact)"
+    cost_col = "COST ($/M in/out)"
 
     rows: list[tuple[str, str, str, str]] = []
-    for m in sorted_models:
+    for idx, m in enumerate(compatible, start=1):
         full_id = f"{m.provider_id}/{m.model_id}"
         if m.cost_input is not None and m.cost_output is not None:
             cost_str = f"${m.cost_input:.2f} / ${m.cost_output:.2f}"
         else:
             cost_str = "—"
-        compat_str = "OK" if m.compatible else "N/A"
-        rows.append((full_id, m.name, cost_str, compat_str))
+        rows.append((str(idx), m.name, full_id, cost_str))
 
-    id_width = max(len(id_col), max(len(r[0]) for r in rows))
+    num_width = max(len(num_col), max(len(r[0]) for r in rows))
     name_width = max(len(name_col), max(len(r[1]) for r in rows))
-    cost_width = max(len(cost_col), max(len(r[2]) for r in rows))
-    compat_width = max(len(compat_col), max(len(r[3]) for r in rows))
+    id_width = max(len(id_col), max(len(r[2]) for r in rows))
+    cost_width = max(len(cost_col), max(len(r[3]) for r in rows))
 
     header = (
-        f"  {color_bold(id_col.ljust(id_width))}  "
+        f"  {color_bold(num_col.ljust(num_width))}  "
         f"{color_bold(name_col.ljust(name_width))}  "
-        f"{color_bold(cost_col.ljust(cost_width))}  "
-        f"{color_bold(compat_col.ljust(compat_width))}"
+        f"{color_bold(id_col.ljust(id_width))}  "
+        f"{color_bold(cost_col.ljust(cost_width))}"
     )
-    separator = f"  {'─' * id_width}  {'─' * name_width}  {'─' * cost_width}  {'─' * compat_width}"
+    separator = f"  {'─' * num_width}  {'─' * name_width}  {'─' * id_width}  {'─' * cost_width}"
 
     print()
-    print(color_bold(f"Available models ({len(sorted_models)}):"))
+    print(color_bold(f"Available models ({len(compatible)}):"))
     print()
     print(header)
     print(separator)
 
-    for full_id, name, cost_str, compat_str in rows:
-        compat_display = color_green(compat_str) if compat_str == "OK" else color_dim(compat_str)
+    for num, name, full_id, cost_str in rows:
         print(
-            f"  {color_cyan(full_id.ljust(id_width))}  "
-            f"{name.ljust(name_width)}  "
-            f"{cost_str.ljust(cost_width)}  "
-            f"{compat_display}"
+            f"  {num.rjust(num_width)}  "
+            f"{color_bold(name.ljust(name_width))}  "
+            f"{full_id.ljust(id_width)}  "
+            f"{cost_str.ljust(cost_width)}"
         )
 
     print()
-    print(color_dim("Only models with API=OK support compaction via --use-model."))
+    print("Select by number or use --compact <model_id> directly.")
     print()
 
 
@@ -4366,11 +4371,15 @@ def main() -> None:
                         else:
                             # Resolve by number or name.
                             compatible = [m for m in models if m.compatible and m.api_key and m.base_url]
-                            compatible.sort(key=lambda m: (m.cost_input or 999, m.name))
+                            compatible.sort(key=lambda m: m.name.lower())
                             if selection.isdigit():
                                 idx = int(selection) - 1
                                 if 0 <= idx < len(compatible):
-                                    model_spec = f"{compatible[idx].provider_id}/{compatible[idx].model_id}"
+                                    selected = compatible[idx]
+                                    model_spec = f"{selected.provider_id}/{selected.model_id}"
+                                    print(f"\n  Selected: {color_bold(selected.name)} ({model_spec})")
+                                    print(f"  Tip: next time use --compact {model_spec}")
+                                    print()
                                 else:
                                     print(f"Invalid number. Must be 1-{len(compatible)}.")
                                     model_spec = None
