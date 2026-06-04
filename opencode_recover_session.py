@@ -3931,7 +3931,7 @@ def main() -> None:
             updated = _fmt_ts(s["updated"])
             project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
             prefix = "⤷ " if s["parent_id"] else ""
-            print(f"  {idx:>3}. {prefix}{color_bold(title)}{project_hint}")
+            print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')}{project_hint}")
             sid = s["id"]
             print(f"       ID: {sid}  Updated: {updated}")
         print()
