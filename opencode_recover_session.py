@@ -3619,6 +3619,38 @@ Examples:
     )
 
     parser.add_argument(
+        "--clean",
+        action="store_true",
+        help="Clean up sessions older than --days retention window.",
+    )
+
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=5,
+        metavar="N",
+        help="Retention window in days for --clean (default: 5).",
+    )
+
+    parser.add_argument(
+        "--clean-orphans",
+        action="store_true",
+        help="Scan and delete all orphaned database records that have no matching session.",
+    )
+
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Perform a dry-run of --clean, --clean-orphans, or --delete to show what would be done.",
+    )
+
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Bypass active process lock checks during deletion or cleanup.",
+    )
+
+    parser.add_argument(
         "-sm", "--show-models",
         action="store_true",
         help="Show available models from opencode config and exit.",
@@ -3870,6 +3902,539 @@ def run_compaction(
     return compacted_path
 
 
+def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int) -> None:
+    """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    # Check for active processes
+    if not force:
+        import subprocess
+        try:
+            proc_check = subprocess.run(
+                ["pgrep", "-f", "opencode --continue"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if proc_check.returncode == 0:
+                raise RecoveryError(
+                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
+                    "Use --force to bypass this safety check if you are certain."
+                )
+        except Exception as e:
+            if isinstance(e, RecoveryError):
+                raise
+            pass
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        
+        # 1. Get all descendant sessions recursively
+        cursor.execute("""
+            WITH RECURSIVE session_tree(id) AS (
+                SELECT id FROM session WHERE id = ?
+                UNION
+                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+            )
+            SELECT id FROM session_tree;
+        """, (session_id,))
+        session_ids = [row[0] for row in cursor.fetchall()]
+        
+        if not session_ids:
+            raise RecoveryError(f"Session {session_id} not found in database.")
+
+        # 2. Get counts of rows to be deleted
+        counts = {}
+        placeholders = ",".join("?" for _ in session_ids)
+        
+        session_tables = [
+            ("event", "aggregate_id"),
+            ("event_sequence", "aggregate_id"),
+            ("part", "session_id"),
+            ("session_message", "session_id"),
+            ("session_input", "session_id"),
+            ("session_share", "session_id"),
+            ("session_context_epoch", "session_id"),
+            ("todo", "session_id"),
+            ("message", "session_id"),
+            ("session", "id"),
+        ]
+        
+        for table, col in session_tables:
+            cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+            counts[table] = cursor.fetchone()[0]
+
+        # Get session details for display
+        cursor.execute(f"SELECT id, title, parent_id FROM session WHERE id IN ({placeholders})", session_ids)
+        descendants_info = []
+        for row in cursor.fetchall():
+            desc_id, title, parent_id = row
+            descendants_info.append({
+                "id": desc_id,
+                "title": title or "(untitled)",
+                "parent_id": parent_id
+            })
+
+        print()
+        print(color_bold("Recursively deleting the following sessions:"))
+        for s in descendants_info:
+            role = "Parent" if s["id"] == session_id else "Child"
+            print(f"  - [{role}] {color_bold(s['title'])} (ID: {s['id']})")
+        
+        print()
+        print(color_bold("Rows that will be deleted from the database:"))
+        for table, col in session_tables:
+            count = counts[table]
+            print(f"  {table:<25}: {count:,}")
+
+        # Get corresponding storage files
+        storage_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        files_to_delete = []
+        for sid in session_ids:
+            diff_file = storage_dir / f"{sid}.json"
+            if diff_file.exists():
+                files_to_delete.append(diff_file)
+
+        if files_to_delete:
+            print()
+            print(color_bold("Files that will be deleted from disk:"))
+            for f in files_to_delete:
+                print(f"  - {f}")
+
+        if dry_run:
+            print()
+            print("[*] Dry run complete. No database changes were made.")
+            conn.close()
+            return
+
+        print()
+        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
+        print()
+        
+        try:
+            confirmation = input("Type 'yes' to confirm deletion: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            conn.close()
+            return
+
+        if confirmation != "yes":
+            print("Cancelled.")
+            conn.close()
+            return
+
+        # Create backup directory and backup database file family
+        from datetime import datetime
+        import shutil
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[*] Creating database family backup in {backup_dir} ...")
+            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+            
+            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+            if wal_file.exists():
+                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+            if shm_file.exists():
+                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+            print("[+] Backup created successfully.")
+        except Exception as e:
+            print(color_red(f"[-] Backup failed: {e}"))
+            print(color_red("    Aborting deletion for safety."))
+            conn.close()
+            return
+
+        # Perform deletion
+        print("[*] Starting transaction...")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        cursor.execute("BEGIN TRANSACTION;")
+        
+        for table, col in session_tables:
+            cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+            print(f"[-] Deleted {cursor.rowcount} rows from {table}")
+
+        cursor.execute("COMMIT;")
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        print("[+] Transaction committed successfully.")
+
+        # Delete disk files
+        for f in files_to_delete:
+            try:
+                f.unlink()
+                print(f"[-] Deleted file: {f}")
+            except OSError as e:
+                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+        # Vacuum database
+        print("[*] Executing VACUUM to reclaim disk space...")
+        conn.conn = None # placeholder
+        conn.execute("VACUUM;")
+        print("[+] VACUUM complete.")
+
+        conn.close()
+        print(color_green("Deletion complete!"))
+        
+        print("--------------------------------------------------------")
+        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+        print()
+        print("Rollback instructions:")
+        print("  1. Close OpenCode if it is running.")
+        print("  2. Restore the database file family:")
+        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+        if wal_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+        else:
+            print(f"     rm -f '{wal_file}'")
+        if shm_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+        else:
+            print(f"     rm -f '{shm_file}'")
+        print("--------------------------------------------------------")
+
+    except Exception as e:
+        raise RecoveryError(f"Database operation failed: {e}")
+
+
+def db_run_cleanup(
+    days: int,
+    project_id: str | None,
+    project_dir: str | None,
+    dry_run: bool,
+    force: bool,
+    clean_orphans: bool,
+    verbosity: int,
+) -> None:
+    """Run OpenCode SQLite database retention cleanup and orphan sweeping."""
+    if days < 0:
+        raise RecoveryError("Retention window must be 0 or a positive integer.")
+    if days == 0 and not clean_orphans:
+        raise RecoveryError("Retention window cannot be 0 days without orphan cleanup.")
+
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    # Check for active processes if not forced
+    if not force:
+        import subprocess
+        try:
+            proc_check = subprocess.run(
+                ["pgrep", "-f", "opencode --continue"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if proc_check.returncode == 0:
+                raise RecoveryError(
+                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
+                    "Use --force to bypass this safety check if you are certain."
+                )
+        except Exception as e:
+            if isinstance(e, RecoveryError):
+                raise
+            pass
+
+    # Compute cutoff time (Unix epoch milliseconds)
+    import time
+    cutoff_time = int(time.time() * 1000 - days * 86400000)
+    
+    # Format cutoff date to local time
+    try:
+        from datetime import datetime
+        cutoff_date_str = datetime.fromtimestamp(cutoff_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+    except Exception:
+        cutoff_date_str = str(cutoff_time)
+
+    print("--------------------------------------------------------")
+    print(f"Database:      {OPENCODE_DB_PATH}")
+    if clean_orphans and days == 0:
+        print("Mode:          Orphan database sweep only")
+    else:
+        print(f"Retention:     {days} days")
+        print(f"Cutoff Date:   {cutoff_date_str}")
+    if project_dir:
+        print(f"Project Filter: {project_dir}")
+    if dry_run:
+        print("Dry Run:       ACTIVE (no changes will be made)")
+    print("--------------------------------------------------------")
+
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        
+        # Verify database integrity (skip on dry run)
+        if not dry_run:
+            if force:
+                print("[*] Verifying database integrity (quick_check)...")
+                cursor.execute("PRAGMA quick_check;")
+            else:
+                print("[*] Verifying database integrity (integrity_check)...")
+                cursor.execute("PRAGMA integrity_check;")
+            res = cursor.fetchone()[0]
+            if res != "ok":
+                raise RecoveryError(f"Database integrity check failed: {res}")
+            print("[+] Database integrity is ok.")
+
+        session_tables = [
+            ("event", "aggregate_id"),
+            ("event_sequence", "aggregate_id"),
+            ("part", "session_id"),
+            ("session_message", "session_id"),
+            ("session_input", "session_id"),
+            ("session_share", "session_id"),
+            ("session_context_epoch", "session_id"),
+            ("todo", "session_id"),
+            ("message", "session_id"),
+            ("session", "id"),
+        ]
+
+        target_session_ids = []
+        
+        # 1. Age-based Cleanup Target Identification
+        if days > 0:
+            # Find root sessions matching criteria
+            if project_dir:
+                project_dir_pattern = project_dir.rstrip("/") + "/%"
+                cursor.execute("""
+                    SELECT id FROM session 
+                    WHERE time_created < ? 
+                      AND (directory = ? OR directory LIKE ?)
+                """, (cutoff_time, project_dir, project_dir_pattern))
+            else:
+                cursor.execute("SELECT id FROM session WHERE time_created < ?", (cutoff_time,))
+                
+            root_session_ids = [row[0] for row in cursor.fetchall()]
+            
+            if root_session_ids:
+                placeholders = ",".join("?" for _ in root_session_ids)
+                cursor.execute(f"""
+                    WITH RECURSIVE session_tree(id) AS (
+                        SELECT id FROM session WHERE id IN ({placeholders})
+                        UNION
+                        SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                    )
+                    SELECT DISTINCT id FROM session_tree;
+                """, root_session_ids)
+                target_session_ids = [row[0] for row in cursor.fetchall()]
+
+        # 2. Compute deletion counts
+        db_deletes = {}
+        for table, col in session_tables:
+            db_deletes[table] = 0
+
+        # Age-based counts
+        if target_session_ids:
+            placeholders = ",".join("?" for _ in target_session_ids)
+            for table, col in session_tables:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
+                db_deletes[table] = cursor.fetchone()[0]
+
+        # Orphan-based counts (dangling rows where session no longer exists in session table)
+        orphan_deletes = {}
+        for table, col in session_tables:
+            orphan_deletes[table] = 0
+
+        if clean_orphans:
+            for table, col in session_tables:
+                if table == "session":
+                    continue
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM {table} t
+                    WHERE NOT EXISTS (SELECT 1 FROM session s WHERE s.id = t.{col})
+                """)
+                orphan_deletes[table] = cursor.fetchone()[0]
+
+        # Print detailed report of what will be deleted
+        print("Rows that will be deleted:")
+        for table, col in session_tables:
+            age_count = db_deletes.get(table, 0)
+            orp_count = orphan_deletes.get(table, 0)
+            total_count = age_count + orp_count
+            if clean_orphans:
+                print(f"  {table:<25}: {total_count:,} ({age_count:,} age-based, {orp_count:,} orphaned)")
+            else:
+                print(f"  {table:<25}: {age_count:,}")
+
+        # Get list of files to delete from disk
+        storage_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        files_to_delete = []
+        all_del_session_ids = set(target_session_ids)
+        
+        if clean_orphans and storage_dir.exists():
+            cursor.execute("SELECT id FROM session")
+            valid_session_ids = set(row[0] for row in cursor.fetchall())
+            for entry in storage_dir.iterdir():
+                if entry.is_file() and entry.suffix == ".json":
+                    sid = entry.stem
+                    if sid not in valid_session_ids:
+                        all_del_session_ids.add(sid)
+
+        for sid in all_del_session_ids:
+            diff_file = storage_dir / f"{sid}.json"
+            if diff_file.exists():
+                files_to_delete.append(diff_file)
+
+        if files_to_delete:
+            print()
+            print(f"Files that will be deleted from disk: {len(files_to_delete)} JSON files")
+            if verbosity >= 1:
+                for f in files_to_delete[:10]:
+                    print(f"  - {f}")
+                if len(files_to_delete) > 10:
+                    print(f"  ... and {len(files_to_delete) - 10} more files.")
+
+        total_rows_to_delete = sum(db_deletes.values()) + sum(orphan_deletes.values())
+        if total_rows_to_delete == 0 and not files_to_delete:
+            print()
+            print("[+] Clean slate! No data found to clean.")
+            conn.close()
+            return
+
+        if dry_run:
+            print()
+            print("[*] Dry run complete. No database changes were made.")
+            conn.close()
+            return
+
+        # 3. Confirmation
+        print()
+        try:
+            confirmation = input("Type 'yes' to confirm database prune and vacuum: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            conn.close()
+            return
+
+        if confirmation != "yes":
+            print("Cancelled.")
+            conn.close()
+            return
+
+        # 4. Create database backup family
+        from datetime import datetime
+        import shutil
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[*] Creating database family backup in {backup_dir} ...")
+            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+            
+            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+            if wal_file.exists():
+                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+            if shm_file.exists():
+                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+            print("[+] Backup created successfully.")
+        except Exception as e:
+            print(color_red(f"[-] Backup failed: {e}"))
+            print(color_red("    Aborting cleanup for safety."))
+            conn.close()
+            return
+
+        # 5. Execute cleanup inside a transaction
+        print("[*] Starting transaction...")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        cursor.execute("BEGIN TRANSACTION;")
+        
+        # A. Age-based deletes
+        if target_session_ids:
+            placeholders = ",".join("?" for _ in target_session_ids)
+            for table, col in session_tables:
+                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
+                print(f"[-] Deleted {cursor.rowcount} rows from {table} (age-based)")
+
+        # B. Orphan-based deletes
+        if clean_orphans:
+            for table, col in session_tables:
+                if table == "session":
+                    continue
+                cursor.execute(f"""
+                    DELETE FROM {table}
+                    WHERE NOT EXISTS (SELECT 1 FROM session s WHERE s.id = {table}.{col})
+                """)
+                if cursor.rowcount > 0:
+                    print(f"[-] Deleted {cursor.rowcount} orphaned rows from {table}")
+
+        cursor.execute("COMMIT;")
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        print("[+] Transaction committed successfully.")
+
+        # 6. Delete disk files
+        deleted_files_count = 0
+        for f in files_to_delete:
+            try:
+                f.unlink()
+                deleted_files_count += 1
+            except OSError as e:
+                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+        if deleted_files_count > 0:
+            print(f"[-] Deleted {deleted_files_count} JSON files from disk.")
+
+        # 7. Reclaim space via VACUUM
+        print("[*] Executing VACUUM to reclaim disk space...")
+        conn.execute("VACUUM;")
+        print("[+] VACUUM complete.")
+
+        # 8. Report metrics
+        db_size_before = get_file_size_local(OPENCODE_DB_PATH)
+        db_size_after = OPENCODE_DB_PATH.stat().st_size
+        print("--------------------------------------------------------")
+        print(f"New opencode.db file size on disk: {human_size_local(db_size_after)}")
+        print(f"Reclaimed space: {human_size_local(max(0, db_size_before - db_size_after))}")
+        print("--------------------------------------------------------")
+        print(color_green("Database cleanup complete!"))
+        
+        print("--------------------------------------------------------")
+        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+        print()
+        print("Rollback instructions:")
+        print("  1. Close OpenCode if it is running.")
+        print("  2. Restore the database file family:")
+        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+        if wal_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+        else:
+            print(f"     rm -f '{wal_file}'")
+        if shm_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+        else:
+            print(f"     rm -f '{shm_file}'")
+        print("--------------------------------------------------------")
+
+        conn.close()
+
+    except Exception as e:
+        raise RecoveryError(f"Database cleanup failed: {e}")
+
+# Helper sizing functions locally
+def get_file_size_local(file_path: Path) -> int:
+    try:
+        return file_path.stat().st_size
+    except Exception:
+        return 0
+
+def human_size_local(bytes_size: int) -> str:
+    if bytes_size >= 1073741824:
+        return f"{bytes_size / 1073741824:.2f} GB"
+    elif bytes_size >= 1048576:
+        return f"{bytes_size / 1048576:.2f} MB"
+    elif bytes_size >= 1024:
+        return f"{bytes_size / 1024:.2f} KB"
+    else:
+        return f"{bytes_size} B"
+
+
 def main() -> None:
     """
     Run the interactive opencode recovery workflow.
@@ -3979,6 +4544,23 @@ def main() -> None:
         print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
         return
 
+    # Handle --clean or --clean-orphans
+    if args.clean or args.clean_orphans:
+        try:
+            days = args.days if args.clean else 0
+            db_run_cleanup(
+                days=days,
+                project_id=_project_id,
+                project_dir=_project_dir if args.project or args.clean else None,
+                dry_run=args.dry_run,
+                force=args.force,
+                clean_orphans=args.clean_orphans,
+                verbosity=verbosity
+            )
+        except RecoveryError as e:
+            die(str(e))
+        return
+
     # Handle --delete (requires --session).
     if args.delete:
         session_spec = args.session
@@ -4001,87 +4583,15 @@ def main() -> None:
             die(f"Session not found: {session_spec!r}\n"
                 "Try a number from --list-sessions, a session ID, or a title substring.")
 
-        # Compute duration.
-        created = session_data["created"]
-        updated = session_data["updated"]
-        duration = ""
-        if created and updated:
-            try:
-                delta_ms = int(updated) - int(created)
-                delta_min = delta_ms // 60000
-                if delta_min < 60:
-                    duration = f"{delta_min}m"
-                else:
-                    hours = delta_min // 60
-                    duration = f"{hours}h {delta_min % 60}m"
-            except (ValueError, TypeError):
-                pass
-
-        # Get size from session_diff file.
-        diff_file = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff" / f"{session_data['id']}.json"
-        size_str = ""
-        if diff_file.exists():
-            size_bytes = diff_file.stat().st_size
-            if size_bytes >= 1_000_000:
-                size_str = f"{size_bytes / 1_000_000:.1f}M"
-            elif size_bytes >= 1_000:
-                size_str = f"{size_bytes / 1_000:.1f}K"
-            else:
-                size_str = f"{size_bytes} bytes"
-
-        print()
-        print(color_red("About to DELETE session:"))
-        print()
-        print(f"  Title:        {color_bold(session_data['title'])}")
-        print(f"  ID:           {session_data['id']}")
-        print(f"  Created:      {_fmt_ts(created)}")
-        print(f"  Updated:      {_fmt_ts(updated)}")
-        if duration:
-            print(f"  Duration:     {duration}")
-        if size_str:
-            print(f"  Size:         {size_str}")
-        if session_data["cost"]:
-            print(f"  Cost:         ${session_data['cost']:.2f}")
-        tok_parts = []
-        if session_data["tokens_input"]:
-            tok_parts.append(f"{session_data['tokens_input']:,} in")
-        if session_data["tokens_output"]:
-            tok_parts.append(f"{session_data['tokens_output']:,} out")
-        if tok_parts:
-            print(f"  Tokens:       {' / '.join(tok_parts)}")
-        if session_data["project_dir"]:
-            print(f"  Directory:    {session_data['project_dir']}")
-        print()
-        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
-        print(f"  Will run: opencode session delete {session_data['id']}")
-        print()
-
         try:
-            confirmation = input("Type 'yes' to confirm deletion: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nCancelled.")
-            return
-
-        if confirmation != "yes":
-            print("Cancelled.")
-            return
-
-        # Delete via opencode CLI.
-        require_opencode()
-        session_dir = Path(session_data["project_dir"]) if session_data["project_dir"] else None
-        if session_dir and not session_dir.is_dir():
-            session_dir = None
-
-        try:
-            run_command(
-                ("opencode", "session", "delete", session_data["id"]),
-                verbosity=verbosity,
-                check=True,
-                cwd=session_dir,
+            db_delete_session_recursive(
+                session_id=session_data["id"],
+                dry_run=args.dry_run,
+                force=args.force,
+                verbosity=verbosity
             )
-            print(color_green("Session deleted."))
         except RecoveryError as e:
-            die(f"Delete failed: {e}")
+            die(str(e))
         return
 
     # Handle --details, --head, --tail (all require --session or -s).
