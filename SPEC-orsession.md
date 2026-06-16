@@ -10,7 +10,7 @@
 
 `orsession` is an interactive terminal application (textual-based TUI) for
 browsing, recovering, and compacting opencode sessions. It is a companion to
-`opencode_recover_session.py` (the non-interactive CLI tool), sharing the same
+`ocman` (the non-interactive CLI tool, `ocman.py`), sharing the same
 core logic but providing a full drill-down, menu-driven experience.
 
 ### 1.1 Problem Statement
@@ -53,7 +53,7 @@ discoverable and explorable.
   and opencode installs natively via Chocolatey/Scoop/npm. However, opencode
   itself recommends WSL for "full compatibility," so native Windows is
   lower priority.
-- Python 3.10+ (matches `opencode_recover_session.py`).
+- Python 3.10+ (matches `ocman`).
 - Requires `opencode` CLI on PATH.
 - Reads config from standard opencode config paths.
 
@@ -994,7 +994,7 @@ orsession/
 pyproject.toml            — Package metadata, dependencies, entry point
 ```
 
-The CLI tool `opencode_recover_session.py` remains standalone in the repo
+The CLI tool `ocman.py` remains standalone in the repo
 root. It optionally imports from `orsession.core` when installed, but does
 NOT depend on the package — it falls back to its own bundled implementations.
 
@@ -1022,7 +1022,7 @@ NOT depend on the package — it falls back to its own bundled implementations.
 # Section 5: Entry point and argument parsing
 ```
 
-### 13.3 Code Sharing with opencode_recover_session.py
+### 13.3 Code Sharing with ocman.py
 
 `orsession_core.py` contains the shared logic:
 - Session listing (opencode CLI interaction)
@@ -1032,14 +1032,14 @@ NOT depend on the package — it falls back to its own bundled implementations.
 - API call logic
 - File I/O utilities
 
-Both `orsession.py` (TUI) and `opencode_recover_session.py` (CLI) import
-from `orsession_core.py`. The CLI tool has a fallback: if the import fails,
+Both `orsession/app.py` (TUI) and `ocman.py` (CLI) import
+from `orsession/core.py`. The CLI tool has a fallback: if the import fails,
 it uses its own bundled copy of the logic (so it remains distributable as a
 single file).
 
 ### 13.4 Dependencies
 
-Unlike `opencode_recover_session.py` (which is deliberately stdlib-only for
+Unlike `ocman.py` (which is deliberately stdlib-only for
 single-file portability), `orsession` is a proper application that can use
 external packages where they add value.
 

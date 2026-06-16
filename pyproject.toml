@@ -24,4 +24,11 @@ dev = [
 ]
 
 [project.scripts]
+ocman = "ocman:main"
 orsession = "orsession.app:main"
+
+[tool.hatch.build.targets.wheel]
+packages = [
+    "orsession",
+    "ocman.py",
+]

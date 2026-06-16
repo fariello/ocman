@@ -12,18 +12,18 @@ When an opencode session crashes, hits context overflow, or fails during `/compa
 
 ```bash
 # Copy the script somewhere on your PATH
-curl -o ~/.local/bin/opencode_recover_session.py \
-  https://raw.githubusercontent.com/fariello/opencode-recover/main/opencode_recover_session.py
-chmod +x ~/.local/bin/opencode_recover_session.py
+curl -o ~/.local/bin/ocman \
+  https://raw.githubusercontent.com/fariello/opencode-recover/main/ocman.py
+chmod +x ~/.local/bin/ocman
 
 # Recover interactively (lists sessions, lets you pick one)
-opencode_recover_session.py
+ocman
 
 # Recover a specific session, keep only the last 50 interactions
-opencode_recover_session.py -s SESSION_ID -mi 50
+ocman -s SESSION_ID -mi 50
 
 # Same, but also compact via a cheap model
-opencode_recover_session.py -s SESSION_ID -mi 50 -m provider/model_id
+ocman -s SESSION_ID -mi 50 -m provider/model_id
 
 # Then in a fresh opencode session, tell the agent:
 #   "read and execute opencode-recovery/opencode-recovery-SESSION_ID-TIMESTAMP.compacted.md"
@@ -52,7 +52,7 @@ No dependencies beyond Python 3.10+ and the `opencode` CLI.
 
 ## Requirements
 
-**CLI tool** (`opencode_recover_session.py`):
+**CLI tool** (`ocman` / `ocman.py`):
 - Python 3.10+
 - `opencode` CLI on PATH
 - No third-party packages — stdlib only
@@ -71,17 +71,17 @@ It's a single file. Pick your method:
 
 ```bash
 # Option 1: curl to a bin directory
-curl -o ~/.local/bin/opencode_recover_session.py \
-  https://raw.githubusercontent.com/fariello/opencode-recover/main/opencode_recover_session.py
-chmod +x ~/.local/bin/opencode_recover_session.py
+curl -o ~/.local/bin/ocman \
+  https://raw.githubusercontent.com/fariello/opencode-recover/main/ocman.py
+chmod +x ~/.local/bin/ocman
 
 # Option 2: clone the repo
 git clone https://github.com/fariello/opencode-recover.git
 cd opencode-recover
-chmod +x opencode_recover_session.py
+chmod +x ocman.py
 
 # Option 3: just copy it wherever you want
-cp opencode_recover_session.py /wherever/you/like/
+cp ocman.py /wherever/you/like/
 ```
 
 ### Interactive TUI (orsession)
@@ -113,7 +113,7 @@ It provides:
 - LLM compaction with progress display
 - Recovery file browser with view/delete
 
-The CLI tool (`opencode_recover_session.py`) remains fully standalone with
+The CLI tool (`ocman` / `ocman.py`) remains fully standalone with
 zero dependencies — use it when you want scripting, CI integration, or
 don't want to install packages.
 
@@ -124,7 +124,7 @@ don't want to install packages.
 ### Basic interactive recovery
 
 ```bash
-opencode_recover_session.py
+ocman
 ```
 
 Lists all sessions, lets you pick one, generates recovery files in `./opencode-recovery/`.
@@ -132,13 +132,13 @@ Lists all sessions, lets you pick one, generates recovery files in `./opencode-r
 ### Non-interactive with a known session ID
 
 ```bash
-opencode_recover_session.py -s ses_abc123def456
+ocman -s ses_abc123def456
 ```
 
 ### Recover a session from a different project directory
 
 ```bash
-opencode_recover_session.py -d "/path/to/project"
+ocman -d "/path/to/project"
 ```
 
 opencode stores sessions per-project. Use `-d` when recovering a session that was started in a directory other than your current working directory.
@@ -146,7 +146,7 @@ opencode stores sessions per-project. Use `-d` when recovering a session that wa
 ### Truncate to the most recent N interactions
 
 ```bash
-opencode_recover_session.py -s SESSION_ID -mi 50
+ocman -s SESSION_ID -mi 50
 ```
 
 Keeps only the 50 most recent back-and-forth exchanges (from the tail). This is measured against the *output* file, not raw input.
@@ -154,7 +154,7 @@ Keeps only the 50 most recent back-and-forth exchanges (from the tail). This is 
 ### Truncate by output line count
 
 ```bash
-opencode_recover_session.py -s SESSION_ID -ml 2000
+ocman -s SESSION_ID -ml 2000
 ```
 
 Keeps enough recent turns to fit within ~2000 lines of rendered output.
@@ -162,7 +162,7 @@ Keeps enough recent turns to fit within ~2000 lines of rendered output.
 ### Compact via LLM
 
 ```bash
-opencode_recover_session.py -s SESSION_ID -m uri/its_direct/pt1-qwen3-32b-us
+ocman -s SESSION_ID -m uri/its_direct/pt1-qwen3-32b-us
 ```
 
 After generating recovery files, sends the compact prompt to the specified model and writes a `*.compacted.md` file. Shows estimated cost and asks for confirmation before sending.
@@ -170,7 +170,7 @@ After generating recovery files, sends the compact prompt to the specified model
 ### See available models and costs
 
 ```bash
-opencode_recover_session.py --show-models
+ocman --show-models
 ```
 
 Displays a table of all models from your opencode config with pricing and API compatibility status.
@@ -181,7 +181,7 @@ Displays a table of all models from your opencode config with pricing and API co
 # First recovery produced session1.compacted.md
 # Second session (started from session1.compacted.md) also crashed
 # Include the first recovery as prior context:
-opencode_recover_session.py -s SESSION_ID_2 \
+ocman -s SESSION_ID_2 \
   -ic ./opencode-recovery/session1.compacted.md
 ```
 
@@ -190,7 +190,7 @@ Prior context is prepended to the transcript so the compaction model sees the fu
 ### Write output to specific paths
 
 ```bash
-opencode_recover_session.py -s SESSION_ID \
+ocman -s SESSION_ID \
   -ot ./out/transcript.md \
   -or ./out/restart.md \
   -oc ./out/compact-prompt.md
@@ -202,10 +202,10 @@ Directories are created if they don't exist.
 
 ```bash
 # Clean only (no export, no recovery):
-opencode_recover_session.py -s SESSION_ID -c --clean-previous
+ocman -s SESSION_ID -c --clean-previous
 
 # Clean then recover:
-opencode_recover_session.py -s SESSION_ID -c --clean-previous -mi 50
+ocman -s SESSION_ID -c --clean-previous -mi 50
 ```
 
 - `-c` / `--clean` removes leftover temp directories from `/tmp`
@@ -216,7 +216,7 @@ When only clean flags are specified (no `--use-model`, `--input-*`, or `--keep-t
 ### View the compaction prompt template
 
 ```bash
-opencode_recover_session.py --show-compaction-prompt
+ocman --show-compaction-prompt
 ```
 
 ---

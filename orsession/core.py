@@ -2,7 +2,7 @@
 Shared core logic for opencode session recovery.
 
 This module contains the reusable components shared between the CLI tool
-(opencode_recover_session.py) and the TUI app (orsession).
+(ocman.py) and the TUI app (orsession).
 
 Includes:
 - Data models (SessionInfo, Turn, ModelInfo)

@@ -12,44 +12,44 @@ This utility helps recover from broken opencode sessions by:
 7. Cleaning up temporary files, including after CTRL-C or failure.
 
 Basic usage:
-    ./opencode_recover_session.py
+    ocman
 
 Recover a session from a different project directory:
-    ./opencode_recover_session.py --session-dir /path/to/project
+    ocman --session-dir /path/to/project
 
 Non-interactive with a known session ID:
-    ./opencode_recover_session.py --session SESSION_ID
+    ocman --session SESSION_ID
 
 Truncate to the most recent 50 interactions:
-    ./opencode_recover_session.py --session SESSION_ID --max-interactions 50
+    ocman --session SESSION_ID --max-interactions 50
 
 Truncate to fit within 2000 output lines:
-    ./opencode_recover_session.py --session SESSION_ID --max-lines 2000
+    ocman --session SESSION_ID --max-lines 2000
 
 Show available models for LLM compaction:
-    ./opencode_recover_session.py --show-models
+    ocman --show-models
 
 Compact a recovery via a cheap model:
-    ./opencode_recover_session.py --session SESSION_ID --use-model uri/its_direct/pt1-qwen3-32b-us
+    ocman --session SESSION_ID --use-model uri/its_direct/pt1-qwen3-32b-us
 
 Chain recoveries (include prior compacted context):
-    ./opencode_recover_session.py --session SESSION_ID \\
+    ocman --session SESSION_ID \
         --input-compact ./opencode-recovery/previous-session.compacted.md
 
 Write output to explicit paths:
-    ./opencode_recover_session.py --session SESSION_ID \\
-        --output-transcript ./out/transcript.md \\
-        --output-restart ./out/restart.md \\
+    ocman --session SESSION_ID \
+        --output-transcript ./out/transcript.md \
+        --output-restart ./out/restart.md \
         --output-compact ./out/compact-prompt.md
 
 Clean up only (no export or recovery):
-    ./opencode_recover_session.py -s SESSION_ID -c --clean-previous
+    ocman -s SESSION_ID -c --clean-previous
 
 Clean up before generating new output:
-    ./opencode_recover_session.py -s SESSION_ID -c --clean-previous -mi 50
+    ocman -s SESSION_ID -c --clean-previous -mi 50
 
 Show the compaction prompt template:
-    ./opencode_recover_session.py --show-compaction-prompt
+    ocman --show-compaction-prompt
 
 Short forms:
     -s  --session             -d  --session-dir        -o  --out
@@ -184,6 +184,20 @@ OPENCODE_CONFIG_PATHS: tuple[Path, ...] = (
 
 # opencode database path.
 OPENCODE_DB_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "opencode.db"
+
+# Relational tables linked to sessions, ordered to safely handle dependencies during deletion.
+SESSION_RELATIONAL_TABLES: list[tuple[str, str]] = [
+    ("event", "aggregate_id"),
+    ("event_sequence", "aggregate_id"),
+    ("part", "session_id"),
+    ("session_message", "session_id"),
+    ("session_input", "session_id"),
+    ("session_share", "session_id"),
+    ("session_context_epoch", "session_id"),
+    ("todo", "session_id"),
+    ("message", "session_id"),
+    ("session", "id"),
+]
 
 
 @dataclass
@@ -3292,7 +3306,7 @@ def print_projects(
 
 def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
     """Show a useful navigation screen when CWD is not an opencode project."""
-    command = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "opencode_recover_session.py"
+    command = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "ocman"
     cwd = Path.cwd()
 
     print(color_bold("opencode session recovery"))
@@ -3305,7 +3319,7 @@ def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
         print(f"{command} --list-sessions # List all sessions for all projects")
         print(f"{command} --session-dir /path/to/project # Select a project by directory")
         print()
-        print("I ran `opencode_recover_session.py --list-projects` for you because no opencode project context was found for:")
+        print(f"I ran `{command} --list-projects` for you because no opencode project context was found for:")
         print(f"  {cwd}")
     else:
         print("No known opencode projects found.")
@@ -3639,6 +3653,13 @@ Examples:
     )
 
     parser.add_argument(
+        "--db",
+        type=Path,
+        default=OPENCODE_DB_PATH,
+        help="Path to the opencode SQLite database (default: %(default)s).",
+    )
+
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Perform a dry-run of --clean, --clean-orphans, or --delete to show what would be done.",
@@ -3953,20 +3974,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         counts = {}
         placeholders = ",".join("?" for _ in session_ids)
         
-        session_tables = [
-            ("event", "aggregate_id"),
-            ("event_sequence", "aggregate_id"),
-            ("part", "session_id"),
-            ("session_message", "session_id"),
-            ("session_input", "session_id"),
-            ("session_share", "session_id"),
-            ("session_context_epoch", "session_id"),
-            ("todo", "session_id"),
-            ("message", "session_id"),
-            ("session", "id"),
-        ]
-        
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
             counts[table] = cursor.fetchone()[0]
 
@@ -3989,7 +3997,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         
         print()
         print(color_bold("Rows that will be deleted from the database:"))
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             count = counts[table]
             print(f"  {table:<25}: {count:,}")
 
@@ -3997,9 +4005,10 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         storage_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
         files_to_delete = []
         for sid in session_ids:
-            diff_file = storage_dir / f"{sid}.json"
-            if diff_file.exists():
-                files_to_delete.append(diff_file)
+            if sid and str(sid).strip():
+                diff_file = storage_dir / f"{str(sid).strip()}.json"
+                if diff_file.exists():
+                    files_to_delete.append(diff_file)
 
         if files_to_delete:
             print()
@@ -4056,7 +4065,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
         
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
             print(f"[-] Deleted {cursor.rowcount} rows from {table}")
 
@@ -4074,7 +4083,6 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
 
         # Vacuum database
         print("[*] Executing VACUUM to reclaim disk space...")
-        conn.conn = None # placeholder
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
@@ -4185,19 +4193,6 @@ def db_run_cleanup(
                 raise RecoveryError(f"Database integrity check failed: {res}")
             print("[+] Database integrity is ok.")
 
-        session_tables = [
-            ("event", "aggregate_id"),
-            ("event_sequence", "aggregate_id"),
-            ("part", "session_id"),
-            ("session_message", "session_id"),
-            ("session_input", "session_id"),
-            ("session_share", "session_id"),
-            ("session_context_epoch", "session_id"),
-            ("todo", "session_id"),
-            ("message", "session_id"),
-            ("session", "id"),
-        ]
-
         target_session_ids = []
         
         # 1. Age-based Cleanup Target Identification
@@ -4229,23 +4224,23 @@ def db_run_cleanup(
 
         # 2. Compute deletion counts
         db_deletes = {}
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             db_deletes[table] = 0
 
         # Age-based counts
         if target_session_ids:
             placeholders = ",".join("?" for _ in target_session_ids)
-            for table, col in session_tables:
+            for table, col in SESSION_RELATIONAL_TABLES:
                 cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
                 db_deletes[table] = cursor.fetchone()[0]
 
         # Orphan-based counts (dangling rows where session no longer exists in session table)
         orphan_deletes = {}
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             orphan_deletes[table] = 0
 
         if clean_orphans:
-            for table, col in session_tables:
+            for table, col in SESSION_RELATIONAL_TABLES:
                 if table == "session":
                     continue
                 cursor.execute(f"""
@@ -4256,7 +4251,7 @@ def db_run_cleanup(
 
         # Print detailed report of what will be deleted
         print("Rows that will be deleted:")
-        for table, col in session_tables:
+        for table, col in SESSION_RELATIONAL_TABLES:
             age_count = db_deletes.get(table, 0)
             orp_count = orphan_deletes.get(table, 0)
             total_count = age_count + orp_count
@@ -4273,16 +4268,20 @@ def db_run_cleanup(
         if clean_orphans and storage_dir.exists():
             cursor.execute("SELECT id FROM session")
             valid_session_ids = set(row[0] for row in cursor.fetchall())
-            for entry in storage_dir.iterdir():
-                if entry.is_file() and entry.suffix == ".json":
-                    sid = entry.stem
-                    if sid not in valid_session_ids:
-                        all_del_session_ids.add(sid)
+            try:
+                for entry in storage_dir.iterdir():
+                    if entry.is_file() and entry.suffix == ".json":
+                        sid = entry.stem
+                        if sid not in valid_session_ids:
+                            all_del_session_ids.add(sid)
+            except OSError as e:
+                print(color_yellow(f"Warning: could not read storage directory {storage_dir}: {e}"))
 
         for sid in all_del_session_ids:
-            diff_file = storage_dir / f"{sid}.json"
-            if diff_file.exists():
-                files_to_delete.append(diff_file)
+            if sid and str(sid).strip():
+                diff_file = storage_dir / f"{str(sid).strip()}.json"
+                if diff_file.exists():
+                    files_to_delete.append(diff_file)
 
         if files_to_delete:
             print()
@@ -4350,13 +4349,13 @@ def db_run_cleanup(
         # A. Age-based deletes
         if target_session_ids:
             placeholders = ",".join("?" for _ in target_session_ids)
-            for table, col in session_tables:
+            for table, col in SESSION_RELATIONAL_TABLES:
                 cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
                 print(f"[-] Deleted {cursor.rowcount} rows from {table} (age-based)")
 
         # B. Orphan-based deletes
         if clean_orphans:
-            for table, col in session_tables:
+            for table, col in SESSION_RELATIONAL_TABLES:
                 if table == "session":
                     continue
                 cursor.execute(f"""
@@ -4451,6 +4450,10 @@ def main() -> None:
     args = parse_args()
     verbosity = args.verbose
 
+    global OPENCODE_DB_PATH
+    if args.db:
+        OPENCODE_DB_PATH = args.db
+
     # Bridge --compact to --use-model for backward compatibility.
     if args.compact is not None:
         if args.compact:  # --compact MODEL
@@ -4500,6 +4503,31 @@ def main() -> None:
                     _project_id = p["id"]
                     _project_dir = p["directory"]
                     break
+
+        # Resolve project context from session spec if we couldn't resolve from CWD
+        if not _project_id and args.session:
+            all_db_sessions = db_list_sessions(None)
+            resolved = resolve_session_spec(args.session, all_db_sessions) if all_db_sessions else None
+            if resolved:
+                try:
+                    sqlite3 = _get_sqlite()
+                    if sqlite3 and OPENCODE_DB_PATH.exists():
+                        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT project_id, directory FROM session WHERE id = ?", (resolved["id"],))
+                        row = cursor.fetchone()
+                        if row:
+                            _project_id = row[0]
+                            # Query project directory from project table
+                            cursor.execute("SELECT directory FROM project WHERE id = ?", (_project_id,))
+                            proj_row = cursor.fetchone()
+                            if proj_row:
+                                _project_dir = proj_row[0]
+                            else:
+                                _project_dir = row[1]
+                        conn.close()
+                except Exception:
+                    pass
 
     # Handle --list-sessions early.
     if args.list_sessions:
@@ -4766,6 +4794,13 @@ def main() -> None:
         project_path = Path(_project_dir)
         if project_path.is_dir():
             opencode_cwd = project_path
+        elif args.session:
+            log(f"Warning: Resolved project directory '{_project_dir}' does not exist. Falling back to current directory.", verbosity)
+            opencode_cwd = Path.cwd()
+
+    if opencode_cwd is None and args.session:
+        log("No project context found, but session ID was provided. Falling back to current directory.", verbosity)
+        opencode_cwd = Path.cwd()
 
     if opencode_cwd is None:
         print_no_project_context_help(db_list_projects())
@@ -4780,7 +4815,13 @@ def main() -> None:
 
         require_opencode()
 
-        sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
+        try:
+            sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
+        except RecoveryError:
+            if args.session:
+                sessions = []
+            else:
+                raise
 
         if args.session:
             if args.session.startswith("-"):
