@@ -181,9 +181,34 @@ Displays a detailed breakdown of resources removed and disk space reclaimed afte
 |   - DB File Shrunk:    42.12 MB (after VACUUM)             |
 |   - JSON Files Freed:  1.24 MB                             |
 |   - Total Saved:       43.36 MB                            |
-|                                                            |
-|                                                   [ OK ]   |
 +------------------------------------------------------------+
+```
+
+### 1.8 Activity Log & Audit Tab
+This tab displays a scrollable, read-only list of historical operations performed on the database and files, populated from the JSON history sidecar.
+
+```text
++--------------------------------------------------------------------------------------+
+| SESSIONS                   |  [Details]  [Actions]  [Admin]  [Models]  [*Activity]   |
+| > My Project 1 (CWD)       +---------------------------------------------------------+
+|   ses_1391320 (Root)       | AUDIT TRAIL / ACTIVITY LOG                              |
+|   ses_12e8be (Root)        |                                                         |
+|     ⤷ ses_13714 (Child)    | [2026-06-17 19:05:20] DELETE RUN:                       |
+|                            |   - Session: ses_139244 (Report Session 01)             |
+|                            |   - Deleted: 1 session, 51 messages, 206 events         |
+|                            |   - Space Saved: 43.36 MB                               |
+|                            |                                                         |
+|                            | [2026-06-17 19:12:05] COMPACTION RUN:                   |
+|                            |   - Session: ses_12e8be (Finalize topic pipeline)       |
+|                            |   - Model:   uri/its_direct/pt3-claude-opus-4.8         |
+|                            |   - Output:  ./opencode-recovery/ses_12e8be.compacted.md|
+|                            |                                                         |
+|                            | [2026-06-17 19:12:00] RECOVERY GENERATED:               |
+|                            |   - Files:   .transcript.md, .restart.md                |
+|                            |                                                         |
+|                            | ------------------------------------------------------- |
+|                            | [!] Future TODO: Clear Historical Activity Log          |
++----------------------------+---------------------------------------------------------+
 ```
 
 ---
@@ -222,3 +247,22 @@ Displays a detailed breakdown of resources removed and disk space reclaimed afte
     - Count rows deleted per table.
 2.  Populate and display the **Post-Execution Summary Overlay** to present these metrics clearly to the user.
 3.  Load the cumulative totals from `ocman_history.json` and refresh the statistics values in the Database Admin layout.
+
+### 2.6 Activity Tracking and Auditing
+1.  The JSON ledger `ocman_history.json` registers all execution logs under `runs`.
+2.  Every action (compaction run, file generation, prune run) writes a structured audit log containing:
+    - Timestamp
+    - Event Category (e.g. `recovery_generation`, `compaction`, `prune`, `delete`)
+    - Detailed context metadata (e.g., target session ID, target files created, LLM model, tokens processed).
+3.  The TUI's **Activity Log** tab parses this JSON log file and displays a clean, readable audit trail inside a scrollable view.
+
+### 2.7 History Cleanup Stub (Future TODO)
+1.  To support future cleanup needs, the CLI will parse the `--clear-history` option. Invoking it outputs a clear TODO banner:
+    ```text
+    Feature TODO: Historical metrics cleanup option will be added in a future release.
+    ```
+2.  The TUI displays a `[ TODO: Clear History ]` stub button. Clicking this triggers a non-blocking dialog warning:
+    ```text
+    Historical cleanup is planned for a future release.
+    ```
+    No files are modified or deleted by this action.

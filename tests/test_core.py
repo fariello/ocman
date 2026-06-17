@@ -1,7 +1,7 @@
 import os
 import pytest
 from pathlib import Path
-from orsession.core import (
+from ocman_tui.core import (
     expand_config_refs,
     extract_models_from_config,
     resolve_model,

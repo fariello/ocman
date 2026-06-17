@@ -1,0 +1,248 @@
+/* Premium Catppuccin-inspired Slate Theme for Ocman TUI */
+
+Screen {
+    background: #1e1e2e;
+    color: #cdd6f4;
+}
+
+Header {
+    background: #11111b;
+    color: #89b4fa;
+    text-style: bold;
+    height: 3;
+    content-align: center middle;
+    border-bottom: double #313244;
+}
+
+Footer {
+    background: #11111b;
+    color: #a6adc8;
+}
+
+/* Sidebar Styling */
+#sidebar {
+    width: 35;
+    background: #181825;
+    border-right: double #313244;
+    dock: left;
+}
+
+#sidebar Tree {
+    background: transparent;
+    color: #cdd6f4;
+}
+
+#sidebar Tree:focus {
+    color: #89b4fa;
+}
+
+/* Workspace Panels */
+#workspace {
+    background: #1e1e2e;
+}
+
+TabbedContent {
+    background: #1e1e2e;
+}
+
+Tabs {
+    background: #11111b;
+    border-bottom: solid #313244;
+}
+
+Tab {
+    color: #a6adc8;
+    text-style: bold;
+}
+
+Tab:hover {
+    color: #89b4fa;
+    background: #181825;
+}
+
+Tab.--active {
+    color: #cba6f7;
+    background: #1e1e2e;
+    text-style: bold;
+}
+
+/* Forms, Fields and Inputs */
+Input {
+    background: #313244;
+    color: #cdd6f4;
+    border: tall #45475a;
+}
+
+Input:focus {
+    border: tall #cba6f7;
+}
+
+Select {
+    background: #313244;
+    color: #cdd6f4;
+    border: tall #45475a;
+}
+
+Select:focus {
+    border: tall #cba6f7;
+}
+
+Checkbox {
+    color: #a6adc8;
+    background: transparent;
+}
+
+Checkbox:focus {
+    color: #cba6f7;
+}
+
+Checkbox > .checkbox--box {
+    color: #45475a;
+}
+
+Checkbox > .checkbox--box.--checked {
+    color: #cba6f7;
+}
+
+/* Buttons */
+Button {
+    background: #313244;
+    color: #cdd6f4;
+    border: tall #45475a;
+    text-style: bold;
+    margin: 1 2;
+}
+
+Button:hover {
+    background: #45475a;
+    color: #f5c2e7;
+    border: tall #f5c2e7;
+}
+
+Button.-primary {
+    background: #89b4fa;
+    color: #11111b;
+    border: tall #b4befe;
+}
+
+Button.-primary:hover {
+    background: #b4befe;
+    color: #11111b;
+}
+
+Button.-success {
+    background: #a6e3a1;
+    color: #11111b;
+    border: tall #94e2d5;
+}
+
+Button.-success:hover {
+    background: #94e2d5;
+    color: #11111b;
+}
+
+Button.-error {
+    background: #f38ba8;
+    color: #11111b;
+    border: tall #f9e2af;
+}
+
+Button.-error:hover {
+    background: #f9e2af;
+    color: #11111b;
+}
+
+/* Grid layout elements */
+.grid-container {
+    layout: grid;
+    grid-size: 2;
+    grid-columns: 1fr 1fr;
+    grid-rows: auto;
+    grid-gutter: 1 2;
+    padding: 1 2;
+}
+
+.panel-card {
+    background: #181825;
+    border: round #313244;
+    padding: 1 2;
+}
+
+.panel-card-title {
+    color: #cba6f7;
+    text-style: bold;
+    margin-bottom: 1;
+}
+
+/* DataTable Custom Styles */
+DataTable {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    height: 1fr;
+    border: round #313244;
+}
+
+DataTable > .datatable--header {
+    background: #313244;
+    color: #cba6f7;
+    text-style: bold;
+}
+
+DataTable:focus > .datatable--cursor {
+    background: #45475a;
+    color: #89b4fa;
+}
+
+/* Custom Text view elements */
+.log-area {
+    background: #11111b;
+    color: #a6e3a1;
+    border: round #313244;
+    padding: 1 2;
+    height: 1fr;
+    overflow-y: scroll;
+}
+
+.transcript-area {
+    background: #1e1e2e;
+    color: #cdd6f4;
+    border: round #313244;
+    padding: 1 2;
+    height: 1fr;
+    overflow-y: scroll;
+}
+
+.info-label {
+    color: #a6adc8;
+    text-style: bold;
+}
+
+.info-value {
+    color: #cdd6f4;
+}
+
+/* Modal Overlay dialogs */
+ModalScreen {
+    align: center middle;
+    background: rgba(0, 0, 0, 0.6);
+}
+
+#dialog-container {
+    width: 60;
+    height: auto;
+    background: #1e1e2e;
+    border: round #cba6f7;
+    padding: 1 2;
+    align: center middle;
+}
+
+#dialog-title {
+    color: #f38ba8;
+    text-style: bold;
+    content-align: center middle;
+    margin-bottom: 1;
+}
+
+#dialog-message {
+    margin-bottom: 1;
+}

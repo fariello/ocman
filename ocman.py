@@ -3706,10 +3706,16 @@ Examples:
     )
 
     parser.add_argument(
+        "--clear-history",
+        action="store_true",
+        help="Clear historical metrics and activity log.",
+    )
+
+    parser.add_argument(
         "command",
         nargs="?",
-        choices=["info", "help"],
-        help="Optional command to execute (e.g. 'info', 'help').",
+        choices=["info", "help", "ui", "gui"],
+        help="Optional command to execute (e.g. 'info', 'help', 'ui', 'gui').",
     )
 
     args = parser.parse_args()
@@ -4944,6 +4950,36 @@ def main() -> None:
             args.use_model = "__interactive__"
     elif not hasattr(args, 'use_model') or args.use_model is None:
         args.use_model = None
+
+    # Handle --clear-history early.
+    if getattr(args, "clear_history", False):
+        default_history = {
+            "cumulative": {
+                "projects_deleted": 0,
+                "sessions_deleted": 0,
+                "subagents_deleted": 0,
+                "messages_deleted": 0,
+                "cost_deleted": 0.0,
+                "tokens_input_deleted": 0,
+                "tokens_output_deleted": 0
+            },
+            "runs": []
+        }
+        _save_history(default_history)
+        print(color_green("Historical metrics and activity log successfully cleared."))
+        return
+
+    # Handle ui or gui commands early.
+    if getattr(args, "command", None) in ("ui", "gui"):
+        try:
+            from ocman_tui.app import OrsessionApp
+            app = OrsessionApp()
+            app.run()
+        except ImportError as e:
+            die(f"Failed to load TUI dependencies (textual/rich). Please install them:\n{e}")
+        except Exception as e:
+            die(f"TUI error: {e}")
+        return
 
     # Handle info command early.
     if args.info or getattr(args, "command", None) == "info":

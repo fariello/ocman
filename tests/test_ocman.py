@@ -16,9 +16,12 @@ from ocman import (
 def temp_db(tmp_path):
     db_path = tmp_path / "test_opencode.db"
     
-    # Save original DB path
+    # Save original DB path and history path
     orig_path = ocman.OPENCODE_DB_PATH
+    orig_history_path = ocman.OPENCODE_HISTORY_PATH
+    
     ocman.OPENCODE_DB_PATH = db_path
+    ocman.OPENCODE_HISTORY_PATH = tmp_path / "test_ocman_history.json"
     
     # Initialize SQLite database with opencode schema
     conn = sqlite3.connect(str(db_path))
@@ -65,8 +68,9 @@ def temp_db(tmp_path):
     
     yield db_path
     
-    # Restore original DB path
+    # Restore original DB path and history path
     ocman.OPENCODE_DB_PATH = orig_path
+    ocman.OPENCODE_HISTORY_PATH = orig_history_path
 
 
 def test_db_list_projects_empty(temp_db):

@@ -58,7 +58,7 @@ No dependencies beyond Python 3.10+ and the `opencode` CLI.
 - No third-party packages — stdlib only
 - For `--use-model`: an OpenAI-compatible LLM provider in `~/.config/opencode/opencode.json`
 
-**TUI app** (`orsession`):
+**TUI app** (`ocman ui` / `ocman gui`):
 - Python 3.10+
 - `opencode` CLI on PATH
 - `textual` and `rich` (installed automatically via `pip install .`)
@@ -84,25 +84,24 @@ chmod +x ocman.py
 cp ocman.py /wherever/you/like/
 ```
 
-### Interactive TUI (orsession)
+### Interactive TUI
 
 For a full interactive experience with session browsing, drill-down previews,
-and guided recovery/compaction workflows, install the `orsession` TUI app:
+and guided recovery/compaction workflows, launch the integrated TUI app:
 
 ```bash
-# Install from the repo (requires Python 3.10+ and pip)
+# Install from the repo (requires Python 3.10+ and dependencies)
 git clone https://github.com/fariello/opencode-recover.git
 cd opencode-recover
 pip install .
 
 # Launch the TUI
-orsession
-
-# Or point it at a different project
-orsession -d /path/to/other/project
+ocman ui
+# Or use the alias
+ocman gui
 ```
 
-`orsession` uses [textual](https://textual.textualize.io/) for the terminal UI.
+`ocman ui` uses [textual](https://textual.textualize.io/) for the terminal UI.
 It provides:
 - Sortable session list with recovery status indicators
 - Session detail with metadata, cost, tokens, and conversation previews
