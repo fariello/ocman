@@ -4097,6 +4097,9 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         cursor.execute("BEGIN TRANSACTION;")
         transaction_started = True
         
+        # Gather metrics of sessions to be deleted
+        stats = gather_deletion_metrics(session_ids, conn)
+
         for table, col in SESSION_RELATIONAL_TABLES:
             cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
             print(f"[-] Deleted {cursor.rowcount} rows from {table}")
@@ -4105,6 +4108,9 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         transaction_started = False
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
+
+        # Save metrics to JSON sidecar
+        save_deletion_metrics("delete", stats)
 
         # Delete disk files
         for f in files_to_delete:
@@ -4433,6 +4439,9 @@ def db_run_cleanup(
         cursor.execute("BEGIN TRANSACTION;")
         transaction_started = True
         
+        # Gather metrics of sessions to be deleted (age-based)
+        stats = gather_deletion_metrics(target_session_ids, conn) if target_session_ids else None
+
         # A. Age-based deletes
         if target_session_ids:
             placeholders = ",".join("?" for _ in target_session_ids)
@@ -4456,6 +4465,10 @@ def db_run_cleanup(
         transaction_started = False
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
+
+        # Save metrics to JSON sidecar
+        if stats:
+            save_deletion_metrics("clean", stats)
 
         # 6. Delete disk files
         deleted_files_count = 0
@@ -4532,6 +4545,127 @@ def human_size_local(bytes_size: int) -> str:
         return f"{bytes_size / 1024:.2f} KB"
     else:
         return f"{bytes_size} B"
+
+
+OPENCODE_HISTORY_PATH: Path = Path.home() / ".local" / "share" / "opencode" / "ocman_history.json"
+
+
+def _load_history() -> dict:
+    """Load the historical metrics JSON sidecar safely."""
+    default_history = {
+        "cumulative": {
+            "projects_deleted": 0,
+            "sessions_deleted": 0,
+            "subagents_deleted": 0,
+            "messages_deleted": 0,
+            "cost_deleted": 0.0,
+            "tokens_input_deleted": 0,
+            "tokens_output_deleted": 0
+        },
+        "runs": []
+    }
+    if not OPENCODE_HISTORY_PATH.exists():
+        return default_history
+
+    try:
+        with open(OPENCODE_HISTORY_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            if "cumulative" not in data:
+                data["cumulative"] = default_history["cumulative"]
+            else:
+                for k, v in default_history["cumulative"].items():
+                    if k not in data["cumulative"]:
+                        data["cumulative"][k] = v
+            if "runs" not in data:
+                data["runs"] = []
+            return data
+    except Exception:
+        return default_history
+
+
+def _save_history(data: dict) -> None:
+    """Atomically save historical metrics to sidecar JSON."""
+    try:
+        OPENCODE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.NamedTemporaryFile("w", dir=str(OPENCODE_HISTORY_PATH.parent), delete=False, encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            tmp_name = f.name
+        os.replace(tmp_name, str(OPENCODE_HISTORY_PATH))
+    except Exception as e:
+        print(color_yellow(f"Warning: failed to save historical metrics: {e}"))
+
+
+def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
+    """Gather metrics of sessions about to be deleted from SQLite database."""
+    if not session_ids:
+        return None
+
+    try:
+        cursor = conn.cursor()
+        placeholders = ",".join("?" for _ in session_ids)
+
+        cursor.execute(f"""
+            SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output), COUNT(*)
+            FROM session
+            WHERE id IN ({placeholders})
+        """, session_ids)
+        cost_sum, tokens_in_sum, tokens_out_sum, sessions_cnt = cursor.fetchone()
+        cost_sum = cost_sum or 0.0
+        tokens_in_sum = tokens_in_sum or 0
+        tokens_out_sum = tokens_out_sum or 0
+        sessions_cnt = sessions_cnt or 0
+
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM session
+            WHERE id IN ({placeholders})
+              AND parent_id IS NOT NULL AND parent_id != ''
+        """, session_ids)
+        subagents_cnt = cursor.fetchone()[0] or 0
+
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM message
+            WHERE session_id IN ({placeholders})
+        """, session_ids)
+        messages_cnt = cursor.fetchone()[0] or 0
+
+        return {
+            "sessions_count": sessions_cnt,
+            "subagents_count": subagents_cnt,
+            "messages_count": messages_cnt,
+            "cost": cost_sum,
+            "tokens_input": tokens_in_sum,
+            "tokens_output": tokens_out_sum
+        }
+    except Exception as e:
+        print(color_yellow(f"Warning: could not gather deletion metrics: {e}"))
+        return None
+
+
+def save_deletion_metrics(reason: str, stats: dict | None) -> None:
+    """Save the gathered deletion metrics to the JSON sidecar."""
+    if not stats:
+        return
+
+    try:
+        history = _load_history()
+        c = history["cumulative"]
+        c["projects_deleted"] = c.get("projects_deleted", 0)
+        c["sessions_deleted"] = c.get("sessions_deleted", 0) + stats["sessions_count"]
+        c["subagents_deleted"] = c.get("subagents_deleted", 0) + stats["subagents_count"]
+        c["messages_deleted"] = c.get("messages_deleted", 0) + stats["messages_count"]
+        c["cost_deleted"] = c.get("cost_deleted", 0.0) + stats["cost"]
+        c["tokens_input_deleted"] = c.get("tokens_input_deleted", 0) + stats["tokens_input"]
+        c["tokens_output_deleted"] = c.get("tokens_output_deleted", 0) + stats["tokens_output"]
+
+        run_record = {
+            "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "reason": reason,
+            **stats
+        }
+        history["runs"].append(run_record)
+        _save_history(history)
+    except Exception as e:
+        print(color_yellow(f"Warning: could not save deletion metrics: {e}"))
 
 
 def db_show_info(args) -> None:
@@ -4710,6 +4844,17 @@ def db_show_info(args) -> None:
         except Exception as e:
             diff_size_str = f"Error: {e}"
 
+    # Load history sidecar
+    history = _load_history()
+    h = history["cumulative"]
+    hist_projects = h.get("projects_deleted", 0)
+    hist_sessions = h.get("sessions_deleted", 0)
+    hist_subagents = h.get("subagents_deleted", 0)
+    hist_messages = h.get("messages_deleted", 0)
+    hist_cost = h.get("cost_deleted", 0.0)
+    hist_tokens_in = h.get("tokens_input_deleted", 0)
+    hist_tokens_out = h.get("tokens_output_deleted", 0)
+
     title_bar = color_bold("========================================================")
     print(title_bar)
     print(color_cyan(color_bold("                OPENCODE SYSTEM INFORMATION")))
@@ -4726,16 +4871,38 @@ def db_show_info(args) -> None:
     print()
 
     print(color_bold("Database Statistics:"))
-    print(f"  Projects:        {projects_count}")
-    print(f"  Sessions:        {sessions_count} ({root_sessions} root, {child_sessions} subagent)")
-    print(f"  Messages:        {messages_count}")
+    projects_str = f"{projects_count}"
+    if hist_projects > 0:
+        projects_str += f" active (deleted: {hist_projects})"
+    print(f"  Projects:        {projects_str}")
+    
+    sessions_str = f"{sessions_count} active ({root_sessions} root, {child_sessions} subagent)"
+    if hist_sessions > 0:
+        sessions_str += f" | {hist_sessions} deleted ({hist_subagents} subagent)"
+    print(f"  Sessions:        {sessions_str}")
+    
+    messages_str = f"{messages_count:,} active"
+    if hist_messages > 0:
+        messages_str += f" | {hist_messages:,} deleted"
+    print(f"  Messages:        {messages_str}")
+    
     print(f"  Time Range:      {oldest_str} to {newest_str}")
     print()
 
     print(color_bold("Usage Metrics:"))
-    print(f"  Total Cost:      {color_green(f'${total_cost:.4f}')}")
-    print(f"  Tokens Input:    {total_tokens_in:,}")
-    print(f"  Tokens Output:   {total_tokens_out:,}")
+    grand_cost = total_cost + hist_cost
+    grand_tokens_in = total_tokens_in + hist_tokens_in
+    grand_tokens_out = total_tokens_out + hist_tokens_out
+
+    if hist_cost > 0.0 or hist_tokens_in > 0 or hist_tokens_out > 0:
+        print(f"  Total Cost:      {color_green(f'${grand_cost:.4f}')} (Active: ${total_cost:.4f}, Historical: ${hist_cost:.4f})")
+        print(f"  Tokens Input:    {grand_tokens_in:,} (Active: {total_tokens_in:,}, Historical: {hist_tokens_in:,})")
+        print(f"  Tokens Output:   {grand_tokens_out:,} (Active: {total_tokens_out:,}, Historical: {hist_tokens_out:,})")
+    else:
+        print(f"  Total Cost:      {color_green(f'${total_cost:.4f}')}")
+        print(f"  Tokens Input:    {total_tokens_in:,}")
+        print(f"  Tokens Output:   {total_tokens_out:,}")
+
     if top_models:
         print(f"  Top Models:")
         for idx, (m, count) in enumerate(top_models, 1):

@@ -136,7 +136,7 @@ def test_db_delete_session_recursive_path_traversal(temp_db):
     assert "Unsafe session ID detected" in str(excinfo.value)
 
 
-def test_db_run_cleanup_age_based(temp_db, monkeypatch):
+def test_db_run_cleanup_age_based(temp_db, monkeypatch, mock_history_path):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     
@@ -215,5 +215,82 @@ def test_parse_args_help(monkeypatch, capsys):
     # Argparse help output can be on stdout or stderr depending on python version/argparse implementation
     output = captured.out + captured.err
     assert "usage: ocman" in output
+
+
+@pytest.fixture
+def mock_history_path(tmp_path, monkeypatch):
+    hist_path = tmp_path / "test_ocman_history.json"
+    monkeypatch.setattr(ocman, "OPENCODE_HISTORY_PATH", hist_path)
+    return hist_path
+
+
+def test_gather_and_save_deletion_metrics(temp_db, mock_history_path):
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, model)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.05, 1000, 500, '{"id": "gpt-4"}')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, model, parent_id)
+        VALUES ('sess2', 'proj1', 'Session 2', 1100, 2100, 0.02, 400, 200, '{"id": "gpt-4"}', 'sess1')
+    """)
+    cursor.execute("INSERT INTO message (id, session_id) VALUES ('msg1', 'sess1')")
+    cursor.execute("INSERT INTO message (id, session_id) VALUES ('msg2', 'sess2')")
+    conn.commit()
+
+    # Gather metrics
+    stats = ocman.gather_deletion_metrics(['sess1', 'sess2'], conn)
+    assert stats is not None
+    assert stats["sessions_count"] == 2
+    assert stats["subagents_count"] == 1
+    assert stats["messages_count"] == 2
+    assert stats["cost"] == pytest.approx(0.07)
+    assert stats["tokens_input"] == 1400
+    assert stats["tokens_output"] == 700
+
+    # Save metrics
+    ocman.save_deletion_metrics("delete", stats)
+    assert mock_history_path.exists()
+
+    history = ocman._load_history()
+    c = history["cumulative"]
+    assert c["sessions_deleted"] == 2
+    assert c["subagents_deleted"] == 1
+    assert c["messages_deleted"] == 2
+    assert c["cost_deleted"] == pytest.approx(0.07)
+    assert c["tokens_input_deleted"] == 1400
+    assert c["tokens_output_deleted"] == 700
+
+    conn.close()
+
+
+def test_db_delete_session_recursive_saves_history(temp_db, mock_history_path):
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.10, 1000, 500)
+    """)
+    conn.commit()
+    conn.close()
+
+    # Run recursive delete (mock confirm input)
+    import builtins
+    orig_input = builtins.input
+    builtins.input = lambda _: 'yes'
+    try:
+        db_delete_session_recursive("sess1", dry_run=False, force=True, verbosity=0)
+    finally:
+        builtins.input = orig_input
+
+    # History should be updated
+    history = ocman._load_history()
+    c = history["cumulative"]
+    assert c["sessions_deleted"] == 1
+    assert c["cost_deleted"] == pytest.approx(0.10)
+
 
 
