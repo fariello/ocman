@@ -141,6 +141,51 @@ A modal screen that blocks the dashboard during recursive deletes to prevent acc
 +--------------------------------------------------------------------------------------+
 ```
 
+### 1.6 Orphaned File Inspector Modal
+This modal lets users inspect and selectively delete orphaned session diff JSON files on disk.
+
+```text
++------------------------------------------------------------+
+| ORPHANED FILE INSPECTOR                                    |
++------------------------------------------------------------+
+| The following diff JSON files on disk are orphaned         |
+| (they have no corresponding session in the database):      |
+|                                                            |
+| [x] ses_orphan1.json (Size: 12.4 KB, Created: 2026-06-01)  |
+| [ ] ses_orphan2.json (Size: 45.1 KB, Created: 2026-06-03)  |
+| [x] ses_orphan3.json (Size: 104.2 KB, Created: 2026-06-05) |
+|                                                            |
+| Selected: 2 files | Total Size: 116.6 KB                   |
+|                                                            |
+|      [ Refresh List ]    [ Cancel ]    [ DELETE SELECTED ] |
++------------------------------------------------------------+
+```
+
+### 1.7 Post-Execution Summary Overlay
+Displays a detailed breakdown of resources removed and disk space reclaimed after cleanups, prunes, or deletions have finished.
+
+```text
++------------------------------------------------------------+
+| OPERATION COMPLETE SUMMARY                                 |
++------------------------------------------------------------+
+| Deletion/Prune operation completed successfully.           |
+|                                                            |
+| DATABASE CHANGES:                                          |
+|   - Sessions Deleted:  12 (4 root, 8 subagent)             |
+|   - Database Rows:     event: -1,234, part: -412           |
+|                                                            |
+| DISK STORAGE CHANGES:                                      |
+|   - Diff Files Deleted: 10 JSON files                      |
+|                                                            |
+| SPACE RECLAIMED:                                           |
+|   - DB File Shrunk:    42.12 MB (after VACUUM)             |
+|   - JSON Files Freed:  1.24 MB                             |
+|   - Total Saved:       43.36 MB                            |
+|                                                            |
+|                                                   [ OK ]   |
++------------------------------------------------------------+
+```
+
 ---
 
 ## 2. Functional Workflows
@@ -163,7 +208,17 @@ A modal screen that blocks the dashboard during recursive deletes to prevent acc
 4.  Clicking "Run Compaction API" spawns a background thread running `call_compaction_api`.
 5.  A live progress bar is updated. On completion, the generated compacted markdown is shown in a preview window.
 
-### 2.4 Database Administrative Tasks
+### 2.4 Database Administrative Tasks & Orphan Sweeps
 1.  The `Database Admin` tab pulls data from `db_show_info` and the sidecar `ocman_history.json`.
 2.  Triggering a clean runs the prune function. If `dry_run` is selected, it output logs the potential deletes without modifying the database.
 3.  If a real delete occurs, the database stats refresh dynamically to show the new sizes and incremented historical deleted ledger metrics.
+4.  Opening the **Orphaned File Inspector** scans `storage/session_diff` on disk and compares files with active session IDs in the DB.
+5.  Users select orphan files to sweep. The selected files are unlinked, and space reclaimed is calculated.
+
+### 2.5 Post-Execution Reporting
+1.  Upon completing any deletion, age-based prune, or orphan file sweep:
+    - Compare `opencode.db` size before the run with the post-`VACUUM` size to get the SQLite reclaimed space.
+    - Measure sizes of deleted JSON diff files.
+    - Count rows deleted per table.
+2.  Populate and display the **Post-Execution Summary Overlay** to present these metrics clearly to the user.
+3.  Load the cumulative totals from `ocman_history.json` and refresh the statistics values in the Database Admin layout.
