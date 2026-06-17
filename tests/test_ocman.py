@@ -1,0 +1,171 @@
+import os
+import sqlite3
+import pytest
+from pathlib import Path
+import ocman
+from ocman import (
+    db_list_projects,
+    db_list_sessions,
+    db_delete_session_recursive,
+    db_run_cleanup,
+    RecoveryError,
+)
+
+@pytest.fixture
+def temp_db(tmp_path):
+    db_path = tmp_path / "test_opencode.db"
+    
+    # Save original DB path
+    orig_path = ocman.OPENCODE_DB_PATH
+    ocman.OPENCODE_DB_PATH = db_path
+    
+    # Initialize SQLite database with opencode schema
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+    
+    # Create tables
+    cursor.execute("""
+        CREATE TABLE project (
+            id TEXT PRIMARY KEY,
+            worktree TEXT,
+            name TEXT
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE session (
+            id TEXT PRIMARY KEY,
+            project_id TEXT,
+            title TEXT,
+            time_created INTEGER,
+            time_updated INTEGER,
+            directory TEXT,
+            cost REAL,
+            tokens_input INTEGER,
+            tokens_output INTEGER,
+            tokens_cache_read INTEGER,
+            summary_additions INTEGER,
+            summary_deletions INTEGER,
+            summary_files INTEGER,
+            slug TEXT,
+            model TEXT,
+            agent TEXT,
+            parent_id TEXT
+        )
+    """)
+    
+    # Create session related tables
+    for table, col in ocman.SESSION_RELATIONAL_TABLES:
+        if table == "session":
+            continue
+        cursor.execute(f"CREATE TABLE {table} (id TEXT, {col} TEXT)")
+        
+    conn.commit()
+    conn.close()
+    
+    yield db_path
+    
+    # Restore original DB path
+    ocman.OPENCODE_DB_PATH = orig_path
+
+
+def test_db_list_projects_empty(temp_db):
+    projects = db_list_projects()
+    assert len(projects) == 0
+
+
+def test_db_list_projects_and_sessions(temp_db):
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    
+    # Insert project
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    
+    # Insert sessions
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, '/path/to/proj')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess2', 'proj1', 'Session 2', 1100, 2100, '/path/to/proj', 'sess1')
+    """)
+    conn.commit()
+    conn.close()
+    
+    projects = db_list_projects()
+    assert len(projects) == 1
+    assert projects[0]["id"] == "proj1"
+    assert projects[0]["session_count"] == 2
+    
+    sessions = db_list_sessions("proj1")
+    assert len(sessions) == 2
+    assert sessions[0]["id"] == "sess2"  # Sorted by time_updated DESC
+    assert sessions[1]["id"] == "sess1"
+
+
+def test_db_delete_session_recursive_dry_run(temp_db):
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000)
+    """)
+    # Insert message row linked to session
+    cursor.execute("INSERT INTO message (id, session_id) VALUES ('msg1', 'sess1')")
+    conn.commit()
+    conn.close()
+    
+    # Dry run should not modify DB
+    db_delete_session_recursive("sess1", dry_run=True, force=True, verbosity=0)
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM session")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM message")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_db_delete_session_recursive_path_traversal(temp_db):
+    # Pass a session ID containing path traversal characters
+    with pytest.raises(RecoveryError) as excinfo:
+        db_delete_session_recursive("../unsafe_id", dry_run=False, force=True, verbosity=0)
+    assert "Unsafe session ID detected" in str(excinfo.value)
+
+
+def test_db_run_cleanup_age_based(temp_db, monkeypatch):
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    
+    # Insert old session (created 10 days ago) and new session (created today)
+    import time
+    now_ms = int(time.time() * 1000)
+    ten_days_ago_ms = now_ms - (10 * 86400 * 1000)
+    
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated)
+        VALUES ('old_sess', 'proj1', 'Old Session', ?, ?)
+    """, (ten_days_ago_ms, ten_days_ago_ms))
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated)
+        VALUES ('new_sess', 'proj1', 'New Session', ?, ?)
+    """, (now_ms, now_ms))
+    
+    conn.commit()
+    conn.close()
+    
+    # Mock input() to automatically confirm deletion
+    monkeypatch.setattr('builtins.input', lambda _: 'yes')
+    
+    # Run cleanup with 5 days retention
+    db_run_cleanup(days=5, project_id=None, project_dir=None, dry_run=False, force=True, clean_orphans=False, verbosity=0)
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM session")
+    remaining_ids = [row[0] for row in cursor.fetchall()]
+    assert "new_sess" in remaining_ids
+    assert "old_sess" not in remaining_ids
+    conn.close()

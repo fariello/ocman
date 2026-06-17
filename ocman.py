@@ -1468,7 +1468,10 @@ def write_export_to_temp(
                 text=True,
                 check=False,
                 cwd=cwd,
+                timeout=120,
             )
+    except subprocess.TimeoutExpired as error:
+        raise RecoveryError(f"Command timed out after 120s: {' '.join(command)}") from error
     except FileNotFoundError as error:
         raise RecoveryError("Command not found: opencode") from error
     except OSError as error:
@@ -3460,7 +3463,6 @@ Examples:
     parser.add_argument(
         "-ct", "--clean-tmp",
         action="store_true",
-        dest="clean",
         help="Remove leftover temporary export files from /tmp.",
     )
 
@@ -3925,6 +3927,10 @@ def run_compaction(
 
 def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int) -> None:
     """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
+    clean_sid = str(session_id).strip()
+    if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
+        raise RecoveryError(f"Unsafe session ID detected: {clean_sid}")
+
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
@@ -3952,6 +3958,8 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
                 raise
             pass
 
+    conn = None
+    transaction_started = False
     try:
         conn = sqlite3.connect(str(OPENCODE_DB_PATH))
         cursor = conn.cursor()
@@ -4002,11 +4010,21 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
             print(f"  {table:<25}: {count:,}")
 
         # Get corresponding storage files
-        storage_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
         files_to_delete = []
         for sid in session_ids:
             if sid and str(sid).strip():
-                diff_file = storage_dir / f"{str(sid).strip()}.json"
+                clean_sid = str(sid).strip()
+                if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
+                    raise RecoveryError(f"Unsafe session ID detected: {clean_sid}")
+                diff_file = (storage_dir / f"{clean_sid}.json").resolve()
+                try:
+                    if diff_file.parent != storage_dir:
+                        raise RecoveryError(f"Path traversal detected: resolved path {diff_file} is outside storage directory {storage_dir}")
+                except Exception as ex:
+                    if isinstance(ex, RecoveryError):
+                        raise
+                    raise RecoveryError(f"Invalid path for session ID {clean_sid}: {ex}")
                 if diff_file.exists():
                     files_to_delete.append(diff_file)
 
@@ -4019,7 +4037,6 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         if dry_run:
             print()
             print("[*] Dry run complete. No database changes were made.")
-            conn.close()
             return
 
         print()
@@ -4030,12 +4047,10 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
             confirmation = input("Type 'yes' to confirm deletion: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
-            conn.close()
             return
 
         if confirmation != "yes":
             print("Cancelled.")
-            conn.close()
             return
 
         # Create backup directory and backup database file family
@@ -4057,19 +4072,20 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         except Exception as e:
             print(color_red(f"[-] Backup failed: {e}"))
             print(color_red("    Aborting deletion for safety."))
-            conn.close()
             return
 
         # Perform deletion
         print("[*] Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
+        transaction_started = True
         
         for table, col in SESSION_RELATIONAL_TABLES:
             cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
             print(f"[-] Deleted {cursor.rowcount} rows from {table}")
 
         cursor.execute("COMMIT;")
+        transaction_started = False
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
 
@@ -4086,7 +4102,6 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
-        conn.close()
         print(color_green("Deletion complete!"))
         
         print("--------------------------------------------------------")
@@ -4107,7 +4122,21 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print("--------------------------------------------------------")
 
     except Exception as e:
+        if conn and transaction_started:
+            try:
+                conn.rollback()
+                print(color_yellow("[*] Transaction rolled back."))
+            except Exception:
+                pass
+        if isinstance(e, RecoveryError):
+            raise
         raise RecoveryError(f"Database operation failed: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def db_run_cleanup(
@@ -4176,6 +4205,8 @@ def db_run_cleanup(
         print("Dry Run:       ACTIVE (no changes will be made)")
     print("--------------------------------------------------------")
 
+    conn = None
+    transaction_started = False
     try:
         conn = sqlite3.connect(str(OPENCODE_DB_PATH))
         cursor = conn.cursor()
@@ -4294,7 +4325,7 @@ def db_run_cleanup(
                 print(f"  {table:<25}: {age_count:,}")
 
         # Get list of files to delete from disk
-        storage_dir = Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff"
+        storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
         files_to_delete = []
         all_del_session_ids = set(target_session_ids)
         
@@ -4312,7 +4343,17 @@ def db_run_cleanup(
 
         for sid in all_del_session_ids:
             if sid and str(sid).strip():
-                diff_file = storage_dir / f"{str(sid).strip()}.json"
+                clean_sid = str(sid).strip()
+                if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
+                    raise RecoveryError(f"Unsafe session ID detected: {clean_sid}")
+                diff_file = (storage_dir / f"{clean_sid}.json").resolve()
+                try:
+                    if diff_file.parent != storage_dir:
+                        raise RecoveryError(f"Path traversal detected: resolved path {diff_file} is outside storage directory {storage_dir}")
+                except Exception as ex:
+                    if isinstance(ex, RecoveryError):
+                        raise
+                    raise RecoveryError(f"Invalid path for session ID {clean_sid}: {ex}")
                 if diff_file.exists():
                     files_to_delete.append(diff_file)
 
@@ -4329,13 +4370,11 @@ def db_run_cleanup(
         if total_rows_to_delete == 0 and not files_to_delete:
             print()
             print("[+] Clean slate! No data found to clean.")
-            conn.close()
             return
 
         if dry_run:
             print()
             print("[*] Dry run complete. No database changes were made.")
-            conn.close()
             return
 
         # 3. Confirmation
@@ -4344,12 +4383,10 @@ def db_run_cleanup(
             confirmation = input("Type 'yes' to confirm database prune and vacuum: ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\nCancelled.")
-            conn.close()
             return
 
         if confirmation != "yes":
             print("Cancelled.")
-            conn.close()
             return
 
         # 4. Create database backup family
@@ -4371,13 +4408,13 @@ def db_run_cleanup(
         except Exception as e:
             print(color_red(f"[-] Backup failed: {e}"))
             print(color_red("    Aborting cleanup for safety."))
-            conn.close()
             return
 
         # 5. Execute cleanup inside a transaction
         print("[*] Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
+        transaction_started = True
         
         # A. Age-based deletes
         if target_session_ids:
@@ -4399,6 +4436,7 @@ def db_run_cleanup(
                     print(f"[-] Deleted {cursor.rowcount} orphaned rows from {table}")
 
         cursor.execute("COMMIT;")
+        transaction_started = False
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
 
@@ -4444,10 +4482,22 @@ def db_run_cleanup(
             print(f"     rm -f '{shm_file}'")
         print("--------------------------------------------------------")
 
-        conn.close()
-
     except Exception as e:
+        if conn and transaction_started:
+            try:
+                conn.rollback()
+                print(color_yellow("[*] Transaction rolled back."))
+            except Exception:
+                pass
+        if isinstance(e, RecoveryError):
+            raise
         raise RecoveryError(f"Database cleanup failed: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 # Helper sizing functions locally
 def get_file_size_local(file_path: Path) -> int:
@@ -4896,7 +4946,7 @@ def main() -> None:
         if prior_context:
             print(f"Loaded prior context: {len(args.input_compact) + len(args.input_restart) + len(args.input_transcript)} file(s)")
 
-        if args.clean:
+        if args.clean_tmp:
             clean_temp_files(verbosity=verbosity)
 
         if args.clean_previous:
@@ -4926,7 +4976,7 @@ def main() -> None:
 
         # If only cleaning was requested (no recovery/compaction), exit early.
         clean_only = (
-            (args.clean or args.clean_previous)
+            (args.clean_tmp or args.clean_previous)
             and not args.use_model
             and not args.input_compact
             and not args.input_restart

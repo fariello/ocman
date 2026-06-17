@@ -1,7 +1,11 @@
 #!/bin/bash
+# WARNING: This script is DEPRECATED and OBSOLETE.
+# It performs a complete dump-and-rebuild, which is ineffective at solving
+# database bloat. Use the official 'ocman --clean' utility instead.
 
 DB_PATH="$HOME/.local/share/opencode/opencode.db"
 BACKUP_FILE="$HOME/.local/share/opencode/tmp_rebuild_backup.sql"
+
 
 # 1. Validate database file presence
 if [ ! -f "$DB_PATH" ]; then

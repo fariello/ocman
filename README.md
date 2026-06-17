@@ -117,6 +117,12 @@ The CLI tool (`ocman` / `ocman.py`) remains fully standalone with
 zero dependencies — use it when you want scripting, CI integration, or
 don't want to install packages.
 
+> [!NOTE]
+> **Developer Note on Editable Installs**:
+> If you install the package in editable mode (`pip install -e .`), local edits to `ocman.py` will not be dynamically reflected in the globally installed `ocman` command because Hatchling's editable finder does not link top-level single-file modules mapped via `force-include`.
+> 
+> To test local edits to `ocman.py`, execute the script directly as `./ocman.py` or prepend the project directory to your Python path: `PYTHONPATH=. pytest` or `PYTHONPATH=. python3 -m ocman`.
+
 ---
 
 ## Usage Examples
@@ -229,8 +235,8 @@ ocman --show-compaction-prompt
 | `-d` | `--session-dir` | Project directory where the session was run |
 | `-o` | `--out` | Output directory (default: `./opencode-recovery`) |
 | `-k` | `--keep-temp` | Preserve the temporary exported JSON |
-| `-c` | `--clean` | Remove leftover temp directories |
-| | `--clean-previous` | Remove prior recovery files for the session |
+| `-ct`| `--clean-tmp` | Remove leftover temporary export files from `/tmp` |
+| `-cp`| `--clean-previous` | Remove prior recovery files for the session |
 | `-t` | `--include-tools` | Include tool/function messages in extraction |
 | | `--all-roles` | Include system and tool roles (not just user/assistant) |
 | `-ml` | `--max-lines` | Max output lines (truncates from tail) |
@@ -241,9 +247,17 @@ ocman --show-compaction-prompt
 | `-oc` | `--output-compact` | Explicit output path for compact prompt |
 | `-or` | `--output-restart` | Explicit output path for restart file |
 | `-ot` | `--output-transcript` | Explicit output path for transcript |
-| | `--show-models` | Display available models and exit |
+| `-sm`| `--show-models` | Display available models and exit |
 | | `--show-compaction-prompt` | Display the compaction prompt template and exit |
-| `-m` | `--use-model` | Compact via LLM (format: `provider/model_id`) |
+| `-C` | `--compact` | Compact via LLM (format: `[model_id]`, optional) |
+| `-m` | `--use-model` | (Deprecated) Compact via LLM (use `--compact` instead) |
+| | `--clean` | Prune sessions older than `--days` retention window |
+| | `--days` | Retention window in days for `--clean` (default: 5) |
+| | `--clean-orphans` | Scan and delete all orphaned database records/files |
+| | `--db` | Path to the opencode SQLite database |
+| | `--delete` | Recursively delete the session specified by `--session` |
+| | `--dry-run` | Perform a dry-run of database clean/orphan sweep/delete |
+| | `--force` | Bypass active process lock checks during deletion/clean |
 | `-v` | `--verbose` | Increase verbosity (`-v` or `-vv`) |
 
 ---

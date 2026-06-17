@@ -129,7 +129,7 @@ class SessionDetailScreen(Screen):
             import threading
             self._export_result: dict | None = None
             threading.Thread(target=self._export_thread_target, daemon=True).start()
-            self.set_interval(0.25, self._poll_export)
+            self._export_timer = self.set_interval(0.25, self._poll_export)
         elif self._initial_scroll == "bottom":
             # Scroll to bottom after a brief delay to let layout complete.
             self.set_timer(0.1, self._do_scroll_bottom)
@@ -186,6 +186,8 @@ class SessionDetailScreen(Screen):
         self._export_result = {"_done": True}
         if "_done" in result:
             return
+        if hasattr(self, "_export_timer"):
+            self._export_timer.stop()
         if "error" in result:
             self.app.notify(f"Export failed: {result['error']}", severity="error", timeout=8)
             self.loading = False
@@ -905,7 +907,7 @@ class RecoveryWizardScreen(Screen):
         self._render_step()
         self._pipeline_result: dict | None = None
         threading.Thread(target=self._pipeline_thread_target, daemon=True).start()
-        self.set_interval(0.25, self._poll_pipeline)
+        self._pipeline_timer = self.set_interval(0.25, self._poll_pipeline)
 
     def _pipeline_thread_target(self) -> None:
         """Run recovery pipeline in a plain thread."""
@@ -973,6 +975,8 @@ class RecoveryWizardScreen(Screen):
         self._pipeline_result = {"_done": True}
         if "_done" in result:
             return
+        if hasattr(self, "_pipeline_timer"):
+            self._pipeline_timer.stop()
         if "error" in result:
             self._on_pipeline_error(result["error"])
         else:
@@ -1788,7 +1792,7 @@ class CompactionScreen(Screen):
         self._render_step()
         self._compaction_result: dict | None = None
         threading.Thread(target=self._compaction_thread_target, daemon=True).start()
-        self.set_interval(0.5, self._poll_compaction)
+        self._compaction_timer = self.set_interval(0.5, self._poll_compaction)
 
     def _compaction_thread_target(self) -> None:
         """Execute the API call in a plain thread."""
@@ -1836,6 +1840,8 @@ class CompactionScreen(Screen):
         self._compaction_result = {"_done": True}
         if "_done" in result:
             return
+        if hasattr(self, "_compaction_timer"):
+            self._compaction_timer.stop()
         if "error" in result:
             self._on_compaction_error(result["error"])
         else:
