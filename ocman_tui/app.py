@@ -250,6 +250,14 @@ class PostExecutionSummaryModal(ModalScreen[None]):
         yield Container(
             Label("OPERATION COMPLETE SUMMARY", id="dialog-title"),
             VerticalScroll(
+                Label("Session Name:", classes="info-label"),
+                Static(self.summary.get("session_title", "Unknown")),
+                Label("Session ID:", classes="info-label"),
+                Static(self.summary.get("session_id", "Unknown")),
+                Label("First Interaction (Start Date):", classes="info-label"),
+                Static(self.summary.get("start_date", "Unknown")),
+                Label("Last Interaction (End Date):", classes="info-label"),
+                Static(self.summary.get("end_date", "Unknown")),
                 Label("Database rows deleted:", classes="info-label"),
                 Static(self.summary.get("db_rows", "None")),
                 Label("Disk storage changes:", classes="info-label"),
@@ -775,6 +783,27 @@ class OrsessionApp(App):
 
     def _do_delete_session_worker(self, session_id: str) -> None:
         db_path = get_db_path()
+        
+        # Query session details before deletion
+        session_title = "Unknown"
+        time_created_str = "Unknown"
+        time_updated_str = "Unknown"
+        try:
+            sqlite3 = _get_sqlite()
+            if sqlite3 and db_path.exists():
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.cursor()
+                cursor.execute("SELECT title, time_created, time_updated FROM session WHERE id = ?", (session_id,))
+                row = cursor.fetchone()
+                if row:
+                    session_title = row[0] or "Untitled"
+                    from ocman import _fmt_ts
+                    time_created_str = _fmt_ts(row[1])
+                    time_updated_str = _fmt_ts(row[2])
+                conn.close()
+        except Exception:
+            pass
+
         try:
             # Pre-size of DB
             size_before = get_file_size_local(db_path)
@@ -801,6 +830,10 @@ class OrsessionApp(App):
             def update_ui() -> None:
                 self.app.notify(f"Recursively deleted session {session_id[:8]}", severity="information")
                 summary = {
+                    "session_id": session_id,
+                    "session_title": session_title,
+                    "start_date": time_created_str,
+                    "end_date": time_updated_str,
                     "db_rows": "Rows removed successfully (foreign keys off, committed).",
                     "files": "Session diff JSON files unlinked on disk.",
                     "space": f"SQLite File Shrunk: {human_size_local(saved_space)} (post-VACUUM)"
