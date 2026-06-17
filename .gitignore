@@ -221,3 +221,8 @@ __marimo__/
 # Streamlit
 .streamlit/secrets.toml
 repository-review/
+
+# Local opencode config copies
+opencode.json
+opencode.jsonc
+
