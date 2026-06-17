@@ -30,5 +30,7 @@ orsession = "orsession.app:main"
 [tool.hatch.build.targets.wheel]
 packages = [
     "orsession",
-    "ocman.py",
 ]
+
+[tool.hatch.build.targets.wheel.force-include]
+"ocman.py" = "ocman.py"

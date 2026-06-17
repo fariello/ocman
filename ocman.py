@@ -4222,6 +4222,39 @@ def db_run_cleanup(
                 """, root_session_ids)
                 target_session_ids = [row[0] for row in cursor.fetchall()]
 
+            # Print feedback on which projects and sessions will be deleted
+            if target_session_ids:
+                placeholders = ",".join("?" for _ in target_session_ids)
+                cursor.execute(f"""
+                    SELECT id, title, directory, parent_id 
+                    FROM session 
+                    WHERE id IN ({placeholders})
+                    ORDER BY directory, time_created ASC
+                """, target_session_ids)
+                target_sessions_info = cursor.fetchall()
+
+                # Group sessions by directory
+                project_groups = {}
+                for sid, title, directory, parent_id in target_sessions_info:
+                    dir_key = directory or "(unknown project)"
+                    if dir_key not in project_groups:
+                        project_groups[dir_key] = []
+                    project_groups[dir_key].append((sid, title, parent_id))
+
+                print()
+                print(color_bold("Projects and sessions that will be purged:"))
+                for directory, s_list in sorted(project_groups.items()):
+                    parent_count = sum(1 for s in s_list if not s[2])
+                    child_count = sum(1 for s in s_list if s[2])
+                    subagent_str = f" (+{child_count} subagent)" if child_count else ""
+                    print(f"  - {color_cyan(directory)}: {parent_count} sessions{subagent_str}")
+                    if verbosity >= 1 or len(target_sessions_info) <= 15:
+                        for sid, title, parent_id in s_list:
+                            indent = "      " if parent_id else "    * "
+                            role_prefix = " [subagent]" if parent_id else ""
+                            print(f"{indent}{title or '(untitled)'} (ID: {sid}){role_prefix}")
+                print()
+
         # 2. Compute deletion counts
         db_deletes = {}
         for table, col in SESSION_RELATIONAL_TABLES:
