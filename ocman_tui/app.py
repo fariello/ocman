@@ -292,6 +292,7 @@ class OrsessionApp(App):
         self.current_turns: List[Any] = []
         self.export_lock = threading.Lock()
         self.compaction_running = False
+        self.config_loaded = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -367,29 +368,46 @@ class OrsessionApp(App):
 
                     # Tab 6: Configuration Settings
                     with TabPane("Configuration Settings", id="tab-config"):
-                        with VerticalScroll(classes="panel-card"):
-                            yield Label("CONFIGURATION SETTINGS", classes="panel-card-title")
-                            yield Label("SQLite Database Path:", classes="info-label")
-                            yield Input(id="cfg-db-path", placeholder="e.g. ~/.local/share/opencode/opencode.db")
-                            yield Label("Historical Metrics JSON Path:", classes="info-label")
-                            yield Input(id="cfg-history-path", placeholder="e.g. ~/.local/share/opencode/ocman_history.json")
-                            yield Label("Default Output Directory:", classes="info-label")
-                            yield Input(id="cfg-out-dir", placeholder="e.g. opencode-recovery")
-                            yield Label("Default Backup Directory:", classes="info-label")
-                            yield Input(id="cfg-backup-dir", placeholder="e.g. ~/.local/share/opencode/backups")
-                            yield Label("Default Compaction Model:", classes="info-label")
-                            yield Input(id="cfg-compaction-model", placeholder="e.g. uri/its_direct/pt1-qwen3-32b-us")
-                            yield Label("Default Retention Days:", classes="info-label")
-                            yield Input(id="cfg-retention-days", placeholder="e.g. 5")
-                            yield Checkbox("Keep Temporary Files", value=False, id="cfg-keep-temp")
-                            yield Checkbox("Include Tools in Transcripts", value=False, id="cfg-include-tools")
-                            yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
-                            with Horizontal(classes="margin-vertical"):
+                        with Vertical():
+                            with VerticalScroll(classes="panel-card"):
+                                yield Label("CONFIGURATION SETTINGS", classes="panel-card-title")
+                                yield Label("SQLite Database Path:", classes="info-label")
+                                yield Input(id="cfg-db-path", placeholder="e.g. ~/.local/share/opencode/opencode.db")
+                                yield Label("Historical Metrics JSON Path:", classes="info-label")
+                                yield Input(id="cfg-history-path", placeholder="e.g. ~/.local/share/opencode/ocman_history.json")
+                                yield Label("Default Output Directory:", classes="info-label")
+                                yield Input(id="cfg-out-dir", placeholder="e.g. opencode-recovery")
+                                yield Label("Default Backup Directory:", classes="info-label")
+                                yield Input(id="cfg-backup-dir", placeholder="e.g. ~/.local/share/opencode/backups")
+                                yield Label("Default Compaction Model:", classes="info-label")
+                                yield Input(id="cfg-compaction-model", placeholder="e.g. uri/its_direct/pt1-qwen3-32b-us")
+                                yield Label("Default Retention Days:", classes="info-label")
+                                yield Input(id="cfg-retention-days", placeholder="e.g. 5")
+                                yield Checkbox("Keep Temporary Files", value=False, id="cfg-keep-temp")
+                                yield Checkbox("Include Tools in Transcripts", value=False, id="cfg-include-tools")
+                                yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
+                            with Horizontal(id="config-buttons-container"):
                                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
                                 yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
         yield Footer()
 
     def on_mount(self) -> None:
+        import asyncio
+        loop = asyncio.get_running_loop()
+        old_handler = loop.get_exception_handler()
+
+        def custom_handler(loop, context):
+            exception = context.get("exception")
+            message = context.get("message", "")
+            if isinstance(exception, asyncio.CancelledError) or "CancelledError" in str(exception) or "CancelledError" in message:
+                return
+            if old_handler:
+                old_handler(loop, context)
+            else:
+                loop.default_exception_handler(context)
+
+        loop.set_exception_handler(custom_handler)
+
         self.title = f"Ocman TUI Controller v{__version__}"
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.populate_compaction_models()
@@ -439,7 +457,7 @@ class OrsessionApp(App):
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", SidebarWidget)
-        sidebar.visible = not sidebar.visible
+        sidebar.display = not sidebar.display
 
     def action_refresh_data(self) -> None:
         self.query_one("#sidebar", SidebarWidget).load_data()
@@ -818,11 +836,14 @@ class OrsessionApp(App):
             self.query_one("#cfg-keep-temp", Checkbox).value = bool(config.get("keep_temp", False))
             self.query_one("#cfg-include-tools", Checkbox).value = bool(config.get("include_tools", False))
             self.query_one("#cfg-all-roles", Checkbox).value = bool(config.get("all_roles", False))
+            self.config_loaded = True
         except Exception as e:
             self.notify(f"Failed to load configuration: {e}", severity="error")
 
-    def save_tui_config(self) -> None:
+    def save_tui_config(self, notify: bool = True) -> None:
         """Save form field values back to the TOML configuration file."""
+        if not getattr(self, "config_loaded", False):
+            return
         try:
             db_path = self.query_one("#cfg-db-path", Input).value.strip()
             history_path = self.query_one("#cfg-history-path", Input).value.strip()
@@ -833,7 +854,8 @@ class OrsessionApp(App):
             try:
                 retention_days = int(self.query_one("#cfg-retention-days", Input).value.strip())
             except ValueError:
-                self.notify("Retention Days must be an integer.", severity="error")
+                if notify:
+                    self.notify("Retention Days must be an integer.", severity="error")
                 return
 
             config = {
@@ -855,18 +877,22 @@ class OrsessionApp(App):
             ocman.OPENCODE_DB_PATH = Path(db_path).expanduser()
             ocman.OPENCODE_HISTORY_PATH = Path(history_path).expanduser()
 
-            self.notify("Configuration saved successfully.", severity="information")
+            if notify:
+                self.notify("Configuration saved successfully.", severity="information")
 
             # Reload data in case database path changed!
-            self.query_one("#sidebar", SidebarWidget).load_data()
-            self.load_audit_trail()
+            db_path_resolved = Path(db_path).expanduser()
+            if notify or (db_path_resolved.exists() and db_path_resolved.is_file()):
+                self.query_one("#sidebar", SidebarWidget).load_data()
+                self.load_audit_trail()
 
-            # Update history / database metrics widget if visible
-            with contextlib.suppress(Exception):
-                admin_widget = self.query_one(DatabaseAdminWidget)
-                admin_widget.refresh_metrics()
+                # Update history / database metrics widget if visible
+                with contextlib.suppress(Exception):
+                    admin_widget = self.query_one(DatabaseAdminWidget)
+                    admin_widget.refresh_metrics()
         except Exception as e:
-            self.notify(f"Failed to save configuration: {e}", severity="error")
+            if notify:
+                self.notify(f"Failed to save configuration: {e}", severity="error")
 
     def reset_tui_config(self) -> None:
         """Reset form inputs to defaults and save."""
@@ -889,7 +915,26 @@ class OrsessionApp(App):
         except Exception as e:
             self.notify(f"Reset failed: {e}", severity="error")
 
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Auto-save configuration settings when user presses Enter on any configuration input."""
+        if event.input.id and event.input.id.startswith("cfg-") and getattr(self, "config_loaded", False):
+            self.save_tui_config(notify=True)
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        """Auto-save configuration settings when user toggles any configuration checkbox."""
+        if event.checkbox.id and event.checkbox.id.startswith("cfg-") and getattr(self, "config_loaded", False):
+            self.save_tui_config(notify=False)
+
+    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
+        """Auto-save configuration settings when switching tabs."""
+        if getattr(self, "config_loaded", False):
+            self.save_tui_config(notify=False)
+
     def on_unmount(self) -> None:
+        # Auto-save before quitting
+        if getattr(self, "config_loaded", False):
+            with contextlib.suppress(Exception):
+                self.save_tui_config(notify=False)
         # Delete the temp session export directory
         if self.temp_dir.exists():
             shutil.rmtree(self.temp_dir, ignore_errors=True)

@@ -9,8 +9,19 @@ from ocman_tui.widgets.database import DatabaseAdminWidget
 from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog
 
 @pytest.fixture
-def tui_db(tmp_path):
+def tui_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_opencode.db"
+    
+    # Mock config path to a temp location
+    cfg_path = tmp_path / "ocman_test.toml"
+    monkeypatch.setattr(ocman, "OCMAN_CONFIG_PATH", cfg_path)
+    
+    # Write default test config
+    test_config = dict(ocman.DEFAULT_CONFIG)
+    test_config["db_path"] = str(db_path)
+    test_config["history_path"] = str(tmp_path / "test_ocman_history.json")
+    test_config["default_backup_dir"] = str(tmp_path / "backups")
+    ocman.save_ocman_config(test_config, cfg_path)
     
     # Save original DB and history path
     orig_path = ocman.OPENCODE_DB_PATH
@@ -196,3 +207,57 @@ async def test_tui_app_pruning(tui_db):
         cursor.execute("SELECT COUNT(*) FROM session")
         assert cursor.fetchone()[0] == 0
         conn.close()
+
+
+@pytest.mark.anyio
+async def test_tui_config_tab(tui_db, tmp_path):
+    """Test TUI configuration settings load, save, reset, and auto-save on submit/change."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        # Switch to config tab
+        app.query_one("TabbedContent").active = "tab-config"
+        await pilot.pause()
+
+        # Check default value is loaded
+        db_input = app.query_one("#cfg-db-path", Input)
+        assert db_input.value == str(tui_db)
+
+        # Modify values and trigger auto-save via submit
+        new_db_path = tmp_path / "new_opencode.db"
+        db_input.focus()
+        db_input.value = str(new_db_path)
+        
+        # Fire submitted event
+        await pilot.press("enter")
+        await pilot.pause()
+
+        # Verify configuration was saved to the custom OCMAN_CONFIG_PATH
+        config = ocman.load_ocman_config()
+        assert config["db_path"] == str(new_db_path)
+
+        # Modify values and test auto-save via tab activation
+        tab_db_path = tmp_path / "tab_opencode.db"
+        db_input.value = str(tab_db_path)
+        app.query_one("TabbedContent").active = "tab-details"
+        await pilot.pause()
+
+        config = ocman.load_ocman_config()
+        assert config["db_path"] == str(tab_db_path)
+
+        # Toggle a checkbox and verify silent auto-save
+        app.query_one("TabbedContent").active = "tab-config"
+        await pilot.pause()
+        keep_temp_check = app.query_one("#cfg-keep-temp", Checkbox)
+        assert keep_temp_check.value is False
+        keep_temp_check.value = True
+        
+        await pilot.pause()
+        
+        config = ocman.load_ocman_config()
+        assert config["keep_temp"] is True
+
+        # Test Reset to Defaults
+        await pilot.click("#btn-reset-config")
+        await pilot.pause()
+        assert keep_temp_check.value is False
+

@@ -39,6 +39,7 @@ Footer {
 /* Workspace Panels */
 #workspace {
     background: #1e1e2e;
+    width: 1fr;
 }
 
 TabbedContent {
@@ -245,4 +246,10 @@ ModalScreen {
 
 #dialog-message {
     margin-bottom: 1;
+}
+
+#config-buttons-container {
+    height: auto;
+    align: center middle;
+    margin-top: 1;
 }
