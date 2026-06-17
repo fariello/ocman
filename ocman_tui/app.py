@@ -335,29 +335,35 @@ class OrsessionApp(App):
                     
                     # Tab 2: Actions & Recovery
                     with TabPane("Actions & Recovery", id="tab-actions"):
-                        with Horizontal(classes="grid-container"):
-                            # Recovery File Generator Card
+                        with Vertical():
+                            # Metadata grid
                             with Vertical(classes="panel-card"):
-                                yield Label("RECOVERY FILE GENERATOR", classes="panel-card-title")
-                                yield Label("Write raw/restart context files to disk:", classes="info-label")
-                                yield Button("Write Transcript (.transcript.md)", id="btn-write-transcript")
-                                yield Button("Write Restart Wrapper (.restart.md)", id="btn-write-restart")
-                                yield Button("Write Compaction Prompt (.compact-prompt.md)", id="btn-write-prompt")
-                            
-                            # LLM Compaction Card
-                            with Vertical(classes="panel-card"):
-                                yield Label("LLM COMPACTION RUNNER", classes="panel-card-title")
-                                yield Label("Select Model:", classes="info-label")
-                                yield Select([], id="select-compaction-model", prompt="Choose model...")
-                                yield Label("Est Cost: $0.00", id="lbl-est-cost", classes="info-label")
-                                yield Button("Run Compaction API", id="btn-run-compaction", variant="success")
-                                yield Static("Idle", id="lbl-compaction-status")
+                                yield Label("SELECTED SESSION SUMMARY", classes="panel-card-title")
+                                yield Static("Select a session in the sidebar to view details.", id="lbl-actions-metadata-grid")
 
-                        # Danger Zone Card
-                        with Vertical(classes="panel-card margin-vertical"):
-                            yield Label("DANGER ZONE", classes="panel-card-title")
-                            yield Label("Recursively delete this session and its subagent descendants from database and disk:", classes="info-label")
-                            yield Button("Recursively Delete Session & Descendants", id="btn-delete-session-rec", variant="error")
+                            with Horizontal(classes="grid-container"):
+                                # Recovery File Generator Card
+                                with Vertical(classes="panel-card"):
+                                    yield Label("RECOVERY FILE GENERATOR", classes="panel-card-title")
+                                    yield Label("Write raw/restart context files to disk:", classes="info-label")
+                                    yield Button("Write Transcript (.transcript.md)", id="btn-write-transcript")
+                                    yield Button("Write Restart Wrapper (.restart.md)", id="btn-write-restart")
+                                    yield Button("Write Compaction Prompt (.compact-prompt.md)", id="btn-write-prompt")
+                                
+                                # LLM Compaction Card
+                                with Vertical(classes="panel-card"):
+                                    yield Label("LLM COMPACTION RUNNER", classes="panel-card-title")
+                                    yield Label("Select Model:", classes="info-label")
+                                    yield Select([], id="select-compaction-model", prompt="Choose model...")
+                                    yield Label("Est Cost: $0.00", id="lbl-est-cost", classes="info-label")
+                                    yield Button("Run Compaction API", id="btn-run-compaction", variant="success")
+                                    yield Static("Idle", id="lbl-compaction-status")
+
+                            # Danger Zone Card
+                            with Vertical(classes="panel-card margin-vertical"):
+                                yield Label("DANGER ZONE", classes="panel-card-title")
+                                yield Label("Recursively delete this session and its subagent descendants from database and disk:", classes="info-label")
+                                yield Button("Recursively Delete Session & Descendants", id="btn-delete-session-rec", variant="error")
                     
                     # Tab 3: Database Admin
                     with TabPane("Database Admin", id="tab-admin"):
@@ -495,6 +501,8 @@ class OrsessionApp(App):
             f"Dir:     {s.get('directory', 'N/A')}"
         )
         self.query_one("#lbl-metadata-grid", Static).update(metadata_str)
+        with contextlib.suppress(Exception):
+            self.query_one("#lbl-actions-metadata-grid", Static).update(metadata_str)
 
     def start_session_export(self) -> None:
         """Trigger background export so the TUI doesn't lock up on large DB exports."""
@@ -845,6 +853,8 @@ class OrsessionApp(App):
                     self.selected_session_id = None
                     self.selected_session_title = ""
                     self.query_one("#lbl-metadata-grid", Static).update("Select a session in the sidebar to view details.")
+                    with contextlib.suppress(Exception):
+                        self.query_one("#lbl-actions-metadata-grid", Static).update("Select a session in the sidebar to view details.")
                     self.query_one("#transcript-md", Markdown).update("")
                     self.current_turns = []
                     self.current_export = None
