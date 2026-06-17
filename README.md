@@ -1,455 +1,216 @@
-# opencode-recover
+# ocman (OpenCode Manager)
 
-Recover and restart broken [opencode](https://opencode.ai) sessions.
+`ocman` is a comprehensive command-line interface (CLI) and terminal user interface (TUI) administration suite for the [OpenCode](https://opencode.ai) agentic ecosystem. 
 
-When an opencode session crashes, hits context overflow, or fails during `/compact`, this script extracts the conversation history and produces restart-ready Markdown files — optionally compacting them via an LLM API call so a fresh agent can continue exactly where you left off.
+While it retains powerful capabilities for extracting and compacting crashed or bloated session transcripts, `ocman` serves as a complete database, configuration, and system maintenance manager for your OpenCode environment.
 
-**Use at your own risk.** This is an independent utility, not affiliated with the opencode project.
+---
+
+## Core Capabilities
+
+*   **Interactive TUI Dashboard (`ocman ui` / `ocman gui`)**: A rich, multi-tab terminal application built with Textual to browse projects, view session details, preview transcripts, run recovery wizards, manage settings, and perform database admin tasks.
+*   **Database Administration & Maintenance**: Tools to inspect database size, execute automated age-based session cleanup, prune orphaned database records, and vacuum SQLite databases to reclaim disk space.
+*   **System Backup & Restoration**: ZIP-archive backup of database files, configurations, sidecar history ledgers, and session storage files. Features an automated rollback safety net that restores your system state to a temporary backup if a restore operation fails mid-way.
+*   **Historical Activity Logs**: Sidecar audit trails tracking all cleanups, deletions, and recoveries. Shows detailed breakdowns for each run and cumulative, all-time historical statistics (sessions pruned, messages deleted, cost saved, and disk space saved) both in the TUI and CLI.
+*   **Robust Session Recovery & LLM Compaction**: Parses native OpenCode export files, strips metadata noise, truncates transcripts safely, and optionally compacts context using OpenAI-compatible LLM gateway APIs (`--compact`) to produce clean restart files for fresh agent sessions.
+*   **Flat-File Configuration**: Precedence-based configuration engine (`~/.config/opencode/ocman.toml`) with interactive setup helper (`--create-config`).
 
 ---
 
 ## TL;DR / Quickstart
 
+### Launch the TUI Dashboard
 ```bash
-# Copy the script somewhere on your PATH
-curl -o ~/.local/bin/ocman \
-  https://raw.githubusercontent.com/fariello/opencode-recover/main/ocman.py
-chmod +x ~/.local/bin/ocman
-
-# Recover interactively (lists sessions, lets you pick one)
-ocman
-
-# Recover a specific session, keep only the last 50 interactions
-ocman -s SESSION_ID -mi 50
-
-# Same, but also compact via a cheap model
-ocman -s SESSION_ID -mi 50 -m provider/model_id
-
-# Then in a fresh opencode session, tell the agent:
-#   "read and execute opencode-recovery/opencode-recovery-SESSION_ID-TIMESTAMP.compacted.md"
-```
-
-No dependencies beyond Python 3.10+ and the `opencode` CLI.
-
----
-
-## What It Does
-
-1. Lists your opencode sessions (via `opencode session list`)
-2. Exports the selected session to a temp file (via `opencode export`)
-3. Parses the export JSON, extracting only user/assistant conversation turns
-4. Consolidates consecutive same-role messages into single blocks
-5. Strips metadata noise (IDs, token counts, model names, costs, paths)
-6. Optionally truncates to the N most recent interactions or lines
-7. Generates three Markdown files:
-   - `*.transcript.md` — Clean consolidated transcript
-   - `*.restart.md` — Transcript wrapped with agent instructions
-   - `*.compact-prompt.md` — Full prompt ready for LLM compaction
-8. Optionally calls an LLM API to produce a compact restart document (`*.compacted.md`)
-9. Shows you exactly what to tell your fresh opencode agent
-
----
-
-## Requirements
-
-**CLI tool** (`ocman` / `ocman.py`):
-- Python 3.10+
-- `opencode` CLI on PATH
-- No third-party packages — stdlib only
-- For `--use-model`: an OpenAI-compatible LLM provider in `~/.config/opencode/opencode.json`
-
-**TUI app** (`ocman ui` / `ocman gui`):
-- Python 3.10+
-- `opencode` CLI on PATH
-- `textual` and `rich` (installed automatically via `pip install .`)
-
----
-
-## Installation
-
-It's a single file. Pick your method:
-
-```bash
-# Option 1: curl to a bin directory
-curl -o ~/.local/bin/ocman \
-  https://raw.githubusercontent.com/fariello/opencode-recover/main/ocman.py
-chmod +x ~/.local/bin/ocman
-
-# Option 2: clone the repo
-git clone https://github.com/fariello/opencode-recover.git
-cd opencode-recover
-chmod +x ocman.py
-
-# Option 3: just copy it wherever you want
-cp ocman.py /wherever/you/like/
-```
-
-### Interactive TUI
-
-For a full interactive experience with session browsing, drill-down previews,
-and guided recovery/compaction workflows, launch the integrated TUI app:
-
-```bash
-# Install from the repo (requires Python 3.10+ and dependencies)
-git clone https://github.com/fariello/opencode-recover.git
-cd opencode-recover
-pip install .
-
-# Launch the TUI
+# Launch the interactive terminal UI dashboard
 ocman ui
 # Or use the alias
 ocman gui
 ```
 
-`ocman ui` uses [textual](https://textual.textualize.io/) for the terminal UI.
-It provides:
-- Sortable session list with recovery status indicators
-- Session detail with metadata, cost, tokens, and conversation previews
-- Full scrollable transcript viewer
-- Recovery wizard with truncation controls and token warnings
-- Model selection with live cost estimates and search/filter
-- Context file selection for chaining recoveries across sessions
-- LLM compaction with progress display
-- Recovery file browser with view/delete
+### Common CLI Maintenance & Admin Commands
+```bash
+# Show database size, session counts, model usage, and storage info
+ocman info
 
-The CLI tool (`ocman` / `ocman.py`) remains fully standalone with
-zero dependencies — use it when you want scripting, CI integration, or
-don't want to install packages.
+# Clean sessions older than 7 days and reclaim database disk space
+ocman --clean --days 7
 
-> [!NOTE]
-> **Developer Note on Editable Installs**:
-> If you install the package in editable mode (`pip install -e .`), local edits to `ocman.py` will not be dynamically reflected in the globally installed `ocman` command because Hatchling's editable finder does not link top-level single-file modules mapped via `force-include`.
-> 
-> To test local edits to `ocman.py`, execute the script directly as `./ocman.py` or prepend the project directory to your Python path: `PYTHONPATH=. pytest` or `PYTHONPATH=. python3 -m ocman`.
+# Scan and delete all orphaned database records/files
+ocman --clean-orphans
+
+# View historical deletion/recovery runs and all-time grand totals
+ocman show logs
+
+# Create a complete ZIP backup of your OpenCode system state
+ocman --backup-opencode
+
+# Restore your OpenCode system state from a backup ZIP file (with rollback safety)
+ocman --restore ~/.local/share/opencode/backups/backup.zip
+```
+
+### CLI Session Recovery
+```bash
+# Recover interactively (lists sessions, lets you pick one)
+ocman
+
+# Recover a specific session, truncating to the last 50 exchanges
+ocman -s SESSION_ID -mi 50
+
+# Recover, truncate, and compact using an LLM gateway model
+ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
+```
 
 ---
 
-## Usage Examples
+## Installation
 
-### Basic interactive recovery
+### Prerequisite Dependencies
+*   **CLI tool (`ocman` / `ocman.py`)**: Zero external dependencies—requires only Python 3.10+ and the `opencode` CLI on your `PATH`.
+*   **TUI app (`ocman ui` / `ocman gui`)**: Requires the Python packages `textual` and `rich`.
 
+### Install options:
 ```bash
-ocman
+# Clone the repository and install globally (installs Textual/Rich automatically)
+git clone https://github.com/fariello/opencode-recover.git
+cd opencode-recover
+pip install .
+
+# Run the standalone script directly (zero dependency mode)
+chmod +x ocman.py
+./ocman.py --help
 ```
 
-Lists all sessions, lets you pick one, generates recovery files in `./opencode-recovery/`.
+---
 
-### Non-interactive with a known session ID
+## The TUI Dashboard (`ocman ui`)
 
-```bash
-ocman -s ses_abc123def456
-```
+The interactive terminal user interface organizes your workflow across several tabbed workspaces:
 
-### Recover a session from a different project directory
+1.  **Projects & Sessions**: Browse through workspace project directories and see active session trees. Shows session metadata, tokens count, and accumulated costs.
+2.  **Session Preview**: Drill down into the selected session to inspect details or preview the scrollable conversation transcript.
+3.  **Recovery Wizard**: Configure truncation boundaries (by line limit or user-agent interaction count), select a target LLM model with live cost estimation, and generate compacted files.
+4.  **Database Admin**: Review database family details (WAL, SHM, database integrity), execute vacuums, and run backup or restoration threads directly with progress indicators.
+5.  **Activity Log**: Browse detailed histories of past cleanups/recoveries, including a persistent `GRAND TOTALS` card summarizing all-time disk space saved, cost reclaimed, and pruned databases rows.
+6.  **Configuration Settings**: Customize system settings (paths, LLM gateway parameters, retention defaults) with live auto-saving.
 
-```bash
-ocman -d "/path/to/project"
-```
+---
 
-opencode stores sessions per-project. Use `-d` when recovering a session that was started in a directory other than your current working directory.
+## CLI Command Usage & Examples
 
-### Truncate to the most recent N interactions
+### Command Preprocessing
+`ocman` intercepts natural subcommands at the CLI level for convenience. Positional commands are parsed and converted to internal flags:
+*   `ocman list projects` or `ocman list porjects` $\rightarrow$ `--list-projects`
+*   `ocman list sessions` $\rightarrow$ `--list-sessions`
+*   `ocman list sessions in [project] my-project` $\rightarrow$ `--list-sessions --project "my-project"`
+*   `ocman show logs` $\rightarrow$ `--show-logs`
 
-```bash
-ocman -s SESSION_ID -mi 50
-```
-
-Keeps only the 50 most recent back-and-forth exchanges (from the tail). This is measured against the *output* file, not raw input.
-
-### Truncate by output line count
-
-```bash
-ocman -s SESSION_ID -ml 2000
-```
-
-Keeps enough recent turns to fit within ~2000 lines of rendered output.
-
-### Compact via LLM
-
-```bash
-ocman -s SESSION_ID -m uri/its_direct/pt1-qwen3-32b-us
-```
-
-After generating recovery files, sends the compact prompt to the specified model and writes a `*.compacted.md` file. Shows estimated cost and asks for confirmation before sending.
-
-### See available models and costs
-
-```bash
-ocman --show-models
-```
-
-Displays a table of all models from your opencode config with pricing and API compatibility status.
-
-### Show database and storage information
-
+### Database & Storage Status (`ocman info`)
+Prints a breakdown of your current database state on disk, including:
 ```bash
 ocman info
-# Or
-ocman --info
-```
-
-Displays system statistics including:
-- Total number of projects and sessions (broken down by root and subagent).
-- Total database size on disk (including WAL and SHM files).
-- Total LLM cost and tokens (input/output).
-- Top models used in sessions.
-- Number of session diff files stored on disk and their total size.
-
-Use `-v` or `--verbose` to run a database integrity check as well:
-```bash
+# Add -v to trigger a SQLite database PRAGMA integrity check
 ocman info -v
 ```
 
-### Chain recoveries (session crashed twice)
+### Historical Auditing (`ocman show logs`)
+Outputs a list of past cleanups and recoveries in reverse chronological order, ending with a comprehensive all-time totalization card:
+```bash
+ocman show logs
+```
+
+### Automated Configuration Generator (`ocman --create-config`)
+Runs an interactive setup assistant to generate a config file at `~/.config/opencode/ocman.toml`. If run non-interactively (e.g., in a script), it creates the config file with safe defaults.
+```bash
+ocman --create-config
+```
+
+---
+
+## Argument Reference
+
+| CLI Option | Equivalent | Description |
+|:---|:---|:---|
+| `-s ID` | `--session ID` | Session ID (skips interactive selection during recovery) |
+| `-d DIR` | `--session-dir DIR` | Target project working directory where the session ran |
+| `-o DIR` | `--out DIR` | Output directory for recovery files (default: `./opencode-recovery`) |
+| `-k` | `--keep-temp` | Keep the raw exported JSON file for debugging |
+| `-ct` | `--clean-tmp` | Prune old exported JSON temporary files from `/tmp` |
+| `-cp` | `--clean-previous` | Remove prior recovery outputs generated for this session |
+| `-t` | `--include-tools` | Include tool execution results and tool call messages |
+| | `--all-roles` | Extract system and tool roles (not just user/assistant) |
+| `-ml N` | `--max-lines N` | Maximum transcript lines to output (truncates older turns) |
+| `-mi N` | `--max-interactions N`| Maximum user-assistant turn pairs to keep |
+| `-ic FILE` | `--input-compact FILE` | Prepend a prior recovery summary as context (repeatable) |
+| `-or FILE` | `--output-restart FILE`| Output path for the restart file |
+| `-ot FILE` | `--output-transcript` | Output path for the clean transcript |
+| `-sm` | `--show-models` | List available LLM models from config with compatibility |
+| `-C [MODEL]`| `--compact [MODEL]` | Triggers LLM compaction. Prompted if MODEL is omitted |
+| | `--clean` | Delete database sessions older than the retention window |
+| | `--days N` | Set cleanup retention window in days (default: 5) |
+| | `--clean-orphans` | Remove orphaned records and sidecar diffs |
+| | `--db PATH` | Override standard SQLite database file path |
+| | `--delete` | Recursively delete the session specified by `-s` |
+| | `--dry-run` | Run cleanup/delete tasks without writing changes |
+| | `--force` | Bypass active process lock checks during delete/cleanup |
+| | `--info` | Show database and storage usage information |
+| | `--clear-history` | Wipes the historical activity ledger and resets totals |
+| | `--create-config` | Interactively generate the `ocman.toml` file |
+| | `--backup-opencode` | Create a system backup archive ZIP file |
+| | `--restore PATH` | Restore configuration, database, and diffs from backup |
+| `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |
+
+---
+
+## Configuration Settings (`ocman.toml`)
+
+`ocman` searches for configuration settings at `~/.config/opencode/ocman.toml`. Precedence follows: **Defaults < Config File < CLI arguments**.
+
+### Default Layout Template
+```toml
+# SQLite Database Path
+db_path = "~/.local/share/opencode/opencode.db"
+
+# Historical Metrics JSON ledger path
+history_path = "~/.local/share/opencode/ocman_history.json"
+
+# Output directory for recovery files
+default_out_dir = "./opencode-recovery"
+
+# Default backup destination directory
+default_backup_dir = "~/.local/share/opencode/backups"
+
+# Default LLM model used for compaction
+default_model = "uri/its_direct/pt1-qwen3-32b-us"
+
+# Default retention window in days for database cleanups
+default_retention_days = 5
+
+# CLI and recovery behavior settings
+keep_temp = false
+include_tools = false
+all_roles = false
+```
+
+---
+
+## Backup & Restoration Internals
+
+### Backup Scope
+The backup operation archives:
+*   The SQLite database file (`opencode.db`) and write-ahead logs (`-wal`/`-shm`) if present.
+*   The flat-file settings (`ocman.toml`).
+*   The audit ledger (`ocman_history.json`).
+*   All individual session JSON logs under `~/.local/share/opencode/storage/session_diff/`.
+
+### Rollback Protection
+Before executing a restoration, `ocman` packages the existing active state into a temporary archive (`~/.local/share/opencode/backups/rollback_before_restore_TIMESTAMP.zip`). If any stage of the restoration (file unpacking, database overwriting, config validation) throws an error, the rollback routine immediately triggers to extract the temporary rollback file, leaving your system state completely safe and unmodified.
+
+---
+
+## Development & Test Verification
+
+Run the test suite using `pytest`. The tests mock database instances and isolate file writes to verify config logic, TUI states, auto-saving hooks, and backup engines safely:
 
 ```bash
-# First recovery produced session1.compacted.md
-# Second session (started from session1.compacted.md) also crashed
-# Include the first recovery as prior context:
-ocman -s SESSION_ID_2 \
-  -ic ./opencode-recovery/session1.compacted.md
+PYTHONPATH=. pytest
 ```
-
-Prior context is prepended to the transcript so the compaction model sees the full chain.
-
-### Write output to specific paths
-
-```bash
-ocman -s SESSION_ID \
-  -ot ./out/transcript.md \
-  -or ./out/restart.md \
-  -oc ./out/compact-prompt.md
-```
-
-Directories are created if they don't exist.
-
-### Clean up old files
-
-```bash
-# Clean only (no export, no recovery):
-ocman -s SESSION_ID -c --clean-previous
-
-# Clean then recover:
-ocman -s SESSION_ID -c --clean-previous -mi 50
-```
-
-- `-c` / `--clean` removes leftover temp directories from `/tmp`
-- `--clean-previous` removes prior recovery output files for the selected session
-
-When only clean flags are specified (no `--use-model`, `--input-*`, or `--keep-temp`), the script cleans and exits without exporting.
-
-### View the compaction prompt template
-
-```bash
-ocman --show-compaction-prompt
-```
-
----
-
-## All Arguments
-
-| Short | Long | Description |
-|-------|------|-------------|
-| `-s` | `--session` | Session ID (skips interactive selection) |
-| `-d` | `--session-dir` | Project directory where the session was run |
-| `-o` | `--out` | Output directory (default: `./opencode-recovery`) |
-| `-k` | `--keep-temp` | Preserve the temporary exported JSON |
-| `-ct`| `--clean-tmp` | Remove leftover temporary export files from `/tmp` |
-| `-cp`| `--clean-previous` | Remove prior recovery files for the session |
-| `-t` | `--include-tools` | Include tool/function messages in extraction |
-| | `--all-roles` | Include system and tool roles (not just user/assistant) |
-| `-ml` | `--max-lines` | Max output lines (truncates from tail) |
-| `-mi` | `--max-interactions` | Max interactions (truncates from tail) |
-| `-ic` | `--input-compact` | Prior compacted file as context (repeatable) |
-| `-ir` | `--input-restart` | Prior restart file as context (repeatable) |
-| `-it` | `--input-transcript` | Prior transcript file as context (repeatable) |
-| `-oc` | `--output-compact` | Explicit output path for compact prompt |
-| `-or` | `--output-restart` | Explicit output path for restart file |
-| `-ot` | `--output-transcript` | Explicit output path for transcript |
-| `-sm`| `--show-models` | Display available models and exit |
-| | `--show-compaction-prompt` | Display the compaction prompt template and exit |
-| `-C` | `--compact` | Compact via LLM (format: `[model_id]`, optional) |
-| `-m` | `--use-model` | (Deprecated) Compact via LLM (use `--compact` instead) |
-| | `--clean` | Prune sessions older than `--days` retention window |
-| | `--days` | Retention window in days for `--clean` (default: 5) |
-| | `--clean-orphans` | Scan and delete all orphaned database records/files |
-| | `--db` | Path to the opencode SQLite database |
-| | `--delete` | Recursively delete the session specified by `--session` |
-| | `--dry-run` | Perform a dry-run of database clean/orphan sweep/delete |
-| | `--force` | Bypass active process lock checks during deletion/clean |
-| | `--info` | Show database and disk storage info |
-| `-v` | `--verbose` | Increase verbosity (`-v` or `-vv`) |
-
----
-
-## Output Files
-
-| File | Purpose |
-|------|---------|
-| `*.transcript.md` | Clean consolidated transcript — just user/assistant turns, noise removed |
-| `*.restart.md` | Transcript wrapped with instructions telling a fresh agent how to resume |
-| `*.compact-prompt.md` | Full prompt for LLM compaction (includes transcript + structured instructions) |
-| `*.compacted.md` | LLM-generated compact restart document (only if `--use-model` is used) |
-
-### Which file to use?
-
-- **Quick restart (no LLM cost):** Tell your fresh agent to read `*.restart.md`
-- **Best results (costs a few cents):** Use `--use-model` and tell your fresh agent to read `*.compacted.md`
-- **Manual review:** Read `*.transcript.md` yourself to see what happened
-
----
-
-## How Truncation Works
-
-When a session is large (>2500 lines or >100 interactions), the script prompts you to truncate. You can also specify limits directly with `-ml` and `-mi`.
-
-**Key design choices:**
-
-- Truncation keeps the **most recent** turns (the tail). Older context is dropped.
-- `--max-lines` refers to the **output file** line count, not raw input.
-- `--max-interactions` counts user→assistant exchanges (a user message + the agent's response = 1 interaction).
-- The more restrictive limit wins when both are specified.
-- Prior context (`--input-*`) is **never** truncated — it's already compacted.
-
----
-
-## LLM Compaction
-
-The `--use-model` feature sends your session transcript to an LLM to produce a compact restart document. This is useful for very long sessions where even the truncated transcript would be too large for an agent to process efficiently.
-
-### How it works
-
-1. Reads your `~/.config/opencode/opencode.json` for provider/model/key configuration
-2. Resolves the model you specified (exact match or substring)
-3. Estimates input/output tokens (~4 chars/token heuristic) and cost
-4. Shows the estimate and asks for confirmation
-5. Sends a structured prompt with your transcript to the model's `/v1/chat/completions` endpoint
-6. Writes the response as `*.compacted.md`
-7. Reports actual tokens used and actual cost (from API response)
-
-### Supported providers
-
-Any provider using an OpenAI-compatible API (shown as `API: OK` in `--show-models`). This includes:
-
-- Providers using `@ai-sdk/openai-compatible` (custom endpoints)
-- Providers using `@ai-sdk/openai` (OpenAI itself)
-
-Providers with non-compatible APIs (e.g., Google's `@ai-sdk/google`) are listed but cannot be used for compaction.
-
-### API key formats
-
-The script supports three formats for API keys in the config:
-
-| Format | Example |
-|--------|---------|
-| `{env:VAR}` | `"apiKey": "{env:OPENAI_API_KEY}"` (opencode's preferred) |
-| `${VAR}` | `"apiKey": "${OPENAI_API_KEY}"` |
-| Literal | `"apiKey": "sk-abc123..."` |
-
-### Security notes
-
-- The script **refuses to send API keys to non-HTTPS endpoints** (except `localhost`/`127.0.0.1`)
-- A data sensitivity notice is shown before sending
-- Temp export files are created with `0600` permissions (owner-only)
-- The script reads your opencode config which contains API keys — keep that file secured
-
----
-
-## Chaining Recoveries
-
-If your session crashes repeatedly, you can chain recoveries:
-
-```
-Session 1 → crashes → recover → session1.compacted.md
-Session 2 (started from session1.compacted.md) → crashes → recover with --input-compact session1.compacted.md
-```
-
-The `--input-compact` (or `--input-restart`, `--input-transcript`) content is:
-- Loaded before any `--clean-previous` runs
-- Prepended to the transcript in the compact prompt with a labeled header
-- **Not** truncated by `--max-lines`/`--max-interactions`
-- Included in token/cost estimates
-- Clearly marked as prior context so the compaction model treats it as established history
-
----
-
-## Long Session Detection
-
-When the extracted transcript exceeds 2500 lines or 100 interactions and no explicit `--max-*` flags are provided, the script interactively prompts:
-
-```
-This session is large:
-  Transcript lines:  8,432
-  Interactions:      247
-  Total turns:       402
-
-Truncation keeps only the most recent (tail) interactions.
-
-Truncate output? [N]o / [l]ines / [i]nteractions / [b]oth:
-```
-
-In non-interactive mode (piped stdin), it proceeds without truncation and prints a note.
-
----
-
-## Session Tail Preview
-
-After extraction, the script displays the last 20 turns as a quick preview:
-
-```
-Session tail preview:
-  ... (380 earlier turns omitted)
-  U: Please commit and push changes.
-  A: Done. All committed and pushed.
-  U: Can you add a --dry-run flag?
-  A: Let me add that to the argument parser...
-```
-
-This lets you verify the session wasn't truncated mid-conversation.
-
----
-
-## How It Parses Exports
-
-The script has two parsing paths:
-
-1. **Native opencode format** (preferred): Understands the `{"info": {...}, "messages": [{"info": {"role": ...}, "parts": [...]}]}` structure. Only extracts text from `parts` with `type: "text"`, completely skipping metadata.
-
-2. **Generic fallback**: For non-opencode or malformed exports, recursively walks JSON looking for role-bearing dictionaries and extracts text fields.
-
-In both cases:
-- Consecutive same-role turns are consolidated
-- `[System: Empty message content sanitised to satisfy protocol]` lines are stripped
-- Metadata (IDs, costs, tokens, model names, paths) is excluded
-
----
-
-## Troubleshooting
-
-### "opencode export produced no output"
-
-The `opencode` CLI may require you to be in the project directory. Use `-d /path/to/project`.
-
-### Export is truncated or invalid JSON
-
-On WSL/Windows, `subprocess.PIPE` can truncate large outputs. This script works around that by writing stdout directly to a file instead of capturing via pipe.
-
-### "No sessions were found"
-
-Run `opencode session list --format json` manually in the project directory to verify sessions exist.
-
-### API call fails with 401
-
-Check that your API key in `~/.config/opencode/opencode.json` is correct. If using `{env:VAR}` format, ensure the environment variable is set.
-
-### "Refusing to send API key to non-HTTPS endpoint"
-
-The script blocks sending credentials over unencrypted connections. If you need to test against a local endpoint, use `localhost` or `127.0.0.1` in the base URL.
-
----
-
-## License
-
-BSD 3-Clause. See [LICENSE](LICENSE).
-
-**Use at your own risk.** This tool reads your opencode session data and optionally sends it to external LLM APIs. Review the code and understand what it does before running it on sensitive projects.
