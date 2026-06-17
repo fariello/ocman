@@ -10,7 +10,9 @@ import os
 import time
 from pathlib import Path
 from datetime import datetime
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+
+from ocman import load_ocman_config
 
 from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
@@ -248,6 +250,21 @@ class DatabaseAdminWidget(Static):
                     yield Button("Run Prune / Clean", id="btn-run-prune", variant="error")
                     yield Button("Inspect Orphans", id="btn-inspect-orphans", variant="primary")
 
+            # Backup & Restore Card
+            with Vertical(classes="panel-card"):
+                yield Label("BACKUP & RESTORE", classes="panel-card-title")
+                yield VerticalScroll(
+                    Label("Manage entire system-wide state snapshots:", classes="info-label"),
+                    Horizontal(
+                        Label("Backup Target:", classes="info-label"),
+                        Static("", id="lbl-backup-target-dir", classes="info-value"),
+                    ),
+                    id="backup-fields"
+                )
+                with Horizontal():
+                    yield Button("Create Backup", id="btn-create-backup", variant="success")
+                    yield Button("Restore Backup", id="btn-restore-backup", variant="primary")
+
         # Bottom section: Logs Output Console
         yield Label("LIVE OPERATIONS LOG OUTPUT:", classes="info-label")
         yield RichLog(id="live-log-output", max_lines=1000, classes="log-area")
@@ -298,6 +315,11 @@ class DatabaseAdminWidget(Static):
         self.query_one("#lbl-hist-cost", Static).update(f"${cost_saved:.4f}")
         self.query_one("#lbl-hist-msg", Static).update(f"{msg_deleted:,}")
 
+        # Update backup target directory path
+        with contextlib.suppress(Exception):
+            cfg = load_ocman_config()
+            self.query_one("#lbl-backup-target-dir", Static).update(str(cfg.get("default_backup_dir", "")))
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-refresh-metrics":
             self.refresh_metrics()
@@ -305,6 +327,11 @@ class DatabaseAdminWidget(Static):
             self.app.push_screen(OrphanInspectorModal())
         elif event.button.id == "btn-run-prune":
             self.run_prune_operation()
+        elif event.button.id == "btn-create-backup":
+            self.run_backup_operation()
+        elif event.button.id == "btn-restore-backup":
+            from ..app import RestoreBackupModal
+            self.app.push_screen(RestoreBackupModal(), self.handle_restore_result)
 
     def run_prune_operation(self) -> None:
         """Run prune clean operation and redirect prints to textual log."""
@@ -360,3 +387,55 @@ class DatabaseAdminWidget(Static):
             self.app.post_message(self.app.RefreshSidebar())
 
         self.app.call_from_thread(update_ui)
+
+    def run_backup_operation(self) -> None:
+        """Run system backup in a background worker thread."""
+        log_widget = self.query_one("#live-log-output", RichLog)
+        log_widget.clear()
+
+        self.app.notify("Creating system backup in background...", severity="information")
+
+        from ocman import cli_backup
+
+        def do_backup():
+            try:
+                with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
+                    dest = cli_backup()
+                self.app.call_from_thread(self.app.notify, f"Backup created: {dest.name}", severity="information")
+            except Exception as e:
+                log_widget.app.call_from_thread(log_widget.write, f"ERROR: {e}")
+                self.app.call_from_thread(self.app.notify, f"Backup failed: {e}", severity="error")
+            finally:
+                self.app.call_from_thread(self.refresh_metrics)
+
+        self.run_worker(do_backup, thread=True)
+
+    def handle_restore_result(self, path: Optional[str]) -> None:
+        """Handle the path input from the RestoreBackupModal dialog."""
+        if not path:
+            return
+
+        log_widget = self.query_one("#live-log-output", RichLog)
+        log_widget.clear()
+
+        self.app.notify("Restoring system state in background...", severity="information")
+
+        from ocman import cli_restore
+
+        def do_restore():
+            try:
+                with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
+                    cli_restore(path)
+                self.app.call_from_thread(self.app.notify, "System restoration completed.", severity="information")
+            except Exception as e:
+                log_widget.app.call_from_thread(log_widget.write, f"ERROR: {e}")
+                self.app.call_from_thread(self.app.notify, f"Restoration failed: {e}", severity="error")
+            finally:
+                def update_ui():
+                    self.refresh_metrics()
+                    self.app.post_message(self.app.RefreshSidebar())
+                    with contextlib.suppress(Exception):
+                        self.app.load_tui_config()
+                self.app.call_from_thread(update_ui)
+
+        self.run_worker(do_restore, thread=True)

@@ -22,6 +22,8 @@ from textual.screen import ModalScreen
 from textual.binding import Binding
 from textual.message import Message
 
+from ocman import load_ocman_config, save_ocman_config, DEFAULT_CONFIG
+
 from . import __version__
 from .core import (
     db_list_sessions,
@@ -52,6 +54,57 @@ from .core import (
 from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
 from .widgets.models import ModelsWidget
+
+
+class RestoreBackupModal(ModalScreen[Optional[str]]):
+    """Modal dialog asking the user for a path to restore from."""
+
+    CSS = """
+    #dialog-container {
+        width: 65;
+        height: auto;
+        background: #1e1e2e;
+        border: round #cba6f7;
+        padding: 1 2;
+        align: center middle;
+    }
+    #dialog-title {
+        color: #f38ba8;
+        text-style: bold;
+        content-align: center middle;
+        margin-bottom: 1;
+    }
+    #dialog-message {
+        margin-bottom: 1;
+        color: #f9e2af;
+        text-style: italic;
+    }
+    .horizontal-buttons {
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("RESTORE SYSTEM STATE", id="dialog-title"),
+            Label("Enter absolute path to backup ZIP file or directory:", classes="info-label"),
+            Input("", id="input-restore-path", placeholder="e.g. /path/to/backup.zip"),
+            Label("Warning: This will overwrite active database, history, and storage!", id="dialog-message"),
+            Horizontal(
+                Button("Restore Now", id="btn-confirm-restore", variant="error"),
+                Button("Cancel", id="btn-cancel-restore", variant="primary"),
+                classes="horizontal-buttons"
+            ),
+            id="dialog-container"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-confirm-restore":
+            path = self.query_one("#input-restore-path", Input).value.strip()
+            self.dismiss(path)
+        elif event.button.id == "btn-cancel-restore":
+            self.dismiss(None)
 
 
 class FutureTodoModal(ModalScreen[None]):
@@ -311,6 +364,29 @@ class OrsessionApp(App):
                             yield Label("AUDIT TRAIL / ACTIVITY LOG", classes="panel-card-title")
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
                             yield Button("Clear Historical Activity Log (Planned)", id="btn-clear-history-log", variant="error")
+
+                    # Tab 6: Configuration Settings
+                    with TabPane("Configuration Settings", id="tab-config"):
+                        with VerticalScroll(classes="panel-card"):
+                            yield Label("CONFIGURATION SETTINGS", classes="panel-card-title")
+                            yield Label("SQLite Database Path:", classes="info-label")
+                            yield Input(id="cfg-db-path", placeholder="e.g. ~/.local/share/opencode/opencode.db")
+                            yield Label("Historical Metrics JSON Path:", classes="info-label")
+                            yield Input(id="cfg-history-path", placeholder="e.g. ~/.local/share/opencode/ocman_history.json")
+                            yield Label("Default Output Directory:", classes="info-label")
+                            yield Input(id="cfg-out-dir", placeholder="e.g. opencode-recovery")
+                            yield Label("Default Backup Directory:", classes="info-label")
+                            yield Input(id="cfg-backup-dir", placeholder="e.g. ~/.local/share/opencode/backups")
+                            yield Label("Default Compaction Model:", classes="info-label")
+                            yield Input(id="cfg-compaction-model", placeholder="e.g. uri/its_direct/pt1-qwen3-32b-us")
+                            yield Label("Default Retention Days:", classes="info-label")
+                            yield Input(id="cfg-retention-days", placeholder="e.g. 5")
+                            yield Checkbox("Keep Temporary Files", value=False, id="cfg-keep-temp")
+                            yield Checkbox("Include Tools in Transcripts", value=False, id="cfg-include-tools")
+                            yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
+                            with Horizontal(classes="margin-vertical"):
+                                yield Button("Save Configuration", id="btn-save-config", variant="primary")
+                                yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
         yield Footer()
 
     def on_mount(self) -> None:
@@ -318,6 +394,7 @@ class OrsessionApp(App):
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.populate_compaction_models()
         self.load_audit_trail()
+        self.load_tui_config()
 
     def populate_compaction_models(self) -> None:
         """Populate the LLM select dropdown with OpenAI-compatible models."""
@@ -521,6 +598,12 @@ class OrsessionApp(App):
         elif event.button.id == "btn-clear-history-log":
             self.app.push_screen(FutureTodoModal())
 
+        # Config tab handlers
+        elif event.button.id == "btn-save-config":
+            self.save_tui_config()
+        elif event.button.id == "btn-reset-config":
+            self.reset_tui_config()
+
     def generate_recovery_files(self, button_id: str) -> None:
         """Write specific recovery Markdown files directly to current directory."""
         if not self.selected_session_id or not self.current_turns:
@@ -721,6 +804,90 @@ class OrsessionApp(App):
             self.call_from_thread(update_ui)
         except Exception as e:
             self.call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
+
+    def load_tui_config(self) -> None:
+        """Load TOML configuration settings into input widgets."""
+        try:
+            config = load_ocman_config()
+            self.query_one("#cfg-db-path", Input).value = str(config.get("db_path", ""))
+            self.query_one("#cfg-history-path", Input).value = str(config.get("history_path", ""))
+            self.query_one("#cfg-out-dir", Input).value = str(config.get("default_out_dir", ""))
+            self.query_one("#cfg-backup-dir", Input).value = str(config.get("default_backup_dir", ""))
+            self.query_one("#cfg-compaction-model", Input).value = str(config.get("default_compaction_model", ""))
+            self.query_one("#cfg-retention-days", Input).value = str(config.get("default_retention_days", ""))
+            self.query_one("#cfg-keep-temp", Checkbox).value = bool(config.get("keep_temp", False))
+            self.query_one("#cfg-include-tools", Checkbox).value = bool(config.get("include_tools", False))
+            self.query_one("#cfg-all-roles", Checkbox).value = bool(config.get("all_roles", False))
+        except Exception as e:
+            self.notify(f"Failed to load configuration: {e}", severity="error")
+
+    def save_tui_config(self) -> None:
+        """Save form field values back to the TOML configuration file."""
+        try:
+            db_path = self.query_one("#cfg-db-path", Input).value.strip()
+            history_path = self.query_one("#cfg-history-path", Input).value.strip()
+            out_dir = self.query_one("#cfg-out-dir", Input).value.strip()
+            backup_dir = self.query_one("#cfg-backup-dir", Input).value.strip()
+            compaction_model = self.query_one("#cfg-compaction-model", Input).value.strip()
+
+            try:
+                retention_days = int(self.query_one("#cfg-retention-days", Input).value.strip())
+            except ValueError:
+                self.notify("Retention Days must be an integer.", severity="error")
+                return
+
+            config = {
+                "db_path": db_path,
+                "history_path": history_path,
+                "default_out_dir": out_dir,
+                "default_compaction_model": compaction_model,
+                "default_backup_dir": backup_dir,
+                "default_retention_days": retention_days,
+                "keep_temp": self.query_one("#cfg-keep-temp", Checkbox).value,
+                "include_tools": self.query_one("#cfg-include-tools", Checkbox).value,
+                "all_roles": self.query_one("#cfg-all-roles", Checkbox).value,
+            }
+
+            save_ocman_config(config)
+
+            # Immediately update the in-memory variables in ocman.py!
+            import ocman
+            ocman.OPENCODE_DB_PATH = Path(db_path).expanduser()
+            ocman.OPENCODE_HISTORY_PATH = Path(history_path).expanduser()
+
+            self.notify("Configuration saved successfully.", severity="information")
+
+            # Reload data in case database path changed!
+            self.query_one("#sidebar", SidebarWidget).load_data()
+            self.load_audit_trail()
+
+            # Update history / database metrics widget if visible
+            with contextlib.suppress(Exception):
+                admin_widget = self.query_one(DatabaseAdminWidget)
+                admin_widget.refresh_metrics()
+        except Exception as e:
+            self.notify(f"Failed to save configuration: {e}", severity="error")
+
+    def reset_tui_config(self) -> None:
+        """Reset form inputs to defaults and save."""
+        try:
+            save_ocman_config(DEFAULT_CONFIG)
+
+            # Immediately update active settings
+            import ocman
+            ocman.OPENCODE_DB_PATH = Path(DEFAULT_CONFIG["db_path"]).expanduser()
+            ocman.OPENCODE_HISTORY_PATH = Path(DEFAULT_CONFIG["history_path"]).expanduser()
+
+            self.load_tui_config()
+            self.notify("Configuration reset to defaults.", severity="information")
+
+            self.query_one("#sidebar", SidebarWidget).load_data()
+            self.load_audit_trail()
+            with contextlib.suppress(Exception):
+                admin_widget = self.query_one(DatabaseAdminWidget)
+                admin_widget.refresh_metrics()
+        except Exception as e:
+            self.notify(f"Reset failed: {e}", severity="error")
 
     def on_unmount(self) -> None:
         # Delete the temp session export directory
