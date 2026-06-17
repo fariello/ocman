@@ -181,6 +181,26 @@ ocman --show-models
 
 Displays a table of all models from your opencode config with pricing and API compatibility status.
 
+### Show database and storage information
+
+```bash
+ocman info
+# Or
+ocman --info
+```
+
+Displays system statistics including:
+- Total number of projects and sessions (broken down by root and subagent).
+- Total database size on disk (including WAL and SHM files).
+- Total LLM cost and tokens (input/output).
+- Top models used in sessions.
+- Number of session diff files stored on disk and their total size.
+
+Use `-v` or `--verbose` to run a database integrity check as well:
+```bash
+ocman info -v
+```
+
 ### Chain recoveries (session crashed twice)
 
 ```bash
@@ -258,6 +278,7 @@ ocman --show-compaction-prompt
 | | `--delete` | Recursively delete the session specified by `--session` |
 | | `--dry-run` | Perform a dry-run of database clean/orphan sweep/delete |
 | | `--force` | Bypass active process lock checks during deletion/clean |
+| | `--info` | Show database and disk storage info |
 | `-v` | `--verbose` | Increase verbosity (`-v` or `-vv`) |
 
 ---

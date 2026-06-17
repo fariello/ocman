@@ -8,6 +8,7 @@ from ocman import (
     db_list_sessions,
     db_delete_session_recursive,
     db_run_cleanup,
+    db_show_info,
     RecoveryError,
 )
 
@@ -169,3 +170,32 @@ def test_db_run_cleanup_age_based(temp_db, monkeypatch):
     assert "new_sess" in remaining_ids
     assert "old_sess" not in remaining_ids
     conn.close()
+
+
+def test_db_show_info(temp_db, capsys):
+    # Setup some test data in mock db
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, model)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.05, 1000, 500, '{"id": "gpt-4", "providerID": "openai"}')
+    """)
+    conn.commit()
+    conn.close()
+
+    # Create dummy args class
+    class Args:
+        verbose = 0
+    
+    # Run the info function
+    db_show_info(Args())
+    
+    captured = capsys.readouterr()
+    assert "OPENCODE SYSTEM INFORMATION" in captured.out
+    assert "Projects:        1" in captured.out
+    assert "Sessions:        1" in captured.out
+    assert "Total Cost:      $0.0500" in captured.out
+    assert "Tokens Input:    1,000" in captured.out
+    assert "gpt-4 (openai)" in captured.out
+

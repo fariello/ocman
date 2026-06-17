@@ -3699,6 +3699,19 @@ Examples:
         help="Increase verbosity. Use -v or -vv.",
     )
 
+    parser.add_argument(
+        "--info",
+        action="store_true",
+        help="Show database and storage info.",
+    )
+
+    parser.add_argument(
+        "command",
+        nargs="?",
+        choices=["info"],
+        help="Optional command to execute (e.g. 'info').",
+    )
+
     return parser.parse_args()
 
 
@@ -4517,6 +4530,221 @@ def human_size_local(bytes_size: int) -> str:
         return f"{bytes_size} B"
 
 
+def db_show_info(args) -> None:
+    """Show details/statistics about projects, sessions, database size, and storage usage."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    # 1. Database path and on-disk size
+    db_path = OPENCODE_DB_PATH
+    if not db_path.exists():
+        print(color_yellow(f"Database file not found at {db_path}"))
+        db_family_size_str = "N/A"
+        integrity = "N/A"
+        sqlite_version = "N/A"
+        projects_count = 0
+        sessions_count = 0
+        root_sessions = 0
+        child_sessions = 0
+        messages_count = 0
+        oldest_str = "N/A"
+        newest_str = "N/A"
+        total_cost = 0.0
+        total_tokens_in = 0
+        total_tokens_out = 0
+        top_models = []
+    else:
+        db_size = get_file_size_local(db_path)
+
+        # Family size (including WAL and SHM)
+        wal_file = db_path.parent / f"{db_path.name}-wal"
+        shm_file = db_path.parent / f"{db_path.name}-shm"
+        total_family_size = db_size
+        family_parts = [f"DB: {human_size_local(db_size)}"]
+        if wal_file.exists():
+            wal_size = get_file_size_local(wal_file)
+            total_family_size += wal_size
+            family_parts.append(f"WAL: {human_size_local(wal_size)}")
+        if shm_file.exists():
+            shm_size = get_file_size_local(shm_file)
+            total_family_size += shm_size
+            family_parts.append(f"SHM: {human_size_local(shm_size)}")
+        db_family_size_str = f"{human_size_local(total_family_size)} ({', '.join(family_parts)})"
+
+        sqlite_version = sqlite3.sqlite_version
+        integrity = "unknown"
+
+        # Query stats from SQLite
+        conn = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+
+            # Integrity check
+            if args.verbose:
+                try:
+                    cursor.execute("PRAGMA integrity_check(1);")
+                    integrity = cursor.fetchone()[0]
+                except Exception:
+                    integrity = "check failed"
+            else:
+                integrity = "skipped (use -v to check)"
+
+            # Project count
+            try:
+                cursor.execute("SELECT COUNT(*) FROM project;")
+                projects_count = cursor.fetchone()[0]
+            except Exception:
+                projects_count = 0
+
+            # Session count breakdown
+            try:
+                cursor.execute("SELECT COUNT(*) FROM session;")
+                sessions_count = cursor.fetchone()[0]
+            except Exception:
+                sessions_count = 0
+
+            try:
+                cursor.execute("SELECT COUNT(*) FROM session WHERE parent_id IS NULL OR parent_id = '';")
+                root_sessions = cursor.fetchone()[0]
+            except Exception:
+                root_sessions = 0
+
+            child_sessions = max(0, sessions_count - root_sessions)
+
+            # Messages count
+            try:
+                cursor.execute("SELECT COUNT(*) FROM message;")
+                messages_count = cursor.fetchone()[0]
+            except Exception:
+                messages_count = 0
+
+            # Time range
+            try:
+                cursor.execute("SELECT MIN(time_created), MAX(time_created) FROM session;")
+                min_t, max_t = cursor.fetchone()
+                if min_t:
+                    oldest_str = datetime.fromtimestamp(min_t / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    oldest_str = "N/A"
+                if max_t:
+                    newest_str = datetime.fromtimestamp(max_t / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                else:
+                    newest_str = "N/A"
+            except Exception:
+                oldest_str = "N/A"
+                newest_str = "N/A"
+
+            # Cost and tokens
+            try:
+                cursor.execute("SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output) FROM session;")
+                total_cost, total_tokens_in, total_tokens_out = cursor.fetchone()
+                total_cost = total_cost or 0.0
+                total_tokens_in = total_tokens_in or 0
+                total_tokens_out = total_tokens_out or 0
+            except Exception:
+                total_cost = 0.0
+                total_tokens_in = 0
+                total_tokens_out = 0
+
+            # Top models
+            try:
+                cursor.execute("""
+                    SELECT model, COUNT(*) as count 
+                    FROM session 
+                    WHERE model IS NOT NULL AND model != '' 
+                    GROUP BY model 
+                    ORDER BY count DESC 
+                    LIMIT 3;
+                """)
+                top_models = []
+                for row in cursor.fetchall():
+                    model_str = row[0]
+                    try:
+                        model_obj = json.loads(model_str)
+                        if isinstance(model_obj, dict):
+                            model_str = f"{model_obj.get('id', '')} ({model_obj.get('providerID', '')})"
+                    except Exception:
+                        pass
+                    top_models.append((model_str, row[1]))
+            except Exception:
+                top_models = []
+
+        except Exception as e:
+            print(color_red(f"Error querying database: {e}"))
+            projects_count = 0
+            sessions_count = 0
+            root_sessions = 0
+            child_sessions = 0
+            messages_count = 0
+            oldest_str = "N/A"
+            newest_str = "N/A"
+            total_cost = 0.0
+            total_tokens_in = 0
+            total_tokens_out = 0
+            top_models = []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+
+    # 2. Storage directory details
+    storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
+    diff_files_count = 0
+    diff_total_size = 0
+    diff_size_str = "N/A"
+    if storage_dir.exists() and storage_dir.is_dir():
+        try:
+            for entry in storage_dir.iterdir():
+                if entry.is_file() and entry.suffix == ".json":
+                    diff_files_count += 1
+                    diff_total_size += entry.stat().st_size
+            diff_size_str = human_size_local(diff_total_size)
+        except Exception as e:
+            diff_size_str = f"Error: {e}"
+
+    title_bar = color_bold("========================================================")
+    print(title_bar)
+    print(color_cyan(color_bold("                OPENCODE SYSTEM INFORMATION")))
+    print(title_bar)
+    
+    print(color_bold("Database Details:"))
+    print(f"  Path:            {color_cyan(str(db_path))}")
+    print(f"  SQLite Version:  {sqlite_version}")
+    if integrity == "ok":
+        print(f"  Integrity:       {color_green(integrity)}")
+    else:
+        print(f"  Integrity:       {color_red(integrity)}")
+    print(f"  Size on disk:    {color_yellow(db_family_size_str)}")
+    print()
+
+    print(color_bold("Database Statistics:"))
+    print(f"  Projects:        {projects_count}")
+    print(f"  Sessions:        {sessions_count} ({root_sessions} root, {child_sessions} subagent)")
+    print(f"  Messages:        {messages_count}")
+    print(f"  Time Range:      {oldest_str} to {newest_str}")
+    print()
+
+    print(color_bold("Usage Metrics:"))
+    print(f"  Total Cost:      {color_green(f'${total_cost:.4f}')}")
+    print(f"  Tokens Input:    {total_tokens_in:,}")
+    print(f"  Tokens Output:   {total_tokens_out:,}")
+    if top_models:
+        print(f"  Top Models:")
+        for idx, (m, count) in enumerate(top_models, 1):
+            print(f"    {idx}. {color_cyan(m)} ({count} sessions)")
+    print()
+
+    print(color_bold("Session Diff Files (Disk Storage):"))
+    print(f"  Path:            {color_dim(str(storage_dir))}")
+    print(f"  JSON Files:      {diff_files_count}")
+    print(f"  Total Size:      {color_yellow(diff_size_str)}")
+    print(title_bar)
+
+
 def main() -> None:
     """
     Run the interactive opencode recovery workflow.
@@ -4545,6 +4773,14 @@ def main() -> None:
             args.use_model = "__interactive__"
     elif not hasattr(args, 'use_model') or args.use_model is None:
         args.use_model = None
+
+    # Handle info command early.
+    if args.info or getattr(args, "command", None) == "info":
+        try:
+            db_show_info(args)
+        except RecoveryError as e:
+            die(str(e))
+        return
 
     # Handle --list-projects early.
     if args.list_projects:
