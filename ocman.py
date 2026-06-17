@@ -3520,6 +3520,62 @@ def resolve_session_spec(spec: str, sessions: list[dict[str, Any]]) -> dict[str,
     return None
 
 
+def preprocess_argv(argv: list[str]) -> list[str]:
+    """
+    Preprocess sys.argv to translate user-friendly commands like:
+      - list projects / list porjects -> --list-projects
+      - list sessions -> --list-sessions
+      - list sessions in project XXXX -> --list-sessions --project XXXX
+      - list sessions in XXXX -> --list-sessions --project XXXX
+    into standard CLI flags.
+    """
+    new_args = [argv[0]]
+    args_to_process = argv[1:]
+
+    i = 0
+    while i < len(args_to_process):
+        arg = args_to_process[i]
+        
+        # Check for "list"
+        if arg.lower() == "list" and i + 1 < len(args_to_process):
+            next_arg = args_to_process[i + 1].lower()
+            if next_arg in ("projects", "porjects"):
+                new_args.append("--list-projects")
+                i += 2
+                continue
+            elif next_arg == "sessions":
+                new_args.append("--list-sessions")
+                i += 2
+                
+                # Check if followed by "in [project] XXXX"
+                if i < len(args_to_process) and args_to_process[i].lower() == "in":
+                    i += 1  # consume "in"
+                    if i < len(args_to_process) and args_to_process[i].lower() == "project":
+                        i += 1  # consume "project"
+                    
+                    # Gather all subsequent non-flag arguments as the project specifier
+                    project_words = []
+                    flags_after = []
+                    while i < len(args_to_process):
+                        sub_arg = args_to_process[i]
+                        if sub_arg.startswith("-"):
+                            flags_after.append(sub_arg)
+                        else:
+                            project_words.append(sub_arg)
+                        i += 1
+                    
+                    if project_words:
+                        project_spec = " ".join(project_words)
+                        new_args.extend(["--project", project_spec])
+                    new_args.extend(flags_after)
+                continue
+
+        new_args.append(arg)
+        i += 1
+
+    return new_args
+
+
 def parse_args() -> argparse.Namespace:
     """
     Parse command-line arguments.
@@ -3527,6 +3583,8 @@ def parse_args() -> argparse.Namespace:
     Returns:
         Parsed arguments.
     """
+    import sys
+    sys.argv = preprocess_argv(sys.argv)
 
     parser = argparse.ArgumentParser(
         description="Export and recover opencode sessions. Generates restart-ready Markdown files and optionally compacts them via an LLM.",

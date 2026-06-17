@@ -297,4 +297,30 @@ def test_db_delete_session_recursive_saves_history(temp_db, mock_history_path):
     assert c["cost_deleted"] == pytest.approx(0.10)
 
 
+def test_preprocess_argv():
+    """Test CLI subcommand translation/preprocessing logic."""
+    from ocman import preprocess_argv
+
+    # Test list projects and list porjects
+    assert preprocess_argv(["ocman", "list", "projects"]) == ["ocman", "--list-projects"]
+    assert preprocess_argv(["ocman", "list", "porjects"]) == ["ocman", "--list-projects"]
+
+    # Test list sessions
+    assert preprocess_argv(["ocman", "list", "sessions"]) == ["ocman", "--list-sessions"]
+
+    # Test list sessions in project XXXX
+    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "my-proj"]) == ["ocman", "--list-sessions", "--project", "my-proj"]
+    
+    # Test list sessions in XXXX
+    assert preprocess_argv(["ocman", "list", "sessions", "in", "my-proj"]) == ["ocman", "--list-sessions", "--project", "my-proj"]
+
+    # Test list sessions in project My Project Name (unquoted multi-word)
+    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name"]) == ["ocman", "--list-sessions", "--project", "My Project Name"]
+
+    # Test list sessions in project My Project Name with flags
+    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name", "--all-sessions"]) == ["ocman", "--list-sessions", "--project", "My Project Name", "--all-sessions"]
+    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name", "-A"]) == ["ocman", "--list-sessions", "--project", "My Project Name", "-A"]
+
+
+
 
