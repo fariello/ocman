@@ -3536,6 +3536,12 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     while i < len(args_to_process):
         arg = args_to_process[i]
         
+        # Check for "show logs"
+        if arg.lower() == "show" and i + 1 < len(args_to_process) and args_to_process[i + 1].lower() == "logs":
+            new_args.append("--show-logs")
+            i += 2
+            continue
+            
         # Check for "list"
         if arg.lower() == "list" and i + 1 < len(args_to_process):
             next_arg = args_to_process[i + 1].lower()
@@ -3898,6 +3904,12 @@ Examples:
         "--clear-history",
         action="store_true",
         help="Clear historical metrics and activity log.",
+    )
+
+    parser.add_argument(
+        "--show-logs",
+        action="store_true",
+        help="Show the historical action logs (deleted sessions, totals reclaimed, and grand totals).",
     )
 
     parser.add_argument(
@@ -4785,7 +4797,8 @@ def _load_history() -> dict:
             "messages_deleted": 0,
             "cost_deleted": 0.0,
             "tokens_input_deleted": 0,
-            "tokens_output_deleted": 0
+            "tokens_output_deleted": 0,
+            "space_saved_deleted": 0
         },
         "runs": []
     }
@@ -4896,6 +4909,7 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         c["cost_deleted"] = c.get("cost_deleted", 0.0) + stats["cost"]
         c["tokens_input_deleted"] = c.get("tokens_input_deleted", 0) + stats["tokens_input"]
         c["tokens_output_deleted"] = c.get("tokens_output_deleted", 0) + stats["tokens_output"]
+        c["space_saved_deleted"] = c.get("space_saved_deleted", 0) + stats.get("space_saved", 0)
 
         run_record = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -4906,6 +4920,67 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         _save_history(history)
     except Exception as e:
         print(color_yellow(f"Warning: could not save deletion metrics: {e}"))
+
+
+def cli_show_logs() -> None:
+    """Print the historical recovery logs and cumulative grand totals."""
+    history = _load_history()
+    runs = history.get("runs", [])
+
+    if not runs:
+        print("No historical actions recorded in the sidecar ledger.")
+    else:
+        # Print runs reversed (newest first, matching TUI)
+        for run in reversed(runs):
+            timestamp = run.get("timestamp", "unknown time")
+            reason = run.get("reason", "unknown").upper()
+            sess_cnt = run.get("sessions_count", 0)
+            sub_cnt = run.get("subagents_count", 0)
+            msg_cnt = run.get("messages_count", 0)
+            cost = run.get("cost", 0.0)
+            space_saved = run.get("space_saved", 0)
+            deleted_sessions = run.get("sessions", [])
+
+            print(color_cyan(f"[{timestamp}] {reason} RUN:"))
+            if deleted_sessions:
+                print("  Deleted Sessions:")
+                for s in deleted_sessions:
+                    title = s.get("title", "(untitled)")
+                    sid = s.get("id", "unknown")
+                    created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
+                    updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
+                    print(f"    - {title} (ID: {sid[:8]}...)")
+                    print(f"      Start: {created_str} | End: {updated_str}")
+            else:
+                print(f"  - Deleted Sessions Count: {sess_cnt}")
+
+            print("  Totals Reclaimed:")
+            print("    - Database Rows Deleted: Rows removed successfully")
+            print(f"    - Subagent Sessions:     {sub_cnt}")
+            print(f"    - Messages Deleted:      {msg_cnt}")
+            print(f"    - Accumulated Cost:      ${cost:.4f}")
+            print(f"    - Disk Space Saved:      {human_size_local(space_saved)}")
+            print("--------------------------------------------------------")
+
+    # Always print grand totals (all-time historical recovery) at the end
+    c = history.get("cumulative", {})
+    projects_deleted = c.get("projects_deleted", 0)
+    sessions_deleted = c.get("sessions_deleted", 0)
+    subagents_deleted = c.get("subagents_deleted", 0)
+    messages_deleted = c.get("messages_deleted", 0)
+    cost_deleted = c.get("cost_deleted", 0.0)
+    space_saved_deleted = c.get("space_saved_deleted", 0)
+
+    print()
+    print(color_green("========================================================"))
+    print(color_green("GRAND TOTALS (ALL-TIME HISTORICAL RECOVERY):"))
+    print(f"  - Projects Deleted:        {projects_deleted}")
+    print(f"  - Sessions Deleted:        {sessions_deleted}")
+    print(f"  - Subagent Sessions:       {subagents_deleted}")
+    print(f"  - Messages Deleted:        {messages_deleted}")
+    print(f"  - Total Cost Reclaimed:    ${cost_deleted:.4f}")
+    print(f"  - Total Disk Space Saved:  {human_size_local(space_saved_deleted)}")
+    print(color_green("========================================================"))
 
 
 def db_show_info(args) -> None:
@@ -5565,6 +5640,14 @@ def main() -> None:
     elif not hasattr(args, 'use_model') or args.use_model is None:
         args.use_model = None
 
+    # Handle --show-logs early.
+    if getattr(args, "show_logs", False):
+        try:
+            cli_show_logs()
+        except Exception as e:
+            die(str(e))
+        return
+
     # Handle --clear-history early.
     if getattr(args, "clear_history", False):
         default_history = {
@@ -5575,7 +5658,8 @@ def main() -> None:
                 "messages_deleted": 0,
                 "cost_deleted": 0.0,
                 "tokens_input_deleted": 0,
-                "tokens_output_deleted": 0
+                "tokens_output_deleted": 0,
+                "space_saved_deleted": 0
             },
             "runs": []
         }

@@ -322,5 +322,76 @@ def test_preprocess_argv():
     assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name", "-A"]) == ["ocman", "--list-sessions", "--project", "My Project Name", "-A"]
 
 
+def test_preprocess_argv_show_logs():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "show", "logs"]) == ["ocman", "--show-logs"]
+    assert preprocess_argv(["ocman", "SHOW", "loGs"]) == ["ocman", "--show-logs"]
+
+
+def test_cli_show_logs(mock_history_path, capsys):
+    import ocman
+    # Setup some test history
+    history = {
+        "cumulative": {
+            "projects_deleted": 1,
+            "sessions_deleted": 2,
+            "subagents_deleted": 3,
+            "messages_deleted": 4,
+            "cost_deleted": 0.5,
+            "tokens_input_deleted": 100,
+            "tokens_output_deleted": 200,
+            "space_saved_deleted": 1024
+        },
+        "runs": [
+            {
+                "timestamp": "2026-06-18 12:00:00",
+                "reason": "delete",
+                "sessions_count": 1,
+                "subagents_count": 0,
+                "messages_count": 5,
+                "cost": 0.01,
+                "space_saved": 512,
+                "sessions": [
+                    {
+                        "id": "test_sess_1",
+                        "title": "Test Session 1",
+                        "created": 1000000,
+                        "updated": 2000000
+                    }
+                ]
+            }
+        ]
+    }
+    ocman._save_history(history)
+    ocman.cli_show_logs()
+    captured = capsys.readouterr()
+    assert "GRAND TOTALS (ALL-TIME HISTORICAL RECOVERY)" in captured.out
+    assert "Sessions Deleted:        2" in captured.out
+    assert "Total Disk Space Saved:  1.00 KB" in captured.out
+    assert "Test Session 1" in captured.out
+
+
+def test_save_deletion_metrics_accumulates_space_saved(mock_history_path):
+    import ocman
+    stats = {
+        "sessions_count": 1,
+        "subagents_count": 0,
+        "messages_count": 10,
+        "cost": 0.05,
+        "tokens_input": 500,
+        "tokens_output": 250,
+        "space_saved": 4096
+    }
+    ocman.save_deletion_metrics("delete", stats)
+    history = ocman._load_history()
+    assert history["cumulative"]["space_saved_deleted"] == 4096
+
+    # Accumulate second time
+    ocman.save_deletion_metrics("delete", stats)
+    history = ocman._load_history()
+    assert history["cumulative"]["space_saved_deleted"] == 8192
+
+
+
 
 

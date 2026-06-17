@@ -451,47 +451,70 @@ class OrsessionApp(App):
 
         if not runs:
             audit_log.write("No historical actions recorded in the sidecar ledger.")
-            return
+        else:
+            # Print runs reversed (newest first)
+            for run in reversed(runs):
+                timestamp = run.get("timestamp", "unknown time")
+                reason = run.get("reason", "unknown").upper()
+                sess_cnt = run.get("sessions_count", 0)
+                sub_cnt = run.get("subagents_count", 0)
+                msg_cnt = run.get("messages_count", 0)
+                cost = run.get("cost", 0.0)
+                space_saved = run.get("space_saved", 0)
+                deleted_sessions = run.get("sessions", [])
 
-        # Print runs reversed (newest first)
-        for run in reversed(runs):
-            timestamp = run.get("timestamp", "unknown time")
-            reason = run.get("reason", "unknown").upper()
-            sess_cnt = run.get("sessions_count", 0)
-            sub_cnt = run.get("subagents_count", 0)
-            msg_cnt = run.get("messages_count", 0)
-            cost = run.get("cost", 0.0)
-            space_saved = run.get("space_saved", 0)
-            deleted_sessions = run.get("sessions", [])
+                run_str = f"[{timestamp}] {reason} RUN:\n"
+                
+                # Details of all deleted sessions
+                if deleted_sessions:
+                    run_str += "  Deleted Sessions:\n"
+                    for s in deleted_sessions:
+                        title = s.get("title", "(untitled)")
+                        sid = s.get("id", "unknown")
+                        from ocman import _fmt_ts
+                        created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
+                        updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
+                        run_str += f"    - {title} (ID: {sid[:8]}...)\n"
+                        run_str += f"      Start: {created_str} | End: {updated_str}\n"
+                else:
+                    run_str += f"  - Deleted Sessions Count: {sess_cnt}\n"
 
-            run_str = f"[{timestamp}] {reason} RUN:\n"
-            
-            # Details of all deleted sessions
-            if deleted_sessions:
-                run_str += "  Deleted Sessions:\n"
-                for s in deleted_sessions:
-                    title = s.get("title", "(untitled)")
-                    sid = s.get("id", "unknown")
-                    from ocman import _fmt_ts
-                    created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
-                    updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
-                    run_str += f"    - {title} (ID: {sid[:8]}...)\n"
-                    run_str += f"      Start: {created_str} | End: {updated_str}\n"
-            else:
-                run_str += f"  - Deleted Sessions Count: {sess_cnt}\n"
+                # Totals Section
+                run_str += "  Totals Reclaimed:\n"
+                run_str += f"    - Database Rows Deleted: Rows removed successfully\n"
+                run_str += f"    - Subagent Sessions:     {sub_cnt}\n"
+                run_str += f"    - Messages Deleted:      {msg_cnt}\n"
+                run_str += f"    - Accumulated Cost:      ${cost:.4f}\n"
+                
+                from ocman import human_size_local
+                run_str += f"    - Disk Space Saved:      {human_size_local(space_saved)}\n"
+                run_str += "--------------------------------------------------------\n"
+                
+                audit_log.write(run_str)
 
-            # Totals Section
-            run_str += "  Totals Reclaimed:\n"
-            run_str += f"    - Database Rows Deleted: Rows removed successfully\n"
-            run_str += f"    - Subagent Sessions:     {sub_cnt}\n"
-            run_str += f"    - Messages Deleted:      {msg_cnt}\n"
-            run_str += f"    - Accumulated Cost:      ${cost:.4f}\n"
-            
-            from ocman import human_size_local
-            run_str += f"    - Disk Space Saved:      {human_size_local(space_saved)}\n"
-            run_str += "--------------------------------------------------------\n"
-            
-            audit_log.write(run_str)
+        # Always write grand totals at the end of the activity log (after printing all runs)
+        c = history.get("cumulative", {})
+        projects_deleted = c.get("projects_deleted", 0)
+        sessions_deleted = c.get("sessions_deleted", 0)
+        subagents_deleted = c.get("subagents_deleted", 0)
+        messages_deleted = c.get("messages_deleted", 0)
+        cost_deleted = c.get("cost_deleted", 0.0)
+        space_saved_deleted = c.get("space_saved_deleted", 0)
+
+        from ocman import human_size_local
+        grand_totals_str = (
+            "\n"
+            "========================================================\n"
+            "GRAND TOTALS (ALL-TIME HISTORICAL RECOVERY):\n"
+            f"  - Projects Deleted:        {projects_deleted}\n"
+            f"  - Sessions Deleted:        {sessions_deleted}\n"
+            f"  - Subagent Sessions:       {subagents_deleted}\n"
+            f"  - Messages Deleted:        {messages_deleted}\n"
+            f"  - Total Cost Reclaimed:    ${cost_deleted:.4f}\n"
+            f"  - Total Disk Space Saved:  {human_size_local(space_saved_deleted)}\n"
+            "========================================================\n"
+        )
+        audit_log.write(grand_totals_str)
 
     def action_toggle_sidebar(self) -> None:
         sidebar = self.query_one("#sidebar", SidebarWidget)
