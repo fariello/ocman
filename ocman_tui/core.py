@@ -11,6 +11,7 @@ from ocman import (
     db_list_projects,
     db_list_sessions,
     db_delete_session_recursive,
+    db_delete_project_recursive,
     db_run_cleanup,
     load_opencode_config,
     extract_models_from_config,

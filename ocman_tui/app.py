@@ -28,6 +28,7 @@ from . import __version__
 from .core import (
     db_list_sessions,
     db_delete_session_recursive,
+    db_delete_project_recursive,
     load_opencode_config,
     extract_models_from_config,
     resolve_model,
@@ -240,6 +241,139 @@ class DeletionSafetyModal(ModalScreen[bool]):
             self.dismiss(True)
 
 
+class ProjectDeletionSafetyModal(ModalScreen[bool]):
+    """Safety modal confirming deletion of projects and related data."""
+    def __init__(self, project_id: str, name: str) -> None:
+        super().__init__()
+        self.project_id = project_id
+        self.project_name = name
+        self.descendants_info: List[Dict[str, Any]] = []
+        self.counts: Dict[str, int] = {}
+        self.files_to_delete: List[Path] = []
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("CONFIRM PROJECT DELETION", id="dialog-title"),
+            VerticalScroll(
+                Label("You are about to delete the following project and all its sessions:", classes="info-label"),
+                Static(id="lbl-del-project-info", classes="margin-vertical"),
+                Label("Sessions that will be recursively deleted:", classes="info-label"),
+                Static(id="lbl-del-hierarchy", classes="margin-vertical"),
+                Label("Database rows to be deleted:", classes="info-label"),
+                Static(id="lbl-del-db-rows", classes="margin-vertical"),
+                Label("Disk files to be deleted:", classes="info-label"),
+                Static(id="lbl-del-files", classes="margin-vertical"),
+                id="del-safety-scroll"
+            ),
+            Label("This action is irreversible. Please type 'yes' below to confirm:", classes="info-label"),
+            Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-del"),
+                Button("CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
+                classes="horizontal-buttons"
+            ),
+            id="dialog-container"
+        )
+
+    def on_mount(self) -> None:
+        sqlite3 = _get_sqlite()
+        db_path = get_db_path()
+        if not sqlite3 or not db_path.exists():
+            self.dismiss(False)
+            return
+
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            
+            # Fetch project directory/name details
+            cursor.execute("SELECT name, worktree FROM project WHERE id = ?", (self.project_id,))
+            row = cursor.fetchone()
+            proj_name = row[0] or "(unnamed)" if row else self.project_name
+            proj_dir = row[1] or "(no worktree)" if row else "N/A"
+            self.query_one("#lbl-del-project-info", Static).update(
+                f"  Name: {proj_name}\n  Directory: {proj_dir}\n  ID: {self.project_id}"
+            )
+
+            # Recursive session search (all sessions associated with the project and any child subagent sessions)
+            cursor.execute("""
+                WITH RECURSIVE session_tree(id) AS (
+                    SELECT id FROM session WHERE project_id = ?
+                    UNION
+                    SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                )
+                SELECT id FROM session_tree;
+            """, (self.project_id,))
+            session_ids = [r[0] for r in cursor.fetchall()]
+            
+            # Get table counts
+            if session_ids:
+                placeholders = ",".join("?" for _ in session_ids)
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+                    self.counts[table] = cursor.fetchone()[0]
+
+                # Get session details
+                cursor.execute(f"SELECT id, title FROM session WHERE id IN ({placeholders})", session_ids)
+                for r in cursor.fetchall():
+                    self.descendants_info.append({
+                        "id": r[0],
+                        "title": r[1] or "(untitled)"
+                    })
+            else:
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    self.counts[table] = 0
+            
+            conn.close()
+        except Exception as e:
+            self.app.notify(f"Failed to gather project deletion details: {e}", severity="error")
+            self.dismiss(False)
+            return
+
+        # Find disk files
+        storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
+        for sid in session_ids:
+            if sid:
+                diff_file = storage_dir / f"{sid.strip()}.json"
+                if diff_file.exists():
+                    self.files_to_delete.append(diff_file)
+
+        # Update text displays
+        hierarchy_text = ""
+        if self.descendants_info:
+            for s in self.descendants_info:
+                hierarchy_text += f"  - {s['title']} (ID: {s['id']})\n"
+        else:
+            hierarchy_text = "  None\n"
+        self.query_one("#lbl-del-hierarchy", Static).update(hierarchy_text)
+
+        rows_text = ""
+        for table, col in SESSION_RELATIONAL_TABLES:
+            count = self.counts.get(table, 0)
+            rows_text += f"  {table:<25}: {count:,}\n"
+        rows_text += f"  {'project':<25}: 1\n"
+        self.query_one("#lbl-del-db-rows", Static).update(rows_text)
+
+        files_text = ""
+        if self.files_to_delete:
+            for f in self.files_to_delete:
+                files_text += f"  - {f.name} ({human_size_local(f.stat().st_size)})\n"
+        else:
+            files_text = "  None\n"
+        self.query_one("#lbl-del-files", Static).update(files_text)
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "input-confirm-yes":
+            confirm_btn = self.query_one("#btn-confirm-del", Button)
+            confirm_btn.disabled = (event.value.strip().lower() != "yes")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-del":
+            self.dismiss(False)
+        elif event.button.id == "btn-confirm-del":
+            self.dismiss(True)
+
+
 class PostExecutionSummaryModal(ModalScreen[None]):
     """Displays detailed summary of deleted DB rows and space saved on disk."""
     def __init__(self, summary: Dict[str, Any]) -> None:
@@ -295,6 +429,8 @@ class OrsessionApp(App):
         self.temp_dir = Path(tempfile.mkdtemp(prefix="ocman-tui-"))
         self.selected_session_id: Optional[str] = None
         self.selected_session_title: str = ""
+        self.selected_project_id: Optional[str] = None
+        self.selected_project_name: Optional[str] = None
         self.session_turn_cache: Dict[str, int] = {}
         self.current_export: Optional[Any] = None
         self.current_turns: List[Any] = []
@@ -362,8 +498,10 @@ class OrsessionApp(App):
                             # Danger Zone Card
                             with Vertical(classes="panel-card margin-vertical"):
                                 yield Label("DANGER ZONE", classes="panel-card-title")
-                                yield Label("Recursively delete this session and its subagent descendants from database and disk:", classes="info-label")
-                                yield Button("Recursively Delete Session & Descendants", id="btn-delete-session-rec", variant="error")
+                                yield Label("Delete selected session/project and all related data from database and disk:", classes="info-label")
+                                with Horizontal():
+                                    yield Button("Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
+                                    yield Button("Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
                     
                     # Tab 3: Database Admin
                     with TabPane("Database Admin", id="tab-admin"):
@@ -536,8 +674,45 @@ class OrsessionApp(App):
             s = node_data["data"]
             self.selected_session_id = node_data["id"]
             self.selected_session_title = s.get("title") or "(untitled)"
+            self.selected_project_id = None
+            self.selected_project_name = None
             self.update_metadata_view(s)
             self.start_session_export()
+            with contextlib.suppress(Exception):
+                self.query_one("#btn-delete-session-rec", Button).disabled = False
+                self.query_one("#btn-delete-project", Button).disabled = True
+        elif node_data and node_data.get("type") == "project":
+            self.selected_session_id = None
+            self.selected_session_title = ""
+            self.selected_project_id = node_data["id"]
+            self.selected_project_name = node_data.get("id") or "Unnamed Project"
+            
+            proj_name = self.selected_project_name
+            proj_dir = node_data.get("dir", "N/A")
+            try:
+                from .core import db_list_projects
+                projects = db_list_projects()
+                for p in projects:
+                    if p["id"] == self.selected_project_id:
+                        proj_name = p["name"] or "Unnamed Project"
+                        proj_dir = p["directory"]
+                        break
+            except Exception:
+                pass
+            self.selected_project_name = proj_name
+
+            metadata_str = (
+                f"Project:  [bold]{proj_name}[/]\n"
+                f"ID:       {self.selected_project_id}\n"
+                f"Path:     {proj_dir}"
+            )
+            self.query_one("#lbl-metadata-grid", Static).update(metadata_str)
+            with contextlib.suppress(Exception):
+                self.query_one("#lbl-actions-metadata-grid", Static).update(metadata_str)
+            
+            with contextlib.suppress(Exception):
+                self.query_one("#btn-delete-session-rec", Button).disabled = True
+                self.query_one("#btn-delete-project", Button).disabled = False
 
     def update_metadata_view(self, s: dict) -> None:
         """Update the top metadata card with session info."""
@@ -674,6 +849,8 @@ class OrsessionApp(App):
         # Recursive session deletion
         elif event.button.id == "btn-delete-session-rec":
             self.confirm_and_delete_session()
+        elif event.button.id == "btn-delete-project":
+            self.confirm_and_delete_project()
 
         # Audit history log stub
         elif event.button.id == "btn-clear-history-log":
@@ -905,6 +1082,81 @@ class OrsessionApp(App):
                     self.query_one("#transcript-md", Markdown).update("")
                     self.current_turns = []
                     self.current_export = None
+
+                # Refresh trees & stats
+                self.action_refresh_data()
+
+            self.call_from_thread(update_ui)
+        except Exception as e:
+            self.call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
+
+    def confirm_and_delete_project(self) -> None:
+        """Spawn safety check confirmation modal overlay before project deletion."""
+        if not self.selected_project_id:
+            self.app.notify("Please select a project in the sidebar tree first.", severity="warning")
+            return
+
+        def handle_confirmation(confirmed: bool) -> None:
+            if not confirmed:
+                return
+
+            self.app.notify("Deleting project in background...", severity="information")
+            self.run_worker(
+                lambda: self._do_delete_project_worker(self.selected_project_id, self.selected_project_name),
+                thread=True
+            )
+
+        self.app.push_screen(
+            ProjectDeletionSafetyModal(self.selected_project_id, self.selected_project_name),
+            handle_confirmation
+        )
+
+    def _do_delete_project_worker(self, project_id: str, project_name: str) -> None:
+        db_path = get_db_path()
+        
+        try:
+            # Pre-size of DB
+            size_before = get_file_size_local(db_path)
+
+            # Patch input check
+            original_input = builtins.input
+            builtins.input = lambda *args, **kwargs: "yes"
+
+            try:
+                db_delete_project_recursive(
+                    project_id=project_id,
+                    dry_run=False,
+                    force=True, # bypass locks because user confirmed in TUI
+                    verbosity=0
+                )
+            finally:
+                builtins.input = original_input
+
+            # Post-size of DB after VACUUM
+            size_after = get_file_size_local(db_path)
+            saved_space = max(0, size_before - size_after)
+
+            # Schedule UI updates on main thread
+            def update_ui() -> None:
+                self.app.notify(f"Deleted project {project_name}", severity="information")
+                summary = {
+                    "session_id": project_id,
+                    "session_title": project_name,
+                    "start_date": "N/A (All Sessions)",
+                    "end_date": "N/A",
+                    "db_rows": "Project row and associated sessions/messages removed successfully (foreign keys off, committed).",
+                    "files": "Session diff JSON files unlinked on disk.",
+                    "space": f"SQLite File Shrunk: {human_size_local(saved_space)} (post-VACUUM)"
+                }
+                self.app.push_screen(PostExecutionSummaryModal(summary))
+
+                # Clear selection context and reload
+                if self.selected_project_id == project_id:
+                    self.selected_project_id = None
+                    self.selected_project_name = None
+                    self.query_one("#lbl-metadata-grid", Static).update("Select a session in the sidebar to view details.")
+                    with contextlib.suppress(Exception):
+                        self.query_one("#lbl-actions-metadata-grid", Static).update("Select a session in the sidebar to view details.")
 
                 # Refresh trees & stats
                 self.action_refresh_data()

@@ -392,6 +392,56 @@ def test_save_deletion_metrics_accumulates_space_saved(mock_history_path):
     assert history["cumulative"]["space_saved_deleted"] == 8192
 
 
+def test_preprocess_argv_delete_project():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "delete", "project", "my-proj"]) == ["ocman", "--delete-project", "--project", "my-proj"]
+    assert preprocess_argv(["ocman", "delete", "project", "My", "Project", "Name", "--force"]) == ["ocman", "--delete-project", "--project", "My Project Name", "--force"]
+
+
+def test_db_delete_project_recursive_saves_history(temp_db, mock_history_path):
+    import ocman
+    from ocman import db_delete_project_recursive
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.10, 1000, 500)
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sub1', 'proj1', 'sess1', 'Sub 1', 1100, 2100, 0.05, 500, 250)
+    """)
+    conn.commit()
+    conn.close()
+
+    # Run recursive project delete (mock confirm input)
+    import builtins
+    orig_input = builtins.input
+    builtins.input = lambda _: 'yes'
+    try:
+        db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0)
+    finally:
+        builtins.input = orig_input
+
+    # Check project is deleted
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM session")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
+
+    # History should be updated
+    history = ocman._load_history()
+    c = history["cumulative"]
+    assert c["projects_deleted"] == 1
+    assert c["sessions_deleted"] == 2
+    assert c["cost_deleted"] == pytest.approx(0.15)
+
+
+
 
 
 

@@ -3536,6 +3536,26 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     while i < len(args_to_process):
         arg = args_to_process[i]
         
+        # Check for "delete project"
+        if arg.lower() == "delete" and i + 1 < len(args_to_process) and args_to_process[i + 1].lower() == "project":
+            new_args.append("--delete-project")
+            i += 2
+            # Gather subsequent non-flag words as project identifier
+            project_words = []
+            flags_after = []
+            while i < len(args_to_process):
+                sub_arg = args_to_process[i]
+                if sub_arg.startswith("-"):
+                    flags_after.append(sub_arg)
+                else:
+                    project_words.append(sub_arg)
+                i += 1
+            if project_words:
+                project_spec = " ".join(project_words)
+                new_args.extend(["--project", project_spec])
+            new_args.extend(flags_after)
+            continue
+
         # Check for "show logs"
         if arg.lower() == "show" and i + 1 < len(args_to_process) and args_to_process[i + 1].lower() == "logs":
             new_args.append("--show-logs")
@@ -3827,6 +3847,12 @@ Examples:
         "--delete",
         action="store_true",
         help="Delete the session specified by --session. Shows details and asks for confirmation.",
+    )
+
+    parser.add_argument(
+        "--delete-project",
+        action="store_true",
+        help="Delete the project specified by --project (including all sessions, files, and DB rows). Shows details and asks for confirmation.",
     )
 
     parser.add_argument(
@@ -4399,6 +4425,246 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
                 pass
 
 
+def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int) -> None:
+    """Recursively delete a project, all its sessions, and all related database and disk data."""
+    clean_pid = str(project_id).strip()
+    if "/" in clean_pid or "\\" in clean_pid or ".." in clean_pid:
+        raise RecoveryError(f"Unsafe project ID detected: {clean_pid}")
+
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    # Check for active processes
+    if not force:
+        import subprocess
+        try:
+            proc_check = subprocess.run(
+                ["pgrep", "-f", "opencode --continue"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            if proc_check.returncode == 0:
+                raise RecoveryError(
+                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
+                    "Use --force to bypass this safety check if you are certain."
+                )
+        except Exception as e:
+            if isinstance(e, RecoveryError):
+                raise
+            pass
+
+    conn = None
+    transaction_started = False
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # Query project details
+        cursor.execute("SELECT name, worktree FROM project WHERE id = ?", (project_id,))
+        proj_row = cursor.fetchone()
+        if not proj_row:
+            raise RecoveryError(f"Project with ID {project_id} not found in database.")
+        proj_name = proj_row[0] or "(unnamed)"
+        proj_dir = proj_row[1] or "(no worktree)"
+
+        # Get all sessions associated with the project recursively (including subagent sessions)
+        cursor.execute("""
+            WITH RECURSIVE session_tree(id) AS (
+                SELECT id FROM session WHERE project_id = ?
+                UNION
+                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+            )
+            SELECT id FROM session_tree;
+        """, (project_id,))
+        session_ids = [row[0] for row in cursor.fetchall()]
+
+        # Gather metrics of sessions to be deleted
+        stats = gather_deletion_metrics(session_ids, conn) if session_ids else {
+            "sessions_count": 0,
+            "subagents_count": 0,
+            "messages_count": 0,
+            "cost": 0.0,
+            "tokens_input": 0,
+            "tokens_output": 0,
+            "sessions": []
+        }
+        stats["projects_count"] = 1
+
+        print()
+        print(color_bold(f"You are about to delete the project {color_bold(proj_name)} at {proj_dir}"))
+        print(f"Project ID: {project_id}")
+        if session_ids:
+            print(f"This will recursively delete {len(session_ids)} sessions and their messages/related data.")
+        else:
+            print("No sessions associated with this project.")
+
+        # Get counts of rows to be deleted
+        counts = {}
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            for table, col in SESSION_RELATIONAL_TABLES:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+                counts[table] = cursor.fetchone()[0]
+        else:
+            for table, col in SESSION_RELATIONAL_TABLES:
+                counts[table] = 0
+
+        print()
+        print(color_bold("Rows that will be deleted from the database:"))
+        for table, col in SESSION_RELATIONAL_TABLES:
+            count = counts[table]
+            print(f"  {table:<25}: {count:,}")
+        print(f"  {'project':<25}: 1")
+
+        # Get corresponding storage files
+        storage_dir = OPENCODE_STORAGE_DIR
+        files_to_delete = []
+        for sid in session_ids:
+            if sid and str(sid).strip():
+                clean_sid = str(sid).strip()
+                if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
+                    raise RecoveryError(f"Unsafe session ID detected: {clean_sid}")
+                diff_file = (storage_dir / f"{clean_sid}.json").resolve()
+                try:
+                    if diff_file.parent != storage_dir:
+                        raise RecoveryError(f"Path traversal detected: resolved path {diff_file} is outside storage directory {storage_dir}")
+                except Exception as ex:
+                    if isinstance(ex, RecoveryError):
+                        raise
+                    raise RecoveryError(f"Invalid path for session ID {clean_sid}: {ex}")
+                if diff_file.exists():
+                    files_to_delete.append(diff_file)
+
+        if files_to_delete:
+            print()
+            print(color_bold("Files that will be deleted from disk:"))
+            for f in files_to_delete:
+                print(f"  - {f}")
+
+        if dry_run:
+            print()
+            print("[*] Dry run complete. No database changes were made.")
+            return
+
+        print()
+        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
+        print()
+
+        try:
+            confirmation = input("Type 'yes' to confirm project deletion: ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\nCancelled.")
+            return
+
+        if confirmation != "yes":
+            print("Cancelled.")
+            return
+
+        # Create backup directory and backup database file family
+        from datetime import datetime
+        import shutil
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            print(f"[*] Creating database family backup in {backup_dir} ...")
+            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+
+            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+            if wal_file.exists():
+                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+            if shm_file.exists():
+                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+            print("[+] Backup created successfully.")
+        except Exception as e:
+            print(color_red(f"[-] Backup failed: {e}"))
+            print(color_red("    Aborting deletion for safety."))
+            return
+
+        # Perform deletion
+        size_before = get_file_size_local(OPENCODE_DB_PATH)
+        print("[*] Starting transaction...")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        cursor.execute("BEGIN TRANSACTION;")
+        transaction_started = True
+
+        if session_ids:
+            placeholders = ",".join("?" for _ in session_ids)
+            for table, col in SESSION_RELATIONAL_TABLES:
+                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+                print(f"[-] Deleted {cursor.rowcount} rows from {table}")
+
+        # Delete the project row
+        cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
+        print(f"[-] Deleted 1 project row from project table")
+
+        cursor.execute("COMMIT;")
+        transaction_started = False
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        print("[+] Transaction committed successfully.")
+
+        # Delete disk files
+        for f in files_to_delete:
+            try:
+                f.unlink()
+                print(f"[-] Deleted file: {f}")
+            except OSError as e:
+                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+        # Vacuum database
+        print("[*] Executing VACUUM to reclaim disk space...")
+        conn.execute("VACUUM;")
+        print("[+] VACUUM complete.")
+
+        size_after = OPENCODE_DB_PATH.stat().st_size
+        space_saved = max(0, size_before - size_after)
+        stats["space_saved"] = space_saved
+
+        # Save metrics to JSON sidecar
+        save_deletion_metrics("delete", stats)
+
+        print(color_green("Project deletion complete!"))
+
+        print("--------------------------------------------------------")
+        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+        print()
+        print("Rollback instructions:")
+        print("  1. Close OpenCode if it is running.")
+        print("  2. Restore the database file family:")
+        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+        if wal_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+        else:
+            print(f"     rm -f '{wal_file}'")
+        if shm_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+        else:
+            print(f"     rm -f '{shm_file}'")
+        print("--------------------------------------------------------")
+
+    except Exception as e:
+        if conn and transaction_started:
+            try:
+                conn.rollback()
+                print(color_yellow("[*] Transaction rolled back."))
+            except Exception:
+                pass
+        if isinstance(e, RecoveryError):
+            raise
+        raise RecoveryError(f"Database operation failed: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def db_run_cleanup(
     days: int,
     project_id: str | None,
@@ -4902,7 +5168,7 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
     try:
         history = _load_history()
         c = history["cumulative"]
-        c["projects_deleted"] = c.get("projects_deleted", 0)
+        c["projects_deleted"] = c.get("projects_deleted", 0) + stats.get("projects_count", 0)
         c["sessions_deleted"] = c.get("sessions_deleted", 0) + stats["sessions_count"]
         c["subagents_deleted"] = c.get("subagents_deleted", 0) + stats["subagents_count"]
         c["messages_deleted"] = c.get("messages_deleted", 0) + stats["messages_count"]
@@ -5810,6 +6076,23 @@ def main() -> None:
                 verbosity=verbosity
             )
         except RecoveryError as e:
+            die(str(e))
+        return
+
+    # Handle --delete-project (requires --project).
+    if getattr(args, "delete_project", False):
+        if not _project_id:
+            die("Error: --delete-project requires --project to identify the project.\n"
+                "Use --list-projects to see available projects.")
+
+        try:
+            db_delete_project_recursive(
+                project_id=_project_id,
+                dry_run=args.dry_run,
+                force=args.force,
+                verbosity=verbosity
+            )
+        except Exception as e:
             die(str(e))
         return
 
