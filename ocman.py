@@ -3708,11 +3708,15 @@ Examples:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["info"],
-        help="Optional command to execute (e.g. 'info').",
+        choices=["info", "help"],
+        help="Optional command to execute (e.g. 'info', 'help').",
     )
 
-    return parser.parse_args()
+    args = parser.parse_args()
+    if args.command == "help":
+        parser.print_help()
+        sys.exit(0)
+    return args
 
 
 def find_session_by_id(sessions: list[SessionInfo], session_id: str) -> SessionInfo:

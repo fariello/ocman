@@ -199,3 +199,21 @@ def test_db_show_info(temp_db, capsys):
     assert "Tokens Input:    1,000" in captured.out
     assert "gpt-4 (openai)" in captured.out
 
+
+def test_parse_args_help(monkeypatch, capsys):
+    import sys
+    from ocman import parse_args
+    
+    # Mock sys.argv to pass help
+    monkeypatch.setattr(sys, "argv", ["ocman.py", "help"])
+    
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args()
+        
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    # Argparse help output can be on stdout or stderr depending on python version/argparse implementation
+    output = captured.out + captured.err
+    assert "usage: ocman" in output
+
+
