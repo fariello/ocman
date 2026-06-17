@@ -461,11 +461,35 @@ class OrsessionApp(App):
             sub_cnt = run.get("subagents_count", 0)
             msg_cnt = run.get("messages_count", 0)
             cost = run.get("cost", 0.0)
+            space_saved = run.get("space_saved", 0)
+            deleted_sessions = run.get("sessions", [])
 
             run_str = f"[{timestamp}] {reason} RUN:\n"
-            run_str += f"  - Deleted: {sess_cnt} sessions ({sub_cnt} subagents), {msg_cnt} messages\n"
-            if cost:
-                run_str += f"  - Accumulated Cost Reclaimed: ${cost:.4f}\n"
+            
+            # Details of all deleted sessions
+            if deleted_sessions:
+                run_str += "  Deleted Sessions:\n"
+                for s in deleted_sessions:
+                    title = s.get("title", "(untitled)")
+                    sid = s.get("id", "unknown")
+                    from ocman import _fmt_ts
+                    created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
+                    updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
+                    run_str += f"    - {title} (ID: {sid[:8]}...)\n"
+                    run_str += f"      Start: {created_str} | End: {updated_str}\n"
+            else:
+                run_str += f"  - Deleted Sessions Count: {sess_cnt}\n"
+
+            # Totals Section
+            run_str += "  Totals Reclaimed:\n"
+            run_str += f"    - Database Rows Deleted: Rows removed successfully\n"
+            run_str += f"    - Subagent Sessions:     {sub_cnt}\n"
+            run_str += f"    - Messages Deleted:      {msg_cnt}\n"
+            run_str += f"    - Accumulated Cost:      ${cost:.4f}\n"
+            
+            from ocman import human_size_local
+            run_str += f"    - Disk Space Saved:      {human_size_local(space_saved)}\n"
+            run_str += "--------------------------------------------------------\n"
             
             audit_log.write(run_str)
 

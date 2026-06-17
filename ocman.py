@@ -4311,6 +4311,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
             return
 
         # Perform deletion
+        size_before = get_file_size_local(OPENCODE_DB_PATH)
         print("[*] Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
@@ -4328,9 +4329,6 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
 
-        # Save metrics to JSON sidecar
-        save_deletion_metrics("delete", stats)
-
         # Delete disk files
         for f in files_to_delete:
             try:
@@ -4343,6 +4341,14 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print("[*] Executing VACUUM to reclaim disk space...")
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
+
+        size_after = OPENCODE_DB_PATH.stat().st_size
+        space_saved = max(0, size_before - size_after)
+        if stats:
+            stats["space_saved"] = space_saved
+
+        # Save metrics to JSON sidecar
+        save_deletion_metrics("delete", stats)
 
         print(color_green("Deletion complete!"))
         
@@ -4652,7 +4658,8 @@ def db_run_cleanup(
             print(color_red("    Aborting cleanup for safety."))
             return
 
-        # 5. Execute cleanup inside a transaction
+        # Measure database size before deletion/vacuum
+        db_size_orig = get_file_size_local(OPENCODE_DB_PATH)
         print("[*] Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
@@ -4685,10 +4692,6 @@ def db_run_cleanup(
         cursor.execute("PRAGMA foreign_keys = ON;")
         print("[+] Transaction committed successfully.")
 
-        # Save metrics to JSON sidecar
-        if stats:
-            save_deletion_metrics("clean", stats)
-
         # 6. Delete disk files
         deleted_files_count = 0
         for f in files_to_delete:
@@ -4705,12 +4708,18 @@ def db_run_cleanup(
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
-        # 8. Report metrics
-        db_size_before = get_file_size_local(OPENCODE_DB_PATH)
+        # Measure size after VACUUM
         db_size_after = OPENCODE_DB_PATH.stat().st_size
+        space_saved = max(0, db_size_orig - db_size_after)
+        if stats:
+            stats["space_saved"] = space_saved
+            # Save metrics to JSON sidecar
+            save_deletion_metrics("clean", stats)
+
+        # 8. Report metrics
         print("--------------------------------------------------------")
         print(f"New opencode.db file size on disk: {human_size_local(db_size_after)}")
-        print(f"Reclaimed space: {human_size_local(max(0, db_size_before - db_size_after))}")
+        print(f"Reclaimed space: {human_size_local(space_saved)}")
         print("--------------------------------------------------------")
         print(color_green("Database cleanup complete!"))
         
@@ -4817,7 +4826,7 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
         return None
 
     try:
-        cursor = conn.cursor()
+        cursor = conn.conn.cursor() if hasattr(conn, "conn") else conn.cursor()
         placeholders = ",".join("?" for _ in session_ids)
 
         cursor.execute(f"""
@@ -4844,13 +4853,28 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
         """, session_ids)
         messages_cnt = cursor.fetchone()[0] or 0
 
+        # Query individual session details (name, id, start and end dates)
+        cursor.execute(f"""
+            SELECT id, title, time_created, time_updated FROM session
+            WHERE id IN ({placeholders})
+        """, session_ids)
+        sessions_info = []
+        for row in cursor.fetchall():
+            sessions_info.append({
+                "id": row[0],
+                "title": row[1] or "(untitled)",
+                "created": row[2],
+                "updated": row[3]
+            })
+
         return {
             "sessions_count": sessions_cnt,
             "subagents_count": subagents_cnt,
             "messages_count": messages_cnt,
             "cost": cost_sum,
             "tokens_input": tokens_in_sum,
-            "tokens_output": tokens_out_sum
+            "tokens_output": tokens_out_sum,
+            "sessions": sessions_info
         }
     except Exception as e:
         print(color_yellow(f"Warning: could not gather deletion metrics: {e}"))
