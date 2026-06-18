@@ -3438,7 +3438,7 @@ def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
     command = Path(sys.argv[0]).name if sys.argv and sys.argv[0] else "ocman"
     cwd = Path.cwd()
 
-    print(color_bold("opencode session recovery"))
+    print(color_bold("ocman - OpenCode Manager"))
 
     if projects:
         print_projects(projects, title=f"Known projects ({len(projects)}):", blank_after_title=False)
@@ -6364,7 +6364,7 @@ def main() -> None:
         return
 
     try:
-        print(color_bold("opencode session recovery"))
+        print(color_bold("ocman - OpenCode Manager"))
         if _project_dir:
             print(f"Project: {_project_dir}")
         elif session_dir is not None:
