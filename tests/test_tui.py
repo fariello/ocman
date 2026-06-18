@@ -261,3 +261,42 @@ async def test_tui_config_tab(tui_db, tmp_path):
         await pilot.pause()
         assert keep_temp_check.value is False
 
+
+@pytest.mark.anyio
+async def test_tui_app_project_deletion(tui_db):
+    """Test that the project deletion flow successfully invokes the background worker and deletes a project recursively."""
+    from ocman_tui.app import ProjectDeletionSafetyModal
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        # Set selected project context
+        app.selected_project_id = "proj1"
+        app.selected_project_name = "Proj 1"
+        
+        # Trigger project deletion flow
+        app.confirm_and_delete_project()
+        await pilot.pause()
+        
+        # Check that ProjectDeletionSafetyModal is active
+        assert isinstance(app.screen, ProjectDeletionSafetyModal)
+        
+        # Enter "yes" in the input field
+        await pilot.click("#input-confirm-yes")
+        await pilot.press(*"yes")
+        
+        # Click the confirm button
+        await pilot.click("#btn-confirm-del")
+        
+        # Wait for background worker to complete
+        await pilot.pause(1.0)
+        
+        # Verify that project and its sessions are deleted from DB
+        sqlite3 = ocman._get_sqlite()
+        conn = sqlite3.connect(str(tui_db))
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+        assert cursor.fetchone()[0] == 0
+        cursor.execute("SELECT COUNT(*) FROM session")
+        assert cursor.fetchone()[0] == 0
+        conn.close()
+
+
