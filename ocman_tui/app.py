@@ -1040,19 +1040,13 @@ class OrsessionApp(App):
             # Pre-size of DB
             size_before = get_file_size_local(db_path)
 
-            # Patch input check
-            original_input = builtins.input
-            builtins.input = lambda *args, **kwargs: "yes"
-
-            try:
-                db_delete_session_recursive(
-                    session_id=session_id,
-                    dry_run=False,
-                    force=True, # bypass locks because user confirmed in TUI
-                    verbosity=0
-                )
-            finally:
-                builtins.input = original_input
+            db_delete_session_recursive(
+                session_id=session_id,
+                dry_run=False,
+                force=True, # bypass locks because user confirmed in TUI
+                verbosity=0,
+                confirm=False
+            )
 
             # Post-size of DB after VACUUM
             size_after = get_file_size_local(db_path)
@@ -1118,19 +1112,13 @@ class OrsessionApp(App):
             # Pre-size of DB
             size_before = get_file_size_local(db_path)
 
-            # Patch input check
-            original_input = builtins.input
-            builtins.input = lambda *args, **kwargs: "yes"
-
-            try:
-                db_delete_project_recursive(
-                    project_id=project_id,
-                    dry_run=False,
-                    force=True, # bypass locks because user confirmed in TUI
-                    verbosity=0
-                )
-            finally:
-                builtins.input = original_input
+            db_delete_project_recursive(
+                project_id=project_id,
+                dry_run=False,
+                force=True, # bypass locks because user confirmed in TUI
+                verbosity=0,
+                confirm=False
+            )
 
             # Post-size of DB after VACUUM
             size_after = get_file_size_local(db_path)

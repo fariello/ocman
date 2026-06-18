@@ -4199,7 +4199,7 @@ def run_compaction(
     return compacted_path
 
 
-def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int) -> None:
+def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
     """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
     clean_sid = str(session_id).strip()
     if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
@@ -4253,23 +4253,28 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
             raise RecoveryError(f"Session {session_id} not found in database.")
 
         # 2. Get counts of rows to be deleted
-        counts = {}
-        placeholders = ",".join("?" for _ in session_ids)
+        counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+        chunk_size = 999
+        chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
         
-        for table, col in SESSION_RELATIONAL_TABLES:
-            cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-            counts[table] = cursor.fetchone()[0]
+        for chunk in chunks:
+            placeholders = ",".join("?" for _ in chunk)
+            for table, col in SESSION_RELATIONAL_TABLES:
+                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                counts[table] += cursor.fetchone()[0]
 
         # Get session details for display
-        cursor.execute(f"SELECT id, title, parent_id FROM session WHERE id IN ({placeholders})", session_ids)
         descendants_info = []
-        for row in cursor.fetchall():
-            desc_id, title, parent_id = row
-            descendants_info.append({
-                "id": desc_id,
-                "title": title or "(untitled)",
-                "parent_id": parent_id
-            })
+        for chunk in chunks:
+            placeholders = ",".join("?" for _ in chunk)
+            cursor.execute(f"SELECT id, title, parent_id FROM session WHERE id IN ({placeholders})", chunk)
+            for row in cursor.fetchall():
+                desc_id, title, parent_id = row
+                descendants_info.append({
+                    "id": desc_id,
+                    "title": title or "(untitled)",
+                    "parent_id": parent_id
+                })
 
         print()
         print(color_bold("Recursively deleting the following sessions:"))
@@ -4317,15 +4322,16 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
         print()
         
-        try:
-            confirmation = input("Type 'yes' to confirm deletion: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nCancelled.")
-            return
+        if confirm:
+            try:
+                confirmation = input("Type 'yes' to confirm deletion: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
 
-        if confirmation != "yes":
-            print("Cancelled.")
-            return
+            if confirmation != "yes":
+                print("Cancelled.")
+                return
 
         # Create backup directory and backup database file family
         from datetime import datetime
@@ -4358,9 +4364,15 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         # Gather metrics of sessions to be deleted
         stats = gather_deletion_metrics(session_ids, conn)
 
-        for table, col in SESSION_RELATIONAL_TABLES:
-            cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-            print(f"[-] Deleted {cursor.rowcount} rows from {table}")
+        deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+        for chunk in chunks:
+            placeholders = ",".join("?" for _ in chunk)
+            for table, col in SESSION_RELATIONAL_TABLES:
+                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                deleted_counts[table] += cursor.rowcount
+
+        for table, _ in SESSION_RELATIONAL_TABLES:
+            print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
 
         cursor.execute("COMMIT;")
         transaction_started = False
@@ -4425,7 +4437,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
                 pass
 
 
-def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int) -> None:
+def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
     """Recursively delete a project, all its sessions, and all related database and disk data."""
     clean_pid = str(project_id).strip()
     if "/" in clean_pid or "\\" in clean_pid or ".." in clean_pid:
@@ -4504,15 +4516,15 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             print("No sessions associated with this project.")
 
         # Get counts of rows to be deleted
-        counts = {}
+        counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
         if session_ids:
-            placeholders = ",".join("?" for _ in session_ids)
-            for table, col in SESSION_RELATIONAL_TABLES:
-                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-                counts[table] = cursor.fetchone()[0]
-        else:
-            for table, col in SESSION_RELATIONAL_TABLES:
-                counts[table] = 0
+            chunk_size = 999
+            chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
+            for chunk in chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                    counts[table] += cursor.fetchone()[0]
 
         print()
         print(color_bold("Rows that will be deleted from the database:"))
@@ -4555,15 +4567,16 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
         print()
 
-        try:
-            confirmation = input("Type 'yes' to confirm project deletion: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nCancelled.")
-            return
+        if confirm:
+            try:
+                confirmation = input("Type 'yes' to confirm project deletion: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print("\nCancelled.")
+                return
 
-        if confirmation != "yes":
-            print("Cancelled.")
-            return
+            if confirmation != "yes":
+                print("Cancelled.")
+                return
 
         # Create backup directory and backup database file family
         from datetime import datetime
@@ -4594,10 +4607,16 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         transaction_started = True
 
         if session_ids:
-            placeholders = ",".join("?" for _ in session_ids)
-            for table, col in SESSION_RELATIONAL_TABLES:
-                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-                print(f"[-] Deleted {cursor.rowcount} rows from {table}")
+            chunk_size = 999
+            chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
+            deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+            for chunk in chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                    deleted_counts[table] += cursor.rowcount
+            for table, _ in SESSION_RELATIONAL_TABLES:
+                print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
 
         # Delete the project row
         cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
@@ -4768,27 +4787,36 @@ def db_run_cleanup(
             root_session_ids = [row[0] for row in cursor.fetchall()]
             
             if root_session_ids:
-                placeholders = ",".join("?" for _ in root_session_ids)
-                cursor.execute(f"""
-                    WITH RECURSIVE session_tree(id) AS (
-                        SELECT id FROM session WHERE id IN ({placeholders})
-                        UNION
-                        SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
-                    )
-                    SELECT DISTINCT id FROM session_tree;
-                """, root_session_ids)
-                target_session_ids = [row[0] for row in cursor.fetchall()]
+                target_session_ids = []
+                chunk_size = 999
+                root_chunks = [root_session_ids[i:i+chunk_size] for i in range(0, len(root_session_ids), chunk_size)]
+                for chunk in root_chunks:
+                    placeholders = ",".join("?" for _ in chunk)
+                    cursor.execute(f"""
+                        WITH RECURSIVE session_tree(id) AS (
+                            SELECT id FROM session WHERE id IN ({placeholders})
+                            UNION
+                            SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                        )
+                        SELECT DISTINCT id FROM session_tree;
+                    """, chunk)
+                    target_session_ids.extend([row[0] for row in cursor.fetchall()])
+                target_session_ids = list(set(target_session_ids))
 
             # Print feedback on which projects and sessions will be deleted
             if target_session_ids:
-                placeholders = ",".join("?" for _ in target_session_ids)
-                cursor.execute(f"""
-                    SELECT id, title, directory, parent_id 
-                    FROM session 
-                    WHERE id IN ({placeholders})
-                    ORDER BY directory, time_created ASC
-                """, target_session_ids)
-                target_sessions_info = cursor.fetchall()
+                target_sessions_info = []
+                chunk_size = 999
+                target_chunks = [target_session_ids[i:i+chunk_size] for i in range(0, len(target_session_ids), chunk_size)]
+                for chunk in target_chunks:
+                    placeholders = ",".join("?" for _ in chunk)
+                    cursor.execute(f"""
+                        SELECT id, title, directory, parent_id 
+                        FROM session 
+                        WHERE id IN ({placeholders})
+                    """, chunk)
+                    target_sessions_info.extend(cursor.fetchall())
+                target_sessions_info.sort(key=lambda x: (x[2] or "", x[0]))
 
                 # Group sessions by directory
                 project_groups = {}
@@ -4819,10 +4847,13 @@ def db_run_cleanup(
 
         # Age-based counts
         if target_session_ids:
-            placeholders = ",".join("?" for _ in target_session_ids)
-            for table, col in SESSION_RELATIONAL_TABLES:
-                cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
-                db_deletes[table] = cursor.fetchone()[0]
+            chunk_size = 999
+            target_chunks = [target_session_ids[i:i+chunk_size] for i in range(0, len(target_session_ids), chunk_size)]
+            for chunk in target_chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    cursor.execute(f"SELECT COUNT(*) FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                    db_deletes[table] += cursor.fetchone()[0]
 
         # Orphan-based counts (dangling rows where session no longer exists in session table)
         orphan_deletes = {}
@@ -4948,10 +4979,16 @@ def db_run_cleanup(
 
         # A. Age-based deletes
         if target_session_ids:
-            placeholders = ",".join("?" for _ in target_session_ids)
-            for table, col in SESSION_RELATIONAL_TABLES:
-                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", target_session_ids)
-                print(f"[-] Deleted {cursor.rowcount} rows from {table} (age-based)")
+            chunk_size = 999
+            target_chunks = [target_session_ids[i:i+chunk_size] for i in range(0, len(target_session_ids), chunk_size)]
+            deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+            for chunk in target_chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                    deleted_counts[table] += cursor.rowcount
+            for table, _ in SESSION_RELATIONAL_TABLES:
+                print(f"[-] Deleted {deleted_counts[table]} rows from {table} (age-based)")
 
         # B. Orphan-based deletes
         if clean_orphans:
@@ -5106,45 +5143,58 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
 
     try:
         cursor = conn.conn.cursor() if hasattr(conn, "conn") else conn.cursor()
-        placeholders = ",".join("?" for _ in session_ids)
-
-        cursor.execute(f"""
-            SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output), COUNT(*)
-            FROM session
-            WHERE id IN ({placeholders})
-        """, session_ids)
-        cost_sum, tokens_in_sum, tokens_out_sum, sessions_cnt = cursor.fetchone()
-        cost_sum = cost_sum or 0.0
-        tokens_in_sum = tokens_in_sum or 0
-        tokens_out_sum = tokens_out_sum or 0
-        sessions_cnt = sessions_cnt or 0
-
-        cursor.execute(f"""
-            SELECT COUNT(*) FROM session
-            WHERE id IN ({placeholders})
-              AND parent_id IS NOT NULL AND parent_id != ''
-        """, session_ids)
-        subagents_cnt = cursor.fetchone()[0] or 0
-
-        cursor.execute(f"""
-            SELECT COUNT(*) FROM message
-            WHERE session_id IN ({placeholders})
-        """, session_ids)
-        messages_cnt = cursor.fetchone()[0] or 0
-
-        # Query individual session details (name, id, start and end dates)
-        cursor.execute(f"""
-            SELECT id, title, time_created, time_updated FROM session
-            WHERE id IN ({placeholders})
-        """, session_ids)
+        
+        # Chunk session_ids in groups of 999 to avoid SQLITE_LIMIT_VARIABLE_LIMIT
+        chunk_size = 999
+        chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
+        
+        cost_sum = 0.0
+        tokens_in_sum = 0
+        tokens_out_sum = 0
+        sessions_cnt = 0
+        subagents_cnt = 0
+        messages_cnt = 0
         sessions_info = []
-        for row in cursor.fetchall():
-            sessions_info.append({
-                "id": row[0],
-                "title": row[1] or "(untitled)",
-                "created": row[2],
-                "updated": row[3]
-            })
+
+        for chunk in chunks:
+            placeholders = ",".join("?" for _ in chunk)
+
+            cursor.execute(f"""
+                SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output), COUNT(*)
+                FROM session
+                WHERE id IN ({placeholders})
+            """, chunk)
+            c_sum, t_in, t_out, s_cnt = cursor.fetchone()
+            cost_sum += c_sum or 0.0
+            tokens_in_sum += t_in or 0
+            tokens_out_sum += t_out or 0
+            sessions_cnt += s_cnt or 0
+
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM session
+                WHERE id IN ({placeholders})
+                  AND parent_id IS NOT NULL AND parent_id != ''
+            """, chunk)
+            subagents_cnt += cursor.fetchone()[0] or 0
+
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM message
+                WHERE session_id IN ({placeholders})
+            """, chunk)
+            messages_cnt += cursor.fetchone()[0] or 0
+
+            # Query individual session details (name, id, start and end dates)
+            cursor.execute(f"""
+                SELECT id, title, time_created, time_updated FROM session
+                WHERE id IN ({placeholders})
+            """, chunk)
+            for row in cursor.fetchall():
+                sessions_info.append({
+                    "id": row[0],
+                    "title": row[1] or "(untitled)",
+                    "created": row[2],
+                    "updated": row[3]
+                })
 
         return {
             "sessions_count": sessions_cnt,
