@@ -150,6 +150,7 @@ ocman --create-config
 | | `--clean-orphans` | Remove orphaned records and sidecar diffs |
 | | `--db PATH` | Override standard SQLite database file path |
 | | `--delete` | Recursively delete the session specified by `-s` |
+| | `--delete-project`| Recursively delete the project specified by `-P` (includes all project sessions/files/DB rows) |
 | | `--dry-run` | Run cleanup/delete tasks without writing changes |
 | | `--force` | Bypass active process lock checks during delete/cleanup |
 | | `--info` | Show database and storage usage information |
