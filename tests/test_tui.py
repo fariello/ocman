@@ -6,7 +6,7 @@ import ocman
 from ocman_tui.app import OrsessionApp, DeletionSafetyModal, PostExecutionSummaryModal
 from ocman_tui.widgets.sidebar import SidebarWidget
 from ocman_tui.widgets.database import DatabaseAdminWidget
-from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog
+from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog, Button
 
 @pytest.fixture
 def tui_db(tmp_path, monkeypatch):
@@ -29,6 +29,34 @@ def tui_db(tmp_path, monkeypatch):
     
     ocman.OPENCODE_DB_PATH = db_path
     ocman.OPENCODE_HISTORY_PATH = tmp_path / "test_ocman_history.json"
+    
+    # Wrap deletion functions to print exceptions to stderr
+    orig_del_session = ocman.db_delete_session_recursive
+    def debug_del_session(*args, **kwargs):
+        try:
+            return orig_del_session(*args, **kwargs)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise
+    
+    import ocman_tui.app
+    import ocman_tui.core
+    monkeypatch.setattr(ocman, "db_delete_session_recursive", debug_del_session)
+    monkeypatch.setattr(ocman_tui.app, "db_delete_session_recursive", debug_del_session)
+    monkeypatch.setattr(ocman_tui.core, "db_delete_session_recursive", debug_del_session)
+
+    orig_del_project = ocman.db_delete_project_recursive
+    def debug_del_project(*args, **kwargs):
+        try:
+            return orig_del_project(*args, **kwargs)
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            raise
+    monkeypatch.setattr(ocman, "db_delete_project_recursive", debug_del_project)
+    monkeypatch.setattr(ocman_tui.app, "db_delete_project_recursive", debug_del_project)
+    monkeypatch.setattr(ocman_tui.core, "db_delete_project_recursive", debug_del_project)
     
     # Initialize SQLite database with opencode schema
     conn = sqlite3.connect(str(db_path))
@@ -155,12 +183,18 @@ async def test_tui_app_deletion(tui_db):
         # Enter "yes" in the input field
         await pilot.click("#input-confirm-yes")
         await pilot.press(*"yes")
+        await pilot.pause()
         
         # Click the confirm button
         await pilot.click("#btn-confirm-del")
+        await pilot.pause()
         
         # Wait for the background worker thread to complete and UI to update
-        await pilot.pause(0.5)
+        for _ in range(50):
+            if isinstance(app.screen, PostExecutionSummaryModal):
+                break
+            await pilot.pause(0.1)
+        assert isinstance(app.screen, PostExecutionSummaryModal)
         
         # Verify that the session has been deleted from the database
         sqlite3 = ocman._get_sqlite()
@@ -198,7 +232,16 @@ async def test_tui_app_pruning(tui_db):
         await pilot.pause()
         
         # Wait for the worker thread to finish
-        await pilot.pause(1.0)
+        for _ in range(50):
+            sqlite3 = ocman._get_sqlite()
+            conn = sqlite3.connect(str(tui_db))
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM session")
+            cnt = cursor.fetchone()[0]
+            conn.close()
+            if cnt == 0:
+                break
+            await pilot.pause(0.1)
         
         # Verify metrics updated and sessions are deleted
         sqlite3 = ocman._get_sqlite()
@@ -282,12 +325,17 @@ async def test_tui_app_project_deletion(tui_db):
         # Enter "yes" in the input field
         await pilot.click("#input-confirm-yes")
         await pilot.press(*"yes")
+        await pilot.pause()
         
         # Click the confirm button
         await pilot.click("#btn-confirm-del")
         
         # Wait for background worker to complete
-        await pilot.pause(1.0)
+        for _ in range(50):
+            if isinstance(app.screen, PostExecutionSummaryModal):
+                break
+            await pilot.pause(0.1)
+        assert isinstance(app.screen, PostExecutionSummaryModal)
         
         # Verify that project and its sessions are deleted from DB
         sqlite3 = ocman._get_sqlite()
