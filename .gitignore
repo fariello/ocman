@@ -226,3 +226,8 @@ repository-review/
 opencode.json
 opencode.jsonc
 
+# Local untracked scratch files/directories
+tmp/
+run_log.txt
+
+
