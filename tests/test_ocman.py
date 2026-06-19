@@ -221,6 +221,22 @@ def test_parse_args_help(monkeypatch, capsys):
     assert "usage: ocman" in output
 
 
+def test_parse_args_version(monkeypatch, capsys):
+    import sys
+    from ocman import parse_args
+    
+    # Mock sys.argv to pass --version
+    monkeypatch.setattr(sys, "argv", ["ocman.py", "--version"])
+    
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args()
+        
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    output = captured.out + captured.err
+    assert "ocman.py 1.0.0" in output or "ocman 1.0.0" in output
+
+
 @pytest.fixture
 def mock_history_path(tmp_path, monkeypatch):
     hist_path = tmp_path / "test_ocman_history.json"

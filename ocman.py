@@ -168,6 +168,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
+__version__: str = "1.0.0"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {
@@ -3918,6 +3919,13 @@ Examples:
         action="count",
         default=0,
         help="Increase verbosity. Use -v or -vv.",
+    )
+
+    parser.add_argument(
+        "-V", "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Show program's version number and exit.",
     )
 
     parser.add_argument(
