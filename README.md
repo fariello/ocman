@@ -68,17 +68,29 @@ ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
 *   **CLI tool (`ocman` / `ocman.py`)**: Zero external dependencies—requires only Python 3.10+ and the `opencode` CLI on your `PATH`.
 *   **TUI app (`ocman ui` / `ocman gui`)**: Requires the Python packages `textual` and `rich`.
 
-### Install options:
-```bash
-# Clone the repository and install globally (installs Textual/Rich automatically)
-git clone https://github.com/fariello/opencode-recover.git
-cd opencode-recover
-pip install .
+### Installation Methods
 
-# Run the standalone script directly (zero dependency mode)
+#### 1. From PyPI (Recommended)
+You can install `ocman` directly from PyPI:
+```bash
+pip install ocman
+```
+
+#### 2. From Source
+To install the latest development version:
+```bash
+git clone https://github.com/fariello/ocman.git
+cd ocman
+pip install .
+```
+
+#### 3. Standalone Script (Zero-Dependency CLI Mode)
+If you only need the CLI recovery features without the interactive TUI dashboard, you can run the standalone python script directly:
+```bash
 chmod +x ocman.py
 ./ocman.py --help
 ```
+
 
 ---
 

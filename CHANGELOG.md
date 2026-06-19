@@ -1,5 +1,25 @@
 # Changelog
 
+## [1.0.0] - 2026-06-19
+
+### Added
+- **PyPI Release**: Officially published the package under the name `ocman`.
+- **CLI**: Added `-V` / `--version` flags for printing version information.
+- **CLI**: Added automated cleanup options (`--clean`, `--days`, `--clean-orphans`).
+- **CLI**: Added `--info` for inspecting database sizes, status, and WAL integrity.
+- **CLI**: Added `--backup-opencode` and `--restore` for rollback-protected system state backups.
+- **CLI**: Added `--delete-project` to recursively prune a project from database and filesystem.
+- **CLI**: Positional subcommand preprocessing (e.g., `ocman show logs`, `ocman list projects`).
+- **TUI**: Reorganized dashboard layout (Database Admin tab, Activity logs audit tab, live Config settings tab).
+- **TUI**: Integrated rollback-safe backup and restoration controls within the UI.
+
+### Changed
+- Renamed project to `ocman` (OpenCode Manager), unifying script entry points and package namespace.
+
+### Fixed
+- Fixed TUI event loop race conditions in test execution and consolidated namespace mocks in the test runner.
+- Hardened dependency graph by declaring `anyio` under optional dev dependencies.
+
 ## [0.2.0] - 2026-06-04
 
 ### Added
