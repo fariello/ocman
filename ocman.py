@@ -4388,8 +4388,11 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print("[+] Transaction committed successfully.")
 
         # Delete disk files
+        files_space_saved = 0
         for f in files_to_delete:
             try:
+                if f.exists():
+                    files_space_saved += f.stat().st_size
                 f.unlink()
                 print(f"[-] Deleted file: {f}")
             except OSError as e:
@@ -4401,15 +4404,22 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print("[+] VACUUM complete.")
 
         size_after = OPENCODE_DB_PATH.stat().st_size
-        space_saved = max(0, size_before - size_after)
+        db_space_saved = max(0, size_before - size_after)
+        total_space_saved = db_space_saved + files_space_saved
         if stats:
-            stats["space_saved"] = space_saved
+            stats["space_saved"] = total_space_saved
 
         # Save metrics to JSON sidecar
         save_deletion_metrics("delete", stats)
 
         print(color_green("Deletion complete!"))
-        
+        print("--------------------------------------------------------")
+        print(f"Database size before:  {human_size_local(size_before)}")
+        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+        print(f"Database space saved:  {human_size_local(db_space_saved)}")
+        if files_to_delete:
+            print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
+        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
         print("--------------------------------------------------------")
         print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
         print()
@@ -4636,8 +4646,11 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         print("[+] Transaction committed successfully.")
 
         # Delete disk files
+        files_space_saved = 0
         for f in files_to_delete:
             try:
+                if f.exists():
+                    files_space_saved += f.stat().st_size
                 f.unlink()
                 print(f"[-] Deleted file: {f}")
             except OSError as e:
@@ -4649,14 +4662,21 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         print("[+] VACUUM complete.")
 
         size_after = OPENCODE_DB_PATH.stat().st_size
-        space_saved = max(0, size_before - size_after)
-        stats["space_saved"] = space_saved
+        db_space_saved = max(0, size_before - size_after)
+        total_space_saved = db_space_saved + files_space_saved
+        stats["space_saved"] = total_space_saved
 
         # Save metrics to JSON sidecar
         save_deletion_metrics("delete", stats)
 
         print(color_green("Project deletion complete!"))
-
+        print("--------------------------------------------------------")
+        print(f"Database size before:  {human_size_local(size_before)}")
+        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+        print(f"Database space saved:  {human_size_local(db_space_saved)}")
+        if files_to_delete:
+            print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
+        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
         print("--------------------------------------------------------")
         print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
         print()
@@ -6359,7 +6379,7 @@ def main() -> None:
         project_path = Path(_project_dir)
         if project_path.is_dir():
             opencode_cwd = project_path
-        elif args.session:
+        else:
             log(f"Warning: Resolved project directory '{_project_dir}' does not exist. Falling back to current directory.", verbosity)
             opencode_cwd = Path.cwd()
 
@@ -6382,11 +6402,24 @@ def main() -> None:
 
         try:
             sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
-        except RecoveryError:
-            if args.session:
+        except RecoveryError as e:
+            db_sessions = db_list_sessions(_project_id) if _project_id else None
+            if db_sessions and not args.session:
+                sessions = []
+                for s in db_sessions:
+                    sessions.append(
+                        SessionInfo(
+                            session_id=s["id"],
+                            title=s["title"] or "(untitled)",
+                            created=str(s.get("created", "")) or "unknown",
+                            updated=str(s.get("updated", "")) or "unknown",
+                            raw=s,
+                        )
+                    )
+            elif args.session:
                 sessions = []
             else:
-                raise
+                raise e
 
         if args.session:
             if args.session.startswith("-"):
