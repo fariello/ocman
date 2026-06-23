@@ -3867,7 +3867,13 @@ Examples:
         type=int,
         default=config["default_retention_days"],
         metavar="N",
-        help="Retention window in days for --clean (default: %(default)s).",
+        help="Retention window in days for --clean and --clean-backups (default: %(default)s).",
+    )
+
+    parser.add_argument(
+        "--clean-backups",
+        action="store_true",
+        help="Prune backup files and directories in the backups folder older than --days retention window.",
     )
 
     parser.add_argument(
@@ -5931,6 +5937,106 @@ def cli_restore(source: str) -> None:
     print(f"  Sessions restored:  {sessions_restored}")
 
 
+def cli_clean_backups(days: int, dry_run: bool, verbosity: int) -> None:
+    """Remove old backup files and directories in the default backups directory."""
+    config = load_ocman_config()
+    backup_dir = Path(config["default_backup_dir"]).expanduser()
+    
+    if not backup_dir.exists() or not backup_dir.is_dir():
+        print("No backup directory found.")
+        return
+        
+    import time
+    now = time.time()
+    cutoff_time = now - (days * 86400)
+    
+    backups_to_delete = []
+    
+    for item in backup_dir.iterdir():
+        # Match backups created by our tool
+        name = item.name
+        is_backup = (
+            name.startswith("opencode-backup-") or
+            name.startswith("rollback-before-restore-") or
+            name.startswith("opencode-db-cleanup-")
+        )
+        if not is_backup:
+            continue
+            
+        # Get modification time
+        try:
+            mtime = item.stat().st_mtime
+            if mtime < cutoff_time:
+                backups_to_delete.append((item, mtime))
+        except Exception as e:
+            log(f"Warning: could not check stat for {item}: {e}", verbosity)
+            
+    if not backups_to_delete:
+        print(f"No backups found older than {days} days.")
+        return
+        
+    # Print planned deletions
+    print(color_bold(f"Found {len(backups_to_delete)} backups older than {days} days to purge:"))
+    total_size = 0
+    for item, mtime in sorted(backups_to_delete, key=lambda x: x[1]):
+        size = 0
+        try:
+            if item.is_file():
+                size = item.stat().st_size
+            elif item.is_dir():
+                for root, dirs, files in os.walk(str(item)):
+                    for f in files:
+                        size += Path(root, f).stat().st_size
+        except Exception:
+            pass
+        total_size += size
+        mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+        print(f"  - {item.name:<45} | Size: {human_size_local(size):<10} | Created: {mtime_str}")
+        
+    print()
+    print(f"Total size to reclaim: {human_size_local(total_size)}")
+    
+    if dry_run:
+        print("[*] Dry run complete. No backups were deleted.")
+        return
+        
+    try:
+        confirmation = input(f"Type 'yes' to confirm deletion of these {len(backups_to_delete)} backups: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return
+        
+    if confirmation != "yes":
+        print("Cancelled.")
+        return
+        
+    deleted_count = 0
+    reclaimed_space = 0
+    import shutil
+    for item, mtime in backups_to_delete:
+        try:
+            size = 0
+            if item.is_file():
+                size = item.stat().st_size
+                item.unlink()
+            elif item.is_dir():
+                for root, dirs, files in os.walk(str(item)):
+                    for f in files:
+                        size += Path(root, f).stat().st_size
+                shutil.rmtree(item)
+            reclaimed_space += size
+            deleted_count += 1
+            print(f"[-] Deleted backup: {item.name}")
+        except Exception as e:
+            print(color_red(f"Error: failed to delete {item.name}: {e}"))
+            
+    print("--------------------------------------------------------")
+    print(f"Purged backups count:  {deleted_count}")
+    print(f"Disk space reclaimed:  {human_size_local(reclaimed_space)}")
+    print("--------------------------------------------------------")
+    print(color_green("Backup cleanup complete!"))
+
+
 def main() -> None:
     """
     Run the interactive opencode recovery workflow.
@@ -6154,6 +6260,18 @@ def main() -> None:
                 verbosity=verbosity
             )
         except RecoveryError as e:
+            die(str(e))
+        return
+
+    # Handle --clean-backups
+    if getattr(args, "clean_backups", False):
+        try:
+            cli_clean_backups(
+                days=args.days,
+                dry_run=args.dry_run,
+                verbosity=verbosity
+            )
+        except Exception as e:
             die(str(e))
         return
 

@@ -11,6 +11,7 @@ from ocman import (
     cli_create_config,
     cli_backup,
     cli_restore,
+    cli_clean_backups,
     DEFAULT_CONFIG,
     RecoveryError,
 )
@@ -169,3 +170,37 @@ def test_restore_rollback_safety(temp_env, monkeypatch):
     cursor.execute("SELECT COUNT(*) FROM project")
     assert cursor.fetchone()[0] == 1
     conn.close()
+
+
+def test_clean_backups(temp_env, monkeypatch):
+    import time
+    
+    backup_dir = Path(temp_env["config"]["default_backup_dir"])
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Create some mock backup files and directories
+    zip_old = backup_dir / "opencode-backup-20260101-120000.zip"
+    zip_new = backup_dir / "opencode-backup-20260624-120000.zip"
+    dir_old = backup_dir / "opencode-db-cleanup-20260101-120000"
+    dir_old.mkdir(exist_ok=True)
+    (dir_old / "opencode.db").write_text("dummy", encoding="utf-8")
+    
+    zip_old.write_text("old", encoding="utf-8")
+    zip_new.write_text("new", encoding="utf-8")
+    
+    # Modify mtimes to make some old and some new
+    now = time.time()
+    os.utime(zip_old, (now - 10 * 86400, now - 10 * 86400)) # 10 days old
+    os.utime(dir_old, (now - 10 * 86400, now - 10 * 86400)) # 10 days old
+    os.utime(zip_new, (now - 2 * 86400, now - 2 * 86400))   # 2 days old
+    
+    # Mock input to confirm deletion
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+    
+    # Clean backups older than 5 days
+    cli_clean_backups(days=5, dry_run=False, verbosity=0)
+    
+    # Check that old backups are deleted, new one remains
+    assert not zip_old.exists()
+    assert not dir_old.exists()
+    assert zip_new.exists()
