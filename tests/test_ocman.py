@@ -457,7 +457,84 @@ def test_db_delete_project_recursive_saves_history(temp_db, mock_history_path):
     assert c["cost_deleted"] == pytest.approx(0.15)
 
 
+def test_resolve_project_and_session(temp_db):
+    from ocman import resolve_project, resolve_session_spec
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    
+    # Insert a single project with "2026" in the directory path
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/2026-meeting', 'Proj 1')")
+    
+    # Insert a session for that project
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+        VALUES ('sess1', 'proj1', 'Meeting 2', 1000, 2000, '/path/to/2026-meeting')
+    """)
+    conn.commit()
+    conn.close()
 
+    # 1. Test Project Resolution
+    # Valid index -> proj1
+    p = resolve_project("1")
+    assert p is not None
+    assert p["id"] == "proj1"
 
+    # Out of bounds index "2" -> should NOT match the "2" in "2026-meeting" substring
+    p = resolve_project("2")
+    assert p is None
 
+    # Numeric specifier "2026" -> should NOT substring match the directory "2026-meeting"
+    p = resolve_project("2026")
+    assert p is None
 
+    # Non-numeric substring match -> should match the directory
+    p = resolve_project("meeting")
+    assert p is not None
+    assert p["id"] == "proj1"
+
+    # 2. Test Session Resolution
+    sessions = db_list_sessions("proj1")
+    assert len(sessions) == 1
+
+    # Valid index "1" -> sess1
+    s = resolve_session_spec("1", sessions)
+    assert s is not None
+    assert s["id"] == "sess1"
+
+    # Out of bounds index "2" -> should NOT substring match "Meeting 2"
+    s = resolve_session_spec("2", sessions)
+    assert s is None
+
+    # Non-numeric substring match -> should match the title
+    s = resolve_session_spec("Meeting", sessions)
+    assert s is not None
+    assert s["id"] == "sess1"
+
+    # 3. Test Session Resolution with Subagents and filter_subagents=True
+    mixed_sessions = [
+        {"id": "sess1", "title": "Meeting 1", "parent_id": None},
+        {"id": "sub1", "title": "Subagent Session", "parent_id": "sess1"},
+    ]
+
+    # Index "2" with filter_subagents=True should be out of bounds (only 1 parent session)
+    s = resolve_session_spec("2", mixed_sessions, filter_subagents=True)
+    assert s is None
+
+    # Index "2" with filter_subagents=False should match sub1
+    s = resolve_session_spec("2", mixed_sessions, filter_subagents=False)
+    assert s is not None
+    assert s["id"] == "sub1"
+
+    # Exact ID lookup should always work regardless of filter_subagents
+    s = resolve_session_spec("sub1", mixed_sessions, filter_subagents=True)
+    assert s is not None
+    assert s["id"] == "sub1"
+
+    # Substring lookup with filter_subagents=True should fail for subagent sessions
+    s = resolve_session_spec("Subagent", mixed_sessions, filter_subagents=True)
+    assert s is None
+
+    # Substring lookup with filter_subagents=False should succeed for subagent sessions
+    s = resolve_session_spec("Subagent", mixed_sessions, filter_subagents=False)
+    assert s is not None
+    assert s["id"] == "sub1"
