@@ -1,162 +1,119 @@
-# Release Review Runbook
+# Release Review Runbook (Antigravity Edition)
 
 Treat this file as the controlling instruction for this repository review. Keep working until you have completed the required run artifacts, committed appropriate local changes, performed final validation, assessed whether to restart the review, made a push/no-push decision, and produced the final response in the required table-first format.
 
-This runbook is intended for OpenCode or another modern coding agent operating inside a repository. It is designed for serious pre-release or pre-major-run review and hardening.
+This runbook is designed specifically for Gemini-powered Antigravity agents operating in the repository workspace.
 
-## OpenCode project commands
+---
 
-If this zip is expanded into the repository root, OpenCode can invoke the included command wrappers:
-
-```text
-/release-review
-```
-
-Runs the full workflow, including audit, implementation, validation, final report, and push/no-push decision.
-
-```text
-/release-review-plan
-```
-
-Runs the audit and planning phases only. It completes Sections 1 through 6, creates the consolidated implementation plan, and stops before Section 7 implementation.
-
-## Installing or activating OpenCode commands
-
-The zip includes optional OpenCode project commands:
-
-```text
-.opencode/commands/release-review.md
-.opencode/commands/release-review-plan.md
-```
-
-OpenCode discovers per-project Markdown commands from `.opencode/commands/` when OpenCode is run from that project. The Markdown file name becomes the slash command name. Therefore:
-
-- `.opencode/commands/release-review.md` becomes `/release-review`.
-- `.opencode/commands/release-review-plan.md` becomes `/release-review-plan`.
-
-To install the commands for a repository:
-
-1. Download `release-review.zip`.
-2. From the repository root, unzip it so these paths exist at the repository root:
-
-   ```text
-   release-review/README.md
-   .opencode/commands/release-review.md
-   .opencode/commands/release-review-plan.md
-   ```
-
-3. Start or restart OpenCode from the repository root.
-4. In the OpenCode TUI, type `/release-review` to run the full workflow, or `/release-review-plan` to run the audit and planning workflow only.
-
-The command wrappers are convenience entry points. `release-review/README.md` remains the controlling instruction.
-
-If the slash commands do not appear:
-
-1. Confirm the files are under `.opencode/commands/`, not `.opencode/command/` and not inside a nested extracted folder.
-2. Confirm OpenCode was started from the repository root or from a child directory inside the same Git repository.
-3. Restart OpenCode so it reloads project command files.
-4. Use the manual fallback prompt:
-
-   ```text
-   Read and execute release-review/README.md
-   ```
-
-For user-wide installation instead of per-project installation, copy the command Markdown files to `~/.config/opencode/commands/`. Keep the `release-review/` directory in each repository where the command should operate, because the command wrappers reference `@release-review/README.md`.
-
-## Invocation
-
-From the repository root, execute:
-
-```text
-Read and execute release-review/README.md
-```
-
-Do not require the user to run each section manually. Execute the full sequence autonomously unless a safety blocker prevents progress.
-
-## Primary objective
+## Primary Objective
 
 Perform a robust repository and code review that improves release readiness while minimizing the risk of unintended damage.
 
-Maximize correctness, security, privacy, tests, documentation accuracy, compatibility, packaging, CI readiness, maintainability, clear traceability, and clear final reporting.
+- **Maximize**: Correctness, security, privacy, tests, documentation accuracy, compatibility, packaging, CI readiness, maintainability, clear traceability, and clear final reporting.
+- **Minimize**: Speculative changes, formatting churn, broad refactors, public contract breakage, unjustified deletion, remote side effects, secret exposure, and instruction drift.
 
-Minimize speculative changes, formatting churn, broad refactors, public contract breakage, unjustified deletion, remote side effects, secret exposure, and instruction drift.
+---
 
-## Optional controlled parallel audit mode
+## Tooling and Agent Behavior Guidelines
 
-After Section 1 establishes the repository baseline, the agent may use controlled parallel read-only audit lanes for parts of Sections 2 through 6 when the repository is large, unfamiliar, or has multiple independent surfaces such as code, tests, docs, schemas, packaging, and CI.
+As an Antigravity agent, you must execute the review using the standard tools at your disposal:
+1. **File Reading & Editing**: Use `view_file` to inspect code and configs. Use `replace_file_content` or `multi_replace_file_content` to make surgical modifications.
+2. **Commands**: Propose commands using `run_command` to execute tests, linters, builds, and git queries.
+3. **Workspace Paths**: Ensure all work remains inside the repository workspace. Do not write or execute files outside it.
 
-Parallelism is optional. Use it only when it improves review quality.
+---
 
-Rules:
+## Required Execution Order & Expected Outcomes
 
-1. Section 1 remains serial and is performed by the main agent.
-2. Parallel audit lanes are read-only.
-3. Parallel audit lanes must not edit tracked files, update official registers directly, commit, push, or make final release decisions.
-4. Each lane should produce an audit-lane report using `templates/audit-lane-report.md`.
-5. The main agent owns synthesis, deduplication, severity decisions, official run-specific IDs, finding/action registers, implementation planning, local commits, validation, final report, and push/no-push decision.
-6. Section 7 implementation remains serial.
-7. Section 8 final review remains serial.
+Read and follow `00-run-protocol.md` first. Then execute the section files sequentially. Do not proceed to a section until the preceding section's artifact generation and verification are complete.
 
-## Required execution order
+### Step 1: Run Setup & Baseline
+- **Instructions**: Follow [01-current-state.md](file:///home/gfariello/VC/pubrun/release-review/01-current-state.md).
+- **Execution**: Check git status, current branch, HEAD commit hash, remotes, and verify that the working tree is clean. Generate a run ID in the format `YYYYMMDD-HHMMSS`.
+- **Expected Outputs**:
+  - Create run directory: `repository-review/<RUN_ID>/`
+  - Create baseline artifacts:
+    - `00-run-metadata.md`
+    - `01-repository-inventory.md`
+    - `02-execution-plan.md`
+    - `03-findings-register.csv` (initialized)
+    - `04-action-register.csv` (initialized)
+    - `05-decisions.md` (initialized)
+    - `06-commands.md` (initialized)
+    - `07-commits.md` (initialized)
+    - `08-checkpoints.md` (initialized)
+  - Add `repository-review/` to `.gitignore`.
 
-Read and follow `00-run-protocol.md` first. Then execute the section files in order:
+### Step 2: Quality, Security, and Edge Cases Audit
+- **Instructions**: Follow [02-quality-security-edge-cases.md](file:///home/gfariello/VC/pubrun/release-review/02-quality-security-edge-cases.md).
+- **Execution**: Inspect imports, file handling, path manipulation, subprocess execution, credential usage, error handling, and memory/resource usage.
+- **Expected Outputs**:
+  - Create/update: `repository-review/<RUN_ID>/final-bug-security-audit.md` (initialized)
+  - Record findings in the register (`03-findings-register.csv`).
 
-1. `01-current-state.md`
-2. `02-quality-security-edge-cases.md`
-3. `03-tests-regression.md`
-4. `04-docs-specs-examples.md`
-5. `05-feature-usability-maintainability.md`
-6. `06-compatibility-packaging-release.md`
-7. `07-implementation.md`
-8. `08-final-ship-review.md`
+### Step 3: Tests, Coverage, and Regression Audit
+- **Instructions**: Follow [03-tests-regression.md](file:///home/gfariello/VC/pubrun/release-review/03-tests-regression.md).
+- **Execution**: Check for missing test suites, run tests locally, verify coverage configurations, and look for flaky or disabled tests.
+- **Expected Outputs**:
+  - Record test gaps or coverage actions in the findings and action registers.
 
-Do not begin Section 7 implementation before completing Sections 1 through 6 and creating `repository-review/<RUN_ID>/09-implementation-plan.md`.
+### Step 4: Documentation, Specifications, and Examples Audit
+- **Instructions**: Follow [04-docs-specs-examples.md](file:///home/gfariello/VC/pubrun/release-review/04-docs-specs-examples.md).
+- **Execution**: Check README correctness, verify installation/usage commands, check JOSS/CFF metadata files, check changelog correctness, and test example scripts.
+- **Expected Outputs**:
+  - Record any docs issues or outdated command instructions in findings.
 
-## Run setup
+### Step 5: Feature Usability and Maintainability Audit
+- **Instructions**: Follow [05-feature-usability-maintainability.md](file:///home/gfariello/VC/pubrun/release-review/05-feature-usability-maintainability.md).
+- **Execution**: Inspect CLI interfaces, argument parsing, interactive modes, help screens, error reporting formatting, and overall code legibility/organization.
+- **Expected Outputs**:
+  - Record usability/maintainability findings in the register.
 
-At the start:
+### Step 6: Compatibility, Packaging, and CI Audit
+- **Instructions**: Follow [06-compatibility-packaging-release.md](file:///home/gfariello/VC/pubrun/release-review/06-compatibility-packaging-release.md).
+- **Execution**: Check Python version compatibility, packaging configurations (e.g. `pyproject.toml`, build hooks), dependencies (pinning and versions), and GitHub Actions workflows.
+- **Expected Outputs**:
+  - Create: `repository-review/<RUN_ID>/ci-assessment.md`
+  - Create: `repository-review/<RUN_ID>/deprecation-candidates.md`
+  - Create: `repository-review/<RUN_ID>/schema-validation.md`
 
-1. Confirm you are operating from the repository root.
-2. Determine whether the repository uses Git.
-3. Record the initial branch, head commit, remotes, and working tree status.
-4. Create a run ID using local time in this format: `YYYYMMDD-HHMMSS`.
-5. Create `repository-review/<RUN_ID>/`.
-6. Add `repository-review/` to `.gitignore` if it is not already ignored.
-7. Create the required run artifacts defined in `00-run-protocol.md`.
-8. Create `repository-review/<RUN_ID>/02-execution-plan.md` after enough initial inspection to understand the project type.
-9. Use TodoWrite if running in OpenCode and the tool is available.
+### Step 7: Implementation Planning & Execution
+- **Instructions**: Follow [07-implementation.md](file:///home/gfariello/VC/pubrun/release-review/07-implementation.md).
+- **Execution**: 
+  1. Synthesize all findings from Sections 1-6.
+  2. Create the consolidated implementation plan: `repository-review/<RUN_ID>/09-implementation-plan.md`.
+  3. **DO NOT start making edits** until the plan is created.
+  4. Perform surgical, atomic code changes in batches. Verify each batch locally with pytest or linting. Make clean local git commits referencing findings/actions.
+- **Expected Outputs**:
+  - Populate implementation plan `09-implementation-plan.md`.
+  - Create local git commits for verified changes. Update `07-commits.md`.
 
-If the repository is not a Git repository, continue the review and record local commit and push steps as not applicable.
+### Step 8: Final Ship Review & User Gate Approval
+- **Instructions**: Follow [08-final-ship-review.md](file:///home/gfariello/VC/pubrun/release-review/08-final-ship-review.md).
+- **Execution**: Run the full validation suite, perform a post-implementation bug/security sanity audit, and compile the final report.
+- **Expected Outputs**:
+  - Finalize: `repository-review/<RUN_ID>/10-validation-results.md`
+  - Finalize: `repository-review/<RUN_ID>/11-push-plan.md`
+  - Write final report: `repository-review/<RUN_ID>/12-final-response.md` (MUST begin with Completed Actions and Unaddressed Findings tables).
+  - **MANDATORY USER GATE**: Present the final report and explicitly ask the user for a **GO** or **CONDITIONAL GO** approval. **DO NOT push to origin or proceed to Section 9 until approval is received.**
 
-## TodoWrite use
+### Step 9: Post-Go Release Execution
+- **Instructions**: Follow [09-release-execution.md](file:///home/gfariello/VC/pubrun/release-review/09-release-execution.md).
+- **Execution**: Push code, verify remote CI, build final distribution packages, verify embedded commit metadata in built artifacts, tag the release with an annotated tag, run twine check, and hand off PyPI publishing to the user (manual upload).
+- **Expected Outputs**:
+  - Code pushed to `origin/main`.
+  - Passing remote CI run.
+  - Built distribution packages with baked git HEAD commit hash.
+  - Annotated tag pushed to remote.
+  - Distribution files handed off to the user for manual PyPI publication.
 
-If TodoWrite is available, use it for live progress visibility. Create todos for run setup, each review section, implementation planning, each coherent implementation batch, final validation, and the final report.
+---
 
-Do not create a TodoWrite item for every file inspected or every tiny edit. The authoritative record is always `repository-review/<RUN_ID>/`, not TodoWrite.
+## Local Progress Tracking
 
-## Local commits and remote pushes
+Use the following artifacts in your App Data directory `/brain/` folder for live progress visibility:
+- **`task.md`**: Live checklist of all tasks and subtasks using markdown checkboxes (e.g. `- [x]`). Keep this updated.
+- **`walkthrough.md`**: Summary of concrete changes made, validations run, and output results.
 
-Use local commits for meaningful tracked repository changes when safe and possible. Commit only files changed by this run. Do not accidentally include unrelated pre-existing user changes. Do not commit `repository-review/` artifacts unless the user explicitly asks.
-
-Remote pushes are prohibited until the final stage and only allowed if the user has explicitly permitted pushing. If permission is absent, produce a push/no-push recommendation in `repository-review/<RUN_ID>/11-push-plan.md` and in the final report.
-
-## Final response requirement
-
-The final response must be saved to:
-
-```text
-repository-review/<RUN_ID>/12-final-response.md
-```
-
-Then present the same content to the user.
-
-The final response must begin with:
-
-1. A table of completed actions.
-2. A table of identified but not addressed items.
-
-The second table must include audit findings that were identified but intentionally not implemented, not only attempted actions that were left incomplete.
-
-## Completion standard
-
-The run is not complete until all eight sections have been completed or explicitly marked not applicable with rationale, findings and actions have unique run-specific IDs, completed and unaddressed items are reconciled, validation results are recorded, local commits are recorded or explained, CI and deprecated-code assessments are recorded, push/no-push and restart decisions are recorded, and the final response is saved and presented.
+The authoritative run record remains under `repository-review/<RUN_ID>/`. Reconcile your `task.md` checklist with the run registers before producing the final report.

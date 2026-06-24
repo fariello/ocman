@@ -1,76 +1,41 @@
 # Release Review Runbook Manifest
 
-This directory contains a modular, executable repository review runbook for use with OpenCode or another modern coding agent.
+This directory contains a modular, executable repository review runbook for use with Google Antigravity or other modern coding agents.
 
-The zip also includes optional OpenCode command wrappers under `.opencode/commands/` so the review can be invoked as a project command when using OpenCode.
+---
 
-## How to use
+## How to Use
 
-Expand the zip into the repository root so these paths exist:
+To run the repository review, the agent must sequentially read and execute the instructions under the `release-review/` directory:
 
-```text
-release-review/README.md
-.opencode/commands/release-review.md
-.opencode/commands/release-review-plan.md
-```
+1. Start by reading [README.md](file:///home/gfariello/VC/pubrun/release-review/README.md) and [00-run-protocol.md](file:///home/gfariello/VC/pubrun/release-review/00-run-protocol.md) to understand the operating guidelines, unique ID rules, and checkpoints.
+2. Proceed section by section, starting with [01-current-state.md](file:///home/gfariello/VC/pubrun/release-review/01-current-state.md).
+3. Do not proceed to the implementation section ([07-implementation.md](file:///home/gfariello/VC/pubrun/release-review/07-implementation.md)) until all preceding sections have been completed and the consolidated implementation plan is saved under the run directory.
+4. Stop and request explicit user approval before executing any post-Go release steps ([09-release-execution.md](file:///home/gfariello/VC/pubrun/release-review/09-release-execution.md)).
 
-Then start or restart OpenCode from the repository root and run:
-
-```text
-/release-review
-```
-
-For audit and implementation planning only, run:
-
-```text
-/release-review-plan
-```
-
-The command wrappers are convenience entry points. The controlling file remains `release-review/README.md`.
-
-If the OpenCode commands are unavailable, use the manual fallback prompt from the repository root:
-
-```text
-Read and execute release-review/README.md
-```
-
-OpenCode project commands are discovered from `.opencode/commands/`; the Markdown filename becomes the slash command name.
-
-## OpenCode commands
-
-| File | Purpose |
-|---|---|
-| `.opencode/commands/release-review.md` | OpenCode project command wrapper for the full audit, implementation, validation, final report, and push/no-push decision. |
-| `.opencode/commands/release-review-plan.md` | OpenCode project command wrapper for audit and implementation planning only, stopping before Section 7 implementation. |
+---
 
 ## Files
 
 | File | Purpose |
 |---|---|
-| `README.md` | Main orchestrator and single entry point for the full review. |
-| `00-run-protocol.md` | Global operating protocol, safety rules, ID rules, artifacts, TodoWrite use, commit and push policy, and final reporting requirements. |
+| `README.md` | Main orchestrator and entry point for the review workflow. |
+| `00-run-protocol.md` | Global operating protocol, safety rules, unique ID rules, artifacts, commit/push policies, and reporting requirements. |
 | `01-current-state.md` | Repository inventory, current-state assessment, public contract discovery, drift analysis, and early deprecation signals. |
 | `02-quality-security-edge-cases.md` | Bugs, correctness, security, privacy, error handling, resource handling, reliability, and edge-case audit. |
 | `03-tests-regression.md` | Test coverage, regression protection, fixtures, CI test behavior, and missing critical tests. |
 | `04-docs-specs-examples.md` | Documentation, specification, examples, README, help text, and behavior-documentation alignment. |
 | `05-feature-usability-maintainability.md` | Feature completeness, usability, developer experience, operator experience, maintainability, and stale-code impact. |
 | `06-compatibility-packaging-release.md` | Compatibility, packaging, build, CI, deployment, versioning, changelog, migration, and release artifacts. |
-| `07-implementation.md` | Consolidated implementation plan and safe, significant-value fixes. |
-| `08-final-ship-review.md` | Final release readiness assessment, final bug/security sanity audit, validation reconciliation, final report, push/no-push decision, and restart assessment. |
-| `templates/execution-plan.md` | Template for the early run execution plan. |
-| `templates/implementation-plan.md` | Template for the implementation plan created after audit sections and before fixes. |
-| `templates/section-summary.md` | Generic template for per-section summaries saved under `repository-review/<RUN_ID>/section-summaries/`. |
-| `templates/audit-lane-report.md` | Template for optional controlled parallel read-only audit lanes used after the Section 1 baseline. |
-| `templates/schema-validation.md` | Template for discovered schemas, schema validation commands, example validation, compatibility concerns, and schema drift. |
-| `templates/final-bug-security-audit.md` | Template for the final post-implementation bug/security sanity audit. |
-| `templates/final-response.md` | Template for the saved final report and table-first final answer. |
-| `templates/finding-register.csv` | CSV header template for durable finding tracking. |
-| `templates/action-register.csv` | CSV header template for durable action tracking. |
+| `07-implementation.md` | Consolidated implementation plan and execution of safe, significant-value fixes. |
+| `08-final-ship-review.md` | Final release readiness assessment, post-implementation bug/security sanity audit, validation reconciliation, final report, push plan, and user-approval gating. |
+| `09-release-execution.md` | Post-Go release execution checklist (commit/push, CI validation, package build hook validation, git tagging, and PyPI publishing). |
 
-## Expected run artifacts
+---
 
-The agent should create and maintain:
+## Expected Run Artifacts
 
+The agent creates and maintains all review artifacts under the designated run directory:
 ```text
 repository-review/<RUN_ID>/
   00-run-metadata.md
@@ -88,6 +53,8 @@ repository-review/<RUN_ID>/
   12-final-response.md
   deprecation-candidates.md
   ci-assessment.md
+  schema-validation.md
+  final-bug-security-audit.md
   section-summaries/
     01-current-state.md
     02-quality-security-edge-cases.md

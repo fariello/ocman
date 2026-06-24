@@ -2,45 +2,45 @@
 
 This file defines the global rules for the release review. These rules apply to all sections.
 
-## Authority model
+---
+
+## Authority Model
 
 1. `README.md` is the controlling instruction.
 2. This file defines shared rules.
-3. Section files `01` through `08` define phase-specific tasks.
+3. Section files `01` through `09` define phase-specific tasks.
 4. `repository-review/<RUN_ID>/` is the authoritative run record.
-5. TodoWrite, if available, is live progress tracking only.
+5. Local progress tracking files (`task.md` and `walkthrough.md` in the App Data Directory) are for live visibility and tracking only.
 
 If a section file appears to conflict with this protocol, follow this protocol and record the conflict in `05-decisions.md`.
 
-## Core behavior
+---
 
-Proceed autonomously through the full review unless invoked through a planning-only command. In planning-only mode, complete Sections 1 through 6, create `09-implementation-plan.md`, and stop before Section 7 implementation.
+## Core Behavior
 
 Proceed autonomously through the full review. Use judgment. Do not stop for minor uncertainty. Record assumptions and proceed conservatively.
 
 Stop or pause only for a true safety blocker, such as risk of deleting user data, exposing or committing secrets, running ambiguous destructive commands, needing unavailable credentials, being unable to separate this run's changes from pre-existing user changes, or needing to alter public behavior without enough evidence or validation.
 
-## Required run directory
+---
+
+## Required Run Directory
 
 Create:
-
 ```text
 repository-review/<RUN_ID>/
 ```
-
 Use a timestamp run ID:
-
 ```text
 YYYYMMDD-HHMMSS
 ```
-
 Add `repository-review/` to `.gitignore` if not already ignored.
 
 Required artifacts:
 
 | Artifact | Purpose |
 |---|---|
-| `00-run-metadata.md` | Run ID, timestamp, agent/model if known, repository path, Git metadata, initial status, environment summary. |
+| `00-run-metadata.md` | Run ID, timestamp, agent/model details, repository path, Git metadata, initial status, environment summary. |
 | `01-repository-inventory.md` | Project type, structure, languages, frameworks, public contracts, tests, docs, build/release artifacts. |
 | `02-execution-plan.md` | Lightweight plan for the full review and audit, updated when material facts change. |
 | `03-findings-register.csv` | Durable register of all findings, including addressed and unaddressed findings. |
@@ -57,34 +57,25 @@ Required artifacts:
 | `ci-assessment.md` | CI and GitHub Actions assessment, recommendations, changes made, or reasons no change was made. |
 | `schema-validation.md` | Discovered schemas, schema validation commands, sample payload/config/example validation, compatibility risks, and schema drift findings. |
 | `final-bug-security-audit.md` | Final post-implementation bug, correctness, security, privacy, and unsafe-change sanity audit before completion. |
-| `section-summaries/` | Exact per-section summary files for Sections 1 through 8. |
+| `section-summaries/` | Exact per-section summary files for Sections 1 through 9. |
 | `audit-lanes/` | Optional reports from controlled parallel read-only audit lanes used after Section 1. |
 
 If any artifact is not applicable, create it anyway and mark it as not applicable with rationale.
 
-## Unique ID system
+---
+
+## Unique ID System
 
 Every finding, candidate action, implemented change, deferred item, blocked item, deprecated-code candidate, CI candidate, decision, release concern, and final recommendation must have a unique run-specific ID.
 
 Use this pattern:
-
 ```text
 <RUN_ID>-S<section>-<TYPE><number>
 ```
-
 Examples:
-
-```text
-20260606-142233-S1-A1
-20260606-142233-S2-B1
-20260606-142233-S2-S1
-20260606-142233-S3-T1
-20260606-142233-S4-D1
-20260606-142233-S5-M1
-20260606-142233-S6-CI1
-20260606-142233-S7-X1
-20260606-142233-S8-REL1
-```
+- `20260606-142233-S1-A1`
+- `20260606-142233-S2-B1`
+- `20260606-142233-S2-S1`
 
 Recommended type codes:
 
@@ -112,61 +103,35 @@ Recommended type codes:
 
 Restarts are new runs with new IDs. A restarted run may reference earlier run IDs but must not reuse them.
 
-## Register requirements
+---
+
+## Register Requirements
 
 Maintain `03-findings-register.csv` and `04-action-register.csv` throughout the run. Use these statuses: `identified`, `planned`, `completed`, `deferred`, `blocked`, `not_applicable`, `superseded`, and `wont_do`.
 
-Findings must include ID, section, type, severity, title, status, affected area, evidence, impact, recommended action, public behavior change, required artifact updates, source files, validation, and next step.
+- **Findings** must include: ID, section, type, severity, title, status, affected area, evidence, impact, recommended action, public behavior change, required artifact updates, source files, validation, and next step.
+- **Actions** must include: ID, source finding IDs, section, status, description, files changed, commit, validation, reason not done, and recommended next step.
 
-Actions must include ID, source finding IDs, section, status, description, files changed, commit, validation, reason not done, and recommended next step.
+---
 
-## TodoWrite protocol
+## Antigravity Progress Tracking
 
-If running in OpenCode and TodoWrite is available, use TodoWrite for live progress visibility. Create one todo per major section and one per implementation batch. Keep todo statuses aligned with the run artifacts. Reconcile TodoWrite against the registers before the final report.
+You must maintain `task.md` (for the checklist) and `walkthrough.md` (for change/test summaries) in your App Data directory `/brain/` folder.
+- Create/update `task.md` at the start of the run and update it at each section boundary.
+- Mark statuses accurately (using `- [ ]` for pending, `- [/]` for in-progress, and `- [x]` for complete).
+- Summarize changes and commands run in `walkthrough.md`.
 
-Do not use TodoWrite as the official record. If TodoWrite is unavailable, continue without it and record progress in the run directory.
+---
 
-## Optional controlled parallel audit mode
-
-After Section 1 completes the repository baseline, the main agent may use controlled parallel read-only audit lanes for Sections 2 through 6 when doing so is likely to improve review breadth, reduce missed findings, or manage a large repository more effectively.
-
-Parallel audit mode is optional. Do not force it for small or simple repositories.
-
-Allowed lane scopes include:
-
-1. Code quality, correctness, security, privacy, and edge cases.
-2. Tests, fixtures, coverage, and regression protection.
-3. Documentation, specifications, examples, and help text.
-4. Compatibility, packaging, build, CI, deployment, versioning, and release artifacts.
-5. Schemas, data contracts, migrations, examples, fixtures, and serialized outputs.
-6. Deprecated, obsolete, stale, unused, duplicated, or superseded code and artifacts.
-
-Rules for parallel audit lanes:
-
-1. The main agent must complete Section 1 before starting parallel lanes.
-2. Lanes must be read-only.
-3. Lanes must not edit tracked files.
-4. Lanes must not update official registers directly.
-5. Lanes must not create commits.
-6. Lanes must not push to a remote.
-7. Lanes must not make final release decisions.
-8. Lanes must not assign official run-specific IDs.
-9. Lanes should use temporary candidate IDs only.
-10. Lanes must produce compact reports under `repository-review/<RUN_ID>/audit-lanes/` using `templates/audit-lane-report.md`.
-11. The main agent must synthesize all lane reports before creating `09-implementation-plan.md`.
-12. The main agent must deduplicate findings, assign official IDs, decide severity, update registers, and record decisions.
-13. Section 7 implementation must remain serial.
-14. Section 8 final review must remain serial.
-
-If parallel lanes are not used, record that decision in `05-decisions.md` and continue serially.
-
-## Command logging
+## Command Logging
 
 For every meaningful command, append to `06-commands.md` the command, purpose, working directory, relevant assumptions, result, short output summary, and follow-up action if any.
 
 Do not paste secrets or excessive logs. Summarize long outputs and save only relevant excerpts when needed.
 
-## Commit policy
+---
+
+## Commit Policy
 
 Use local commits for meaningful tracked repository changes when safe.
 
@@ -176,11 +141,20 @@ Commit at logical checkpoints: after adding `repository-review/` to `.gitignore`
 
 Use commit messages that reference action IDs. If changes cannot be separated from pre-existing user changes, do not commit. Record the blocker.
 
-## Remote push policy
+---
 
-Do not push to a remote during the review. At the end, create `11-push-plan.md` with branch, local commits, permission status, push recommendation, risks, suggested command if permitted, and no-push rationale if permission is absent. Only push if explicitly permitted by the user.
+## Remote Push and Release Gating Policy
 
-## Implementation philosophy
+> [!IMPORTANT]
+> **NO REMOTE PUSH IS ALLOWED DURING THE AUDIT PHASES (SECTIONS 1–8).**
+> You must compile `repository-review/<RUN_ID>/11-push-plan.md` first, which details local commits, remotes, risks, and a push recommendation.
+> 
+> **MANDATORY GO/NO-GO GATE:**
+> You are strictly prohibited from pushing code or tags to a remote repository, or executing any step in Section 9 (Release Execution), until the user has explicitly approved a **GO** or **CONDITIONAL GO** release decision in response to your final review report.
+
+---
+
+## Implementation Philosophy
 
 Favor meaningful, safe improvements. Do not restrict fixes to only high-priority issues. Implement lower-severity changes when they add significant release value and are safe, well scoped, and validated.
 
@@ -188,13 +162,17 @@ Good changes include bug fixes, security hardening, correctness fixes, edge-case
 
 Avoid cosmetic churn, broad refactors, style-only rewrites, speculative features, file reorganization without clear value, public behavior changes without compatibility analysis, unnecessary dependencies, and workflows that publish, deploy, release, or upload artifacts without explicit permission.
 
-## Deprecated-code analysis
+---
+
+## Deprecated-Code Analysis
 
 Throughout the review, identify code, files, commands, examples, tests, configs, docs, workflows, or scripts that appear unused, obsolete, superseded, misleading, or harmful to maintainability. Record candidates in `deprecation-candidates.md`.
 
 Classify each candidate as safe to remove now, safe to mark deprecated now, candidate for future removal, probably still needed, or unknown requiring human review.
 
 Do not delete or deprecate something solely because it is old or not immediately referenced. Look for imports, references, tests, docs, package exports, CLI exposure, build scripts, CI workflows, changelog history, external contract risk, and usage patterns.
+
+---
 
 ## CI and GitHub Actions
 
@@ -204,48 +182,29 @@ You may add or update CI only when validation commands are clear, the workflow i
 
 Consider linting, formatting checks, unit tests, type checks, build checks, security or dependency checks, documentation checks, and matrix testing for supported versions. If CI is not added, explain why.
 
-## Schema validation
+---
 
-Throughout the review, identify and validate schemas and data contracts when applicable.
+## Schema Validation
 
-Schemas may include:
+Throughout the review, identify and validate schemas and data contracts when applicable. Record schema findings in `schema-validation.md` and the registers.
 
-1. JSON Schema.
-2. OpenAPI or Swagger specifications.
-3. GraphQL schemas.
-4. XML Schema.
-5. Database schemas or migrations.
-6. Protocol buffers.
-7. Avro, Parquet, or other data serialization contracts.
-8. Configuration schemas.
-9. Custom file format schemas.
-10. Message, event, API payload, import, export, or serialized output contracts.
+Validate representative examples, fixtures, golden files, sample configs, or test data against schemas (JSON Schema, OpenAPI, database schemas, etc.) using repository-native commands. Check for drift, backward compatibility risks, missing validation, or stale generated schema artifacts.
 
-Record schema findings in `schema-validation.md` and the finding/action registers.
+---
 
-When repository-native validation commands exist, use them. When examples, fixtures, golden files, sample configs, documented payloads, or test data exist, validate representative samples against the relevant schemas when practical and safe.
-
-Check for:
-
-1. Schema syntax validity.
-2. Drift between schemas, implementation, docs, examples, tests, and generated artifacts.
-3. Backward compatibility risks for public schemas and serialized outputs.
-4. Missing validation for user-provided or external data.
-5. Migration or versioning concerns.
-6. Generated schema artifacts that are stale or not reproducible.
-7. CI opportunities for schema validation.
-
-Do not introduce new schema tooling unless it is low risk, aligned with the repository, and clearly justified. If validation is not possible, explain why and record the residual risk.
-
-## Validation expectations
+## Validation Expectations
 
 Use repository-native commands when available. Prefer commands documented in README, package scripts, Makefiles, task runners, CI files, or contribution docs. Do not invent unsafe commands or install heavy new tooling just to validate unless the repository clearly requires it.
 
-## Non-applicable handling
+---
+
+## Non-Applicable Handling
 
 Some repositories will not have APIs, CLIs, UIs, packaging, deployment, docs, tests, or CI. Do not force findings. Mark non-applicable checks explicitly, explain why, and continue.
 
-## Final report requirements
+---
+
+## Final Report Requirements
 
 Save the final report to `repository-review/<RUN_ID>/12-final-response.md`, then present the same content to the user.
 
@@ -261,14 +220,16 @@ The final report must begin with two tables:
 | Unique ID | Description of what was not done | Reason | Recommended next step |
 |---|---|---|---|
 
-The second table must include audit findings that were identified but not implemented, not only actions that were started and left incomplete.
+After the two tables, include a summary of changes, validations run, CI assessment summary, deprecated-code summary, documentation and artifact updates, remaining risks, push/no-push decision, GO/CONDITIONAL GO/NO-GO recommendation, and restart recommendation.
 
-After the two tables, include summary of changes, validations run, CI assessment summary, deprecated-code summary, documentation and artifact updates, remaining risks, push/no-push decision, GO/CONDITIONAL GO/NO-GO recommendation, and restart recommendation.
+---
 
-## Restart assessment
+## Restart Assessment
 
-At the end, decide whether a new review run should be started. Recommend a restart only when implementation changed enough that earlier audit results may be stale, substantial architecture or behavior was discovered late, validation exposed issues requiring another broad pass, or major CI, packaging, public contract, or security changes were made. Do not restart merely because minor fixes were made.
+At the end, decide whether a new review run should be started. Recommend a restart only when implementation changed enough that earlier audit results may be stale, substantial architecture or behavior was discovered late, validation exposed issues requiring another pass, or major CI, packaging, public contract, or security changes were made. Do not restart merely because minor fixes were made.
 
-## Safety rules
+---
+
+## Safety Rules
 
 Do not run destructive commands unless clearly necessary and safe. Do not delete user data, generated artifacts, databases, or untracked files without explicit justification. Do not expose or commit secrets. Do not install unnecessary dependencies. Do not change license terms. Do not alter public APIs without compatibility analysis. Do not modify deployment or release automation to publish externally without explicit permission. Stop and record a blocker if a change cannot be made safely.
