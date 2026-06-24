@@ -538,3 +538,71 @@ def test_resolve_project_and_session(temp_db):
     s = resolve_session_spec("Subagent", mixed_sessions, filter_subagents=False)
     assert s is not None
     assert s["id"] == "sub1"
+
+
+def test_db_list_projects_exception_cleanup(temp_db, monkeypatch):
+    close_called = False
+    class MockConnection:
+        def cursor(self):
+            class MockCursor:
+                def execute(self, *args, **kwargs):
+                    raise Exception("Mock DB Error")
+            return MockCursor()
+        def close(self):
+            nonlocal close_called
+            close_called = True
+
+    class MockSqlite:
+        def connect(self, *args, **kwargs):
+            return MockConnection()
+
+    monkeypatch.setattr(ocman, "_get_sqlite", lambda: MockSqlite())
+    
+    projects = db_list_projects()
+    assert len(projects) == 0
+    assert close_called is True
+
+
+def test_db_list_sessions_exception_cleanup(temp_db, monkeypatch):
+    close_called = False
+    class MockConnection:
+        def cursor(self):
+            class MockCursor:
+                def execute(self, *args, **kwargs):
+                    raise Exception("Mock DB Error")
+            return MockCursor()
+        def close(self):
+            nonlocal close_called
+            close_called = True
+
+    class MockSqlite:
+        def connect(self, *args, **kwargs):
+            return MockConnection()
+
+    monkeypatch.setattr(ocman, "_get_sqlite", lambda: MockSqlite())
+    
+    sessions = db_list_sessions("proj1")
+    assert len(sessions) == 0
+    assert close_called is True
+
+
+
+def test_cli_help(monkeypatch, capsys):
+    import sys
+    monkeypatch.setattr(sys, "argv", ["ocman", "--help"])
+    with pytest.raises(SystemExit) as excinfo:
+        ocman.main()
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert "ocman" in captured.out or "opencode" in captured.out or "Manager" in captured.out
+
+
+def test_cli_version(monkeypatch, capsys):
+    import sys
+    monkeypatch.setattr(sys, "argv", ["ocman", "--version"])
+    with pytest.raises(SystemExit) as excinfo:
+        ocman.main()
+    assert excinfo.value.code == 0
+    captured = capsys.readouterr()
+    assert "1.0.0" in captured.out
+
