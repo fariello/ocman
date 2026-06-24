@@ -183,7 +183,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
-__version__: str = "1.0.0"
+__version__: str = "1.0.1"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {

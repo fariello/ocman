@@ -1,6 +1,14 @@
 # Changelog
 
+## [1.0.1] - 2026-06-24
+
+### Fixed
+- Fixed SQLite database connection leaks under exception pathways in TUI and CLI.
+- Aligned output recovery files and compaction prompt filenames to share a single process startup timestamp.
+- Added unit and integration tests covering SQLite error recovery, CLI argument execution paths, and process startup timestamps.
+
 ## [1.0.0] - 2026-06-19
+
 
 ### Added
 - **PyPI Release**: Officially published the package under the name `ocman`.

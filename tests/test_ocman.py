@@ -234,7 +234,7 @@ def test_parse_args_version(monkeypatch, capsys):
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
     output = captured.out + captured.err
-    assert "ocman.py 1.0.0" in output or "ocman 1.0.0" in output
+    assert "ocman.py 1.0.1" in output or "ocman 1.0.1" in output
 
 
 @pytest.fixture
@@ -604,7 +604,7 @@ def test_cli_version(monkeypatch, capsys):
         ocman.main()
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
-    assert "1.0.0" in captured.out
+    assert "1.0.1" in captured.out
 
 
 def test_startup_timestamps():
