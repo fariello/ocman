@@ -98,6 +98,21 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
+# Startup timestamps resolved once when the module/script is initialized.
+_STARTUP_TIME_UTC = datetime.now(timezone.utc)
+_STARTUP_TIME_LOCAL = datetime.now()
+
+
+def get_startup_timestamp_utc(fmt: str = "%Y%m%d-%H%M%S") -> str:
+    """Return the UTC startup timestamp of the process formatted as a string."""
+    return _STARTUP_TIME_UTC.strftime(fmt)
+
+
+def get_startup_timestamp_local(fmt: str = "%Y%m%d-%H%M%S") -> str:
+    """Return the local startup timestamp of the process formatted as a string."""
+    return _STARTUP_TIME_LOCAL.strftime(fmt)
+
+
 # When orsession is installed alongside this script, prefer its shared core
 # for functions that have been improved (e.g., config expansion with {file:}
 # support). Falls back gracefully to the bundled implementations below.
@@ -2530,7 +2545,7 @@ def render_transcript(turns: list[Turn], title: str) -> str:
         Markdown content.
     """
 
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    generated_at = get_startup_timestamp_utc("%Y-%m-%d %H:%M:%S UTC")
     lines: list[str] = [
         f"# {title}",
         "",
@@ -2583,7 +2598,7 @@ def render_restart_context(
         Markdown content designed to be read and executed by an AI coding agent.
     """
 
-    generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
+    generated_at = get_startup_timestamp_utc("%Y-%m-%d %H:%M:%S UTC")
     transcript = render_transcript(turns, "Recovered opencode transcript")
 
     return f"""# Restart context for opencode
@@ -3392,7 +3407,7 @@ def recover_from_export(
                 f"(skipped {skipped} older turns)."
             ))
 
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = get_startup_timestamp_utc()
     safe_session_id = safe_filename(session.session_id)
     base_name = f"opencode-{timestamp}-{safe_session_id}"
 
@@ -4426,7 +4441,7 @@ def run_compaction(
     )
 
     # Write the compacted output.
-    timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    timestamp = get_startup_timestamp_utc()
     safe_session_id = safe_filename(session.session_id)
     compacted_path = output_dir / f"opencode-{timestamp}-{safe_session_id}.compacted.md"
 
@@ -4587,7 +4602,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         # Create backup directory and backup database file family
         from datetime import datetime
         import shutil
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
             print(f"[*] Creating database family backup in {backup_dir} ...")
@@ -4842,7 +4857,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         # Create backup directory and backup database file family
         from datetime import datetime
         import shutil
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
             print(f"[*] Creating database family backup in {backup_dir} ...")
@@ -5220,7 +5235,7 @@ def db_run_cleanup(
         # 4. Create database backup family
         from datetime import datetime
         import shutil
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
             print(f"[*] Creating database family backup in {backup_dir} ...")
@@ -5894,13 +5909,13 @@ def cli_backup(dest: str = None) -> Path:
     if dest is None or dest == "":
         backup_dir = Path(config["default_backup_dir"]).expanduser()
         backup_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = get_startup_timestamp_local()
         dest_path = backup_dir / f"opencode-backup-{timestamp}.zip"
     else:
         p = Path(dest).expanduser()
         if p.is_dir() or not p.suffix == ".zip":
             p.mkdir(parents=True, exist_ok=True)
-            timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+            timestamp = get_startup_timestamp_local()
             dest_path = p / f"opencode-backup-{timestamp}.zip"
         else:
             p.parent.mkdir(parents=True, exist_ok=True)
@@ -6002,7 +6017,7 @@ def cli_restore(source: str) -> None:
         config = load_ocman_config()
         backup_dir = Path(config["default_backup_dir"]).expanduser()
         backup_dir.mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+        timestamp = get_startup_timestamp_local()
         rollback_file = backup_dir / f"rollback-before-restore-{timestamp}.zip"
 
         files_to_backup = []

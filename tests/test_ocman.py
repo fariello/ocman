@@ -606,3 +606,26 @@ def test_cli_version(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert "1.0.0" in captured.out
 
+
+def test_startup_timestamps():
+    import time
+    ts_utc1 = ocman.get_startup_timestamp_utc()
+    ts_local1 = ocman.get_startup_timestamp_local()
+    
+    # Wait a moment to ensure datetime.now() would normally change
+    time.sleep(0.1)
+    
+    ts_utc2 = ocman.get_startup_timestamp_utc()
+    ts_local2 = ocman.get_startup_timestamp_local()
+    
+    # Assert they are cached/set in stone
+    assert ts_utc1 == ts_utc2
+    assert ts_local1 == ts_local2
+    
+    # Assert format
+    assert len(ts_utc1) == 15
+    assert ts_utc1[8] == "-"
+    assert len(ts_local1) == 15
+    assert ts_local1[8] == "-"
+
+
