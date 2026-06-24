@@ -292,6 +292,7 @@ class DatabaseAdminWidget(Static):
         sqlite3 = _get_sqlite()
         if sqlite3 and db_path.exists():
             self.query_one("#lbl-sqlite-ver", Static).update(sqlite3.sqlite_version)
+            conn = None
             try:
                 conn = sqlite3.connect(str(db_path))
                 cursor = conn.cursor()
@@ -299,9 +300,14 @@ class DatabaseAdminWidget(Static):
                 proj_cnt = cursor.fetchone()[0]
                 cursor.execute("SELECT COUNT(*) FROM session")
                 sess_cnt = cursor.fetchone()[0]
-                conn.close()
             except Exception:
                 proj_cnt, sess_cnt = 0, 0
+            finally:
+                if conn:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
             self.query_one("#lbl-total-projects", Static).update(str(proj_cnt))
             self.query_one("#lbl-total-sessions", Static).update(str(sess_cnt))
         else:

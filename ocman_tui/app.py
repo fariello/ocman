@@ -165,6 +165,7 @@ class DeletionSafetyModal(ModalScreen[bool]):
             self.dismiss(False)
             return
 
+        conn = None
         try:
             conn = sqlite3.connect(str(db_path))
             cursor = conn.cursor()
@@ -194,11 +195,16 @@ class DeletionSafetyModal(ModalScreen[bool]):
                     "title": row[1] or "(untitled)",
                     "parent_id": row[2]
                 })
-            conn.close()
         except Exception as e:
             self.app.notify(f"Failed to gather deletion details: {e}", severity="error")
             self.dismiss(False)
             return
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         # Find disk files
         storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
@@ -282,6 +288,7 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
             self.dismiss(False)
             return
 
+        conn = None
         try:
             conn = sqlite3.connect(str(db_path))
             cursor = conn.cursor()
@@ -324,11 +331,16 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
                 for table, col in SESSION_RELATIONAL_TABLES:
                     self.counts[table] = 0
             
-            conn.close()
         except Exception as e:
             self.app.notify(f"Failed to gather project deletion details: {e}", severity="error")
             self.dismiss(False)
             return
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         # Find disk files
         storage_dir = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
@@ -1016,10 +1028,7 @@ class OrsessionApp(App):
     def _do_delete_session_worker(self, session_id: str) -> None:
         db_path = get_db_path()
         
-        # Query session details before deletion
-        session_title = "Unknown"
-        time_created_str = "Unknown"
-        time_updated_str = "Unknown"
+        conn = None
         try:
             sqlite3 = _get_sqlite()
             if sqlite3 and db_path.exists():
@@ -1032,9 +1041,14 @@ class OrsessionApp(App):
                     from ocman import _fmt_ts
                     time_created_str = _fmt_ts(row[1])
                     time_updated_str = _fmt_ts(row[2])
-                conn.close()
         except Exception:
             pass
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
         try:
             # Pre-size of DB

@@ -3507,6 +3507,7 @@ def db_list_projects() -> list[dict[str, Any]]:
     if sqlite3 is None or not OPENCODE_DB_PATH.exists():
         return []
 
+    conn = None
     try:
         conn = sqlite3.connect(str(OPENCODE_DB_PATH))
         cursor = conn.cursor()
@@ -3528,10 +3529,16 @@ def db_list_projects() -> list[dict[str, Any]]:
                 "session_count": row[3],
                 "last_updated": row[4],
             })
-        conn.close()
         return projects
     except Exception:
         return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 
 def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
@@ -3545,6 +3552,7 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
     if sqlite3 is None or not OPENCODE_DB_PATH.exists():
         return []
 
+    conn = None
     try:
         conn = sqlite3.connect(str(OPENCODE_DB_PATH))
         cursor = conn.cursor()
@@ -3591,10 +3599,16 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 "project_dir": row[15] or "",
                 "parent_id": row[16] or "",
             })
-        conn.close()
         return sessions
     except Exception:
         return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
 
 
 
@@ -6401,7 +6415,6 @@ def main() -> None:
                     _project_dir = p["directory"]
                     break
 
-        # Resolve project context from session spec if we couldn't resolve from CWD
         if not _project_id and args.session:
             all_db_sessions = db_list_sessions(None)
             resolved = resolve_session_spec(
@@ -6410,6 +6423,7 @@ def main() -> None:
                 filter_subagents=not args.all_sessions
             ) if all_db_sessions else None
             if resolved:
+                conn = None
                 try:
                     sqlite3 = _get_sqlite()
                     if sqlite3 and OPENCODE_DB_PATH.exists():
@@ -6426,9 +6440,15 @@ def main() -> None:
                                 _project_dir = proj_row[0]
                             else:
                                 _project_dir = row[1]
-                        conn.close()
                 except Exception:
                     pass
+                finally:
+                    if conn:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+
 
     # Handle --list-sessions early.
     if args.list_sessions:
