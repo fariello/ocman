@@ -51,6 +51,12 @@ from .core import (
     SESSION_RELATIONAL_TABLES,
     get_db_path,
     truncate_turns_by_interactions,
+    db_create_rollback_backup,
+    db_restore_rollback_backup,
+    move_directory_structure,
+    db_move_project_metadata,
+    bundle_session_data,
+    extract_and_import_session,
 )
 from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
@@ -386,6 +392,338 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
             self.dismiss(True)
 
 
+class MoveProjectModal(ModalScreen[bool]):
+    """Modal screen for moving a project (physically or metadata-only)."""
+    def __init__(self, project_id: str, name: str) -> None:
+        super().__init__()
+        self.project_id = project_id
+        self.project_name = name
+        self.old_path = ""
+        self.src_exists = False
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("MOVE PROJECT / UPDATE PATH", id="dialog-title"),
+            VerticalScroll(
+                Label(f"Project ID: {self.project_id}", classes="info-label"),
+                Label(f"Project Name: {self.project_name}", classes="info-label"),
+                Label("Old Path (Read Only):", classes="info-label"),
+                Input(id="input-old-path", disabled=True),
+                Label("New Path:", classes="info-label"),
+                Input(placeholder="Enter new absolute path", id="input-new-path"),
+                Checkbox("Perform physical directory move on disk", value=True, id="check-physical-move"),
+                Static("", id="lbl-status-warning", classes="margin-vertical"),
+                id="move-project-scroll"
+            ),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-move"),
+                Button("SUBMIT", id="btn-submit-move", variant="success"),
+                classes="horizontal-buttons"
+            ),
+            id="dialog-container"
+        )
+
+    def on_mount(self) -> None:
+        # Fetch current project directory from database
+        sqlite3 = _get_sqlite()
+        db_path = get_db_path()
+        if not sqlite3 or not db_path.exists():
+            self.dismiss(False)
+            return
+
+        conn = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            cursor = conn.cursor()
+            cursor.execute("SELECT worktree FROM project WHERE id = ?", (self.project_id,))
+            row = cursor.fetchone()
+            if row and row[0]:
+                self.old_path = row[0]
+            else:
+                self.old_path = ""
+        except Exception as e:
+            self.app.notify(f"Error querying project directory: {e}", severity="error")
+            self.dismiss(False)
+            return
+        finally:
+            if conn:
+                conn.close()
+
+        self.query_one("#input-old-path", Input).value = self.old_path
+
+        # Check if old_path exists on disk
+        if self.old_path:
+            try:
+                p = Path(self.old_path).expanduser().resolve()
+                self.src_exists = p.exists() and p.is_dir()
+            except Exception:
+                self.src_exists = False
+
+        warning_lbl = self.query_one("#lbl-status-warning", Static)
+        physical_checkbox = self.query_one("#check-physical-move", Checkbox)
+
+        if not self.src_exists:
+            physical_checkbox.value = False
+            physical_checkbox.disabled = True
+            warning_lbl.update("[yellow][*] Source directory does not exist on disk. Metadata-only update will be performed.[/]")
+        else:
+            warning_lbl.update("[green][*] Source directory found on disk. Physical move is recommended.[/]")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-move":
+            self.dismiss(False)
+        elif event.button.id == "btn-submit-move":
+            new_path_str = self.query_one("#input-new-path", Input).value.strip()
+            if not new_path_str:
+                self.app.notify("New path cannot be empty.", severity="warning")
+                return
+
+            physical_move = self.query_one("#check-physical-move", Checkbox).value
+
+            # Pre-flight checks
+            if physical_move:
+                try:
+                    dest = Path(new_path_str).expanduser().resolve()
+                    if dest.exists():
+                        self.app.notify("Destination path already exists.", severity="error")
+                        return
+                except Exception as e:
+                    self.app.notify(f"Invalid destination path: {e}", severity="error")
+                    return
+
+            self.app.notify("Processing move in background...", severity="information")
+            self.run_worker(
+                lambda: self._do_move_worker(new_path_str, physical_move),
+                thread=True
+            )
+
+    def _do_move_worker(self, new_path_str: str, physical_move: bool) -> None:
+        old_path_obj = Path(self.old_path)
+        new_path_obj = Path(new_path_str)
+
+        backup_file = None
+        physical_moved = False
+        try:
+            # Create DB rollback backup
+            backup_file = db_create_rollback_backup()
+
+            # Physical move if requested
+            if physical_move:
+                move_directory_structure(old_path_obj, new_path_obj)
+                physical_moved = True
+
+            # Database update
+            db_move_project_metadata(self.project_id, self.old_path, new_path_str)
+
+            # Cleanup backup on success
+            if backup_file and backup_file.exists():
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+
+            def update_success() -> None:
+                self.app.notify("Project successfully moved!", severity="information")
+                self.dismiss(True)
+
+            self.call_from_thread(update_success)
+
+        except Exception as e:
+            # Rollback DB
+            if backup_file and backup_file.exists():
+                db_restore_rollback_backup(backup_file)
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+
+            # Rollback Physical Move
+            if physical_moved:
+                try:
+                    import shutil
+                    shutil.move(str(new_path_obj.expanduser().resolve()), str(old_path_obj.expanduser().resolve()))
+                except Exception as re:
+                    print(f"[-] Critical: Failed to restore physical directory: {re}")
+
+            def update_failure() -> None:
+                self.app.notify(f"Move failed: {e}", severity="error")
+
+            self.call_from_thread(update_failure)
+
+
+class ExportSessionModal(ModalScreen[bool]):
+    """Modal screen for exporting a session and descendants to .ocbox bundle."""
+    def __init__(self, session_id: str, title: str) -> None:
+        super().__init__()
+        self.session_id = session_id
+        self.session_title = title
+
+    def compose(self) -> ComposeResult:
+        default_name = f"{self.session_id}.ocbox"
+        default_path = str(Path.home() / default_name)
+        yield Container(
+            Label("EXPORT SESSION BUNDLE", id="dialog-title"),
+            VerticalScroll(
+                Label(f"Session ID: {self.session_id}", classes="info-label"),
+                Label(f"Session Title: {self.session_title}", classes="info-label"),
+                Label("Export File Target Path:", classes="info-label"),
+                Input(value=default_path, placeholder="e.g. ~/my_session.ocbox", id="input-export-path"),
+                id="export-session-scroll"
+            ),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-export"),
+                Button("EXPORT", id="btn-submit-export", variant="success"),
+                classes="horizontal-buttons"
+            ),
+            id="dialog-container"
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-export":
+            self.dismiss(False)
+        elif event.button.id == "btn-submit-export":
+            export_path_str = self.query_one("#input-export-path", Input).value.strip()
+            if not export_path_str:
+                self.app.notify("Export path cannot be empty.", severity="warning")
+                return
+
+            dest_path = Path(export_path_str).expanduser().resolve()
+            if dest_path.exists():
+                self.app.notify("Target file already exists. It will be overwritten.", severity="warning")
+
+            self.app.notify("Exporting session in background...", severity="information")
+            self.run_worker(
+                lambda: self._do_export_worker(dest_path),
+                thread=True
+            )
+
+    def _do_export_worker(self, dest_path: Path) -> None:
+        try:
+            bundle_session_data(self.session_id, dest_path)
+            
+            def on_success() -> None:
+                self.app.notify(f"Successfully exported session to {dest_path.name}!", severity="information")
+                self.dismiss(True)
+            self.call_from_thread(on_success)
+        except Exception as e:
+            def on_failure() -> None:
+                self.app.notify(f"Export failed: {e}", severity="error")
+            self.call_from_thread(on_failure)
+
+
+class ImportSessionModal(ModalScreen[bool]):
+    """Modal screen for importing a session from an .ocbox bundle."""
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Select
+        yield Container(
+            Label("IMPORT SESSION BUNDLE", id="dialog-title"),
+            VerticalScroll(
+                Label("Session Bundle Path (.ocbox):", classes="info-label"),
+                Input(placeholder="e.g. ~/backup.ocbox", id="input-import-bundle-path"),
+                Label("Target Project Mapping:", classes="info-label"),
+                Select([], prompt="Select existing project (or choose Create New)...", id="select-import-project"),
+                Label("New Project Workspace Path (if creating new):", classes="info-label"),
+                Input(placeholder="e.g. ~/VC/my-new-project", id="input-import-new-project-path"),
+                id="import-session-scroll"
+            ),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-import"),
+                Button("IMPORT", id="btn-submit-import", variant="success"),
+                classes="horizontal-buttons"
+            ),
+            id="dialog-container"
+        )
+
+    def on_mount(self) -> None:
+        from textual.widgets import Select
+        projects_list = []
+        try:
+            from .core import db_list_projects
+            projects = db_list_projects()
+            for p in projects:
+                name = p.get("name") or p.get("id") or "Unnamed"
+                projects_list.append((f"{name} ({p['directory']})", p["id"]))
+        except Exception:
+            pass
+
+        projects_list.insert(0, ("[Create New Project workspace]", "NEW_PROJECT"))
+
+        select_widget = self.query_one("#select-import-project", Select)
+        select_widget.set_options(projects_list)
+        select_widget.value = "NEW_PROJECT"
+
+    def on_select_changed(self, event: Select.Changed) -> None:
+        new_proj_input = self.query_one("#input-import-new-project-path", Input)
+        if event.value == "NEW_PROJECT":
+            new_proj_input.disabled = False
+        else:
+            new_proj_input.disabled = True
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-import":
+            self.dismiss(False)
+        elif event.button.id == "btn-submit-import":
+            bundle_path_str = self.query_one("#input-import-bundle-path", Input).value.strip()
+            if not bundle_path_str:
+                self.app.notify("Bundle path cannot be empty.", severity="warning")
+                return
+
+            bundle_path = Path(bundle_path_str).expanduser().resolve()
+            if not bundle_path.exists():
+                self.app.notify("Bundle file does not exist.", severity="error")
+                return
+
+            from textual.widgets import Select
+            proj_val = self.query_one("#select-import-project", Select).value
+            
+            target_project_id = None
+            new_project_path = None
+
+            if proj_val == "NEW_PROJECT":
+                new_project_path_str = self.query_one("#input-import-new-project-path", Input).value.strip()
+                if not new_project_path_str:
+                    self.app.notify("Please specify workspace path for the new project.", severity="warning")
+                    return
+                new_project_path = new_project_path_str
+            else:
+                target_project_id = proj_val
+
+            self.app.notify("Importing session in background...", severity="information")
+            self.run_worker(
+                lambda: self._do_import_worker(bundle_path, target_project_id, new_project_path),
+                thread=True
+            )
+
+    def _do_import_worker(self, bundle_path: Path, target_project_id: str | None, new_project_path: str | None) -> None:
+        try:
+            imported_id = extract_and_import_session(
+                bundle_path,
+                target_project_id=target_project_id,
+                new_project_path=new_project_path
+            )
+            
+            def on_success() -> None:
+                self.app.notify(f"Successfully imported session as {imported_id}!", severity="information")
+                self.dismiss(True)
+            self.call_from_thread(on_success)
+        except Exception as e:
+            def on_failure() -> None:
+                self.app.notify(f"Import failed: {e}", severity="error")
+            self.call_from_thread(on_failure)
+
+
 class PostExecutionSummaryModal(ModalScreen[None]):
     """Displays detailed summary of deleted DB rows and space saved on disk."""
     def __init__(self, summary: Dict[str, Any]) -> None:
@@ -514,6 +852,8 @@ class OrsessionApp(App):
                                 with Horizontal():
                                     yield Button("Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
                                     yield Button("Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
+                                    yield Button("Move/Update Path", id="btn-move-project", disabled=True)
+                                    yield Button("Export Session Bundle", id="btn-export-session", disabled=True)
                     
                     # Tab 3: Database Admin
                     with TabPane("Database Admin", id="tab-admin"):
@@ -693,6 +1033,8 @@ class OrsessionApp(App):
             with contextlib.suppress(Exception):
                 self.query_one("#btn-delete-session-rec", Button).disabled = False
                 self.query_one("#btn-delete-project", Button).disabled = True
+                self.query_one("#btn-move-project", Button).disabled = True
+                self.query_one("#btn-export-session", Button).disabled = False
         elif node_data and node_data.get("type") == "project":
             self.selected_session_id = None
             self.selected_session_title = ""
@@ -725,6 +1067,8 @@ class OrsessionApp(App):
             with contextlib.suppress(Exception):
                 self.query_one("#btn-delete-session-rec", Button).disabled = True
                 self.query_one("#btn-delete-project", Button).disabled = False
+                self.query_one("#btn-move-project", Button).disabled = False
+                self.query_one("#btn-export-session", Button).disabled = True
 
     def update_metadata_view(self, s: dict) -> None:
         """Update the top metadata card with session info."""
@@ -863,6 +1207,10 @@ class OrsessionApp(App):
             self.confirm_and_delete_session()
         elif event.button.id == "btn-delete-project":
             self.confirm_and_delete_project()
+        elif event.button.id == "btn-move-project":
+            self.confirm_and_move_project()
+        elif event.button.id == "btn-export-session":
+            self.confirm_and_export_session()
 
         # Audit history log stub
         elif event.button.id == "btn-clear-history-log":
@@ -1090,6 +1438,9 @@ class OrsessionApp(App):
                     self.query_one("#transcript-md", Markdown).update("")
                     self.current_turns = []
                     self.current_export = None
+                    with contextlib.suppress(Exception):
+                        self.query_one("#btn-delete-session-rec", Button).disabled = True
+                        self.query_one("#btn-export-session", Button).disabled = True
 
                 # Refresh trees & stats
                 self.action_refresh_data()
@@ -1117,6 +1468,45 @@ class OrsessionApp(App):
         self.app.push_screen(
             ProjectDeletionSafetyModal(self.selected_project_id, self.selected_project_name),
             handle_confirmation
+        )
+
+    def confirm_and_move_project(self) -> None:
+        """Spawn MoveProjectModal overlay screen for project relocation."""
+        if not self.selected_project_id:
+            self.app.notify("Please select a project in the sidebar tree first.", severity="warning")
+            return
+
+        def handle_move_completion(success: bool) -> None:
+            if success:
+                # Clear selection context and reload
+                self.selected_project_id = None
+                self.selected_project_name = None
+                self.query_one("#lbl-metadata-grid", Static).update("Select a session in the sidebar to view details.")
+                with contextlib.suppress(Exception):
+                    self.query_one("#lbl-actions-metadata-grid", Static).update("Select a session in the sidebar to view details.")
+                with contextlib.suppress(Exception):
+                    self.query_one("#btn-delete-project", Button).disabled = True
+                    self.query_one("#btn-move-project", Button).disabled = True
+                self.action_refresh_data()
+
+        self.app.push_screen(
+            MoveProjectModal(self.selected_project_id, self.selected_project_name),
+            handle_move_completion
+        )
+
+    def confirm_and_export_session(self) -> None:
+        """Spawn ExportSessionModal overlay screen for session export."""
+        if not self.selected_session_id:
+            self.app.notify("Please select a session in the sidebar tree first.", severity="warning")
+            return
+
+        def handle_export_completion(success: bool) -> None:
+            if success:
+                pass
+
+        self.app.push_screen(
+            ExportSessionModal(self.selected_session_id, self.selected_session_title),
+            handle_export_completion
         )
 
     def _do_delete_project_worker(self, project_id: str, project_name: str) -> None:
@@ -1159,6 +1549,9 @@ class OrsessionApp(App):
                     self.query_one("#lbl-metadata-grid", Static).update("Select a session in the sidebar to view details.")
                     with contextlib.suppress(Exception):
                         self.query_one("#lbl-actions-metadata-grid", Static).update("Select a session in the sidebar to view details.")
+                    with contextlib.suppress(Exception):
+                        self.query_one("#btn-delete-project", Button).disabled = True
+                        self.query_one("#btn-move-project", Button).disabled = True
 
                 # Refresh trees & stats
                 self.action_refresh_data()

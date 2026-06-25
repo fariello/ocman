@@ -249,6 +249,7 @@ class DatabaseAdminWidget(Static):
                 with Horizontal():
                     yield Button("Run Prune / Clean", id="btn-run-prune", variant="error")
                     yield Button("Inspect Orphans", id="btn-inspect-orphans", variant="primary")
+                    yield Button("Import Session", id="btn-import-session", variant="success")
 
             # Backup & Restore Card
             with Vertical(classes="panel-card"):
@@ -338,6 +339,14 @@ class DatabaseAdminWidget(Static):
         elif event.button.id == "btn-restore-backup":
             from ..app import RestoreBackupModal
             self.app.push_screen(RestoreBackupModal(), self.handle_restore_result)
+        elif event.button.id == "btn-import-session":
+            from ..app import ImportSessionModal
+            self.app.push_screen(ImportSessionModal(), self.handle_import_result)
+
+    def handle_import_result(self, imported: bool) -> None:
+        if imported:
+            self.refresh_metrics()
+            self.app.post_message(self.app.RefreshSidebar())
 
     def run_prune_operation(self) -> None:
         """Run prune clean operation and redirect prints to textual log."""

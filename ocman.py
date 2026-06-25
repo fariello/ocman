@@ -4211,6 +4211,59 @@ Examples:
     )
 
     parser.add_argument(
+        "--move-project",
+        help="Move a project specified by its ID or current path to the path specified by --to.",
+    )
+
+    parser.add_argument(
+        "--move-session",
+        help="Move a session specified by its ID to the path specified by --to.",
+    )
+
+    parser.add_argument(
+        "--to",
+        help="Destination directory path for --move-project or --move-session.",
+    )
+
+    parser.add_argument(
+        "--rebase-paths",
+        action="store_true",
+        help="Bulk rebase path prefixes in database. Requires --from and --to.",
+    )
+
+    parser.add_argument(
+        "--from",
+        dest="from_prefix",
+        help="Source path prefix for --rebase-paths.",
+    )
+
+    parser.add_argument(
+        "--metadata-only",
+        action="store_true",
+        help="Update the database metadata only without attempting to move files on disk.",
+    )
+
+    parser.add_argument(
+        "--export-session",
+        help="Export a session and all its descendants to a portable .ocbox file specified by --to.",
+    )
+
+    parser.add_argument(
+        "--import-session",
+        help="Import a session from a portable .ocbox file.",
+    )
+
+    parser.add_argument(
+        "--to-project",
+        help="Remap the imported session to an existing project specified by its ID.",
+    )
+
+    parser.add_argument(
+        "--new-project-path",
+        help="Remap the imported session to a newly created project with the specified local worktree path.",
+    )
+
+    parser.add_argument(
         "--backup-opencode",
         type=str,
         nargs="?",
@@ -4968,6 +5021,607 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
                 conn.close()
             except Exception:
                 pass
+
+
+def db_create_rollback_backup() -> Path:
+    """Create a temporary rollback backup of the database."""
+    from datetime import datetime
+    import shutil
+    backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups"
+    try:
+        backup_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = get_startup_timestamp_local()
+        backup_file = backup_dir / f"rollback-before-move-{timestamp}.db"
+        shutil.copy2(OPENCODE_DB_PATH, backup_file)
+        
+        # Also copy WAL/SHM if they exist
+        wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+        shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+        if wal_file.exists():
+            shutil.copy2(wal_file, backup_dir / f"{backup_file.name}-wal")
+        if shm_file.exists():
+            shutil.copy2(shm_file, backup_dir / f"{backup_file.name}-shm")
+        return backup_file
+    except Exception as e:
+        raise RecoveryError(f"Failed to create rollback database backup: {e}")
+
+
+def db_restore_rollback_backup(backup_file: Path) -> None:
+    """Restore database from a rollback backup."""
+    import shutil
+    try:
+        if backup_file.exists():
+            shutil.copy2(backup_file, OPENCODE_DB_PATH)
+            # Check for wal/shm backup and restore/delete as needed
+            wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+            shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+            wal_dest = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+            shm_dest = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+            if wal_backup.exists():
+                shutil.copy2(wal_backup, wal_dest)
+            elif wal_dest.exists():
+                wal_dest.unlink()
+            if shm_backup.exists():
+                shutil.copy2(shm_backup, shm_dest)
+            elif shm_dest.exists():
+                shm_dest.unlink()
+    except Exception as e:
+        print(color_red(f"[-] Critical: Failed to restore database rollback backup: {e}"))
+
+
+def move_directory_structure(old_path: Path, new_path: Path) -> None:
+    """
+    Physically move a directory structure from old_path to new_path.
+    Raises RecoveryError if validations fail.
+    """
+    import shutil
+    try:
+        old_path_abs = old_path.expanduser().resolve()
+        new_path_abs = new_path.expanduser().resolve()
+    except Exception as e:
+        raise RecoveryError(f"Invalid paths: {e}")
+
+    if not old_path_abs.exists():
+        raise RecoveryError(f"Source directory '{old_path}' does not exist on disk.")
+    if not old_path_abs.is_dir():
+        raise RecoveryError(f"Source path '{old_path}' is not a directory.")
+    if new_path_abs.exists():
+        raise RecoveryError(f"Destination path '{new_path}' already exists.")
+
+    try:
+        new_path_abs.parent.mkdir(parents=True, exist_ok=True)
+        shutil.move(str(old_path_abs), str(new_path_abs))
+    except Exception as e:
+        raise RecoveryError(f"Failed to move directory structure physically: {e}")
+
+
+def db_find_project(project_id_or_path: str) -> tuple[str, str] | None:
+    """Find project by ID or worktree path. Returns (id, worktree)."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        
+        # Try exact ID match first
+        cursor.execute("SELECT id, worktree FROM project WHERE id = ?", (project_id_or_path,))
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1] or ""
+            
+        # Try exact worktree match
+        cursor.execute("SELECT id, worktree FROM project WHERE worktree = ?", (project_id_or_path,))
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1] or ""
+            
+        # Try normalized paths comparison
+        try:
+            target_path = Path(project_id_or_path).expanduser().resolve()
+        except Exception:
+            target_path = None
+
+        if target_path:
+            cursor.execute("SELECT id, worktree FROM project")
+            for row in cursor.fetchall():
+                p_id, p_worktree = row
+                if p_worktree:
+                    try:
+                        p_path = Path(p_worktree).expanduser().resolve()
+                        if p_path == target_path:
+                            return p_id, p_worktree
+                    except Exception:
+                        pass
+        return None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def db_find_session(session_id: str) -> tuple[str, str, str] | None:
+    """Find session by ID. Returns (id, directory, project_id)."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, directory, project_id FROM session WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        if row:
+            return row[0], row[1] or "", row[2] or ""
+        return None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: str) -> None:
+    """Update project worktree and rewrite nested session directory prefixes in a transaction."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    try:
+        old_worktree_abs = str(Path(old_worktree).expanduser().resolve())
+        new_worktree_abs = str(Path(new_worktree).expanduser().resolve())
+    except Exception as e:
+        raise RecoveryError(f"Invalid paths for project metadata update: {e}")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        conn.execute("BEGIN TRANSACTION")
+
+        # Update project table
+        cursor.execute("UPDATE project SET worktree = ? WHERE id = ?", (new_worktree_abs, project_id))
+
+        # Query all sessions belonging to the project
+        cursor.execute("SELECT id, directory FROM session WHERE project_id = ?", (project_id,))
+        sessions = cursor.fetchall()
+        for s_id, s_dir in sessions:
+            if s_dir:
+                try:
+                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
+                    if s_dir_abs == old_worktree_abs:
+                        updated_dir = new_worktree_abs
+                    elif s_dir_abs.startswith(old_worktree_abs + "/"):
+                        suffix = s_dir_abs[len(old_worktree_abs):]
+                        updated_dir = new_worktree_abs + suffix
+                    else:
+                        continue
+                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
+                except Exception:
+                    pass
+
+        conn.commit()
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise RecoveryError(f"Failed to update project metadata: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> None:
+    """Update session directory and rewrite nested sub-sessions prefixes in a transaction."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    try:
+        old_dir_abs = str(Path(old_dir).expanduser().resolve())
+        new_dir_abs = str(Path(new_dir).expanduser().resolve())
+    except Exception as e:
+        raise RecoveryError(f"Invalid paths for session metadata update: {e}")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        conn.execute("BEGIN TRANSACTION")
+
+        # Update the target session itself
+        cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (new_dir_abs, session_id))
+
+        # Query all sessions to find ones nested under old_dir_abs
+        cursor.execute("SELECT id, directory FROM session")
+        all_sessions = cursor.fetchall()
+        for s_id, s_dir in all_sessions:
+            if s_id == session_id:
+                continue
+            if s_dir:
+                try:
+                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
+                    if s_dir_abs == old_dir_abs:
+                        updated_dir = new_dir_abs
+                    elif s_dir_abs.startswith(old_dir_abs + "/"):
+                        suffix = s_dir_abs[len(old_dir_abs):]
+                        updated_dir = new_dir_abs + suffix
+                    else:
+                        continue
+                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
+                except Exception:
+                    pass
+
+        conn.commit()
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise RecoveryError(f"Failed to update session metadata: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def db_rebase_paths(old_prefix: str, new_prefix: str) -> dict[str, int]:
+    """Bulk rebase path prefixes in database for both projects and sessions."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    try:
+        old_prefix_abs = str(Path(old_prefix).expanduser().resolve())
+        new_prefix_abs = str(Path(new_prefix).expanduser().resolve())
+    except Exception as e:
+        raise RecoveryError(f"Invalid paths for rebase: {e}")
+
+    stats = {"projects_updated": 0, "sessions_updated": 0}
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        conn.execute("BEGIN TRANSACTION")
+
+        # Update project worktrees
+        cursor.execute("SELECT id, worktree FROM project")
+        projects = cursor.fetchall()
+        for p_id, p_worktree in projects:
+            if p_worktree:
+                try:
+                    p_worktree_abs = str(Path(p_worktree).expanduser().resolve())
+                    if p_worktree_abs == old_prefix_abs:
+                        updated_worktree = new_prefix_abs
+                    elif p_worktree_abs.startswith(old_prefix_abs + "/"):
+                        suffix = p_worktree_abs[len(old_prefix_abs):]
+                        updated_worktree = new_prefix_abs + suffix
+                    else:
+                        continue
+                    cursor.execute("UPDATE project SET worktree = ? WHERE id = ?", (updated_worktree, p_id))
+                    stats["projects_updated"] += 1
+                except Exception:
+                    pass
+
+        # Update session directories
+        cursor.execute("SELECT id, directory FROM session")
+        sessions = cursor.fetchall()
+        for s_id, s_dir in sessions:
+            if s_dir:
+                try:
+                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
+                    if s_dir_abs == old_prefix_abs:
+                        updated_dir = new_prefix_abs
+                    elif s_dir_abs.startswith(old_prefix_abs + "/"):
+                        suffix = s_dir_abs[len(old_prefix_abs):]
+                        updated_dir = new_prefix_abs + suffix
+                    else:
+                        continue
+                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
+                    stats["sessions_updated"] += 1
+                except Exception:
+                    pass
+
+        conn.commit()
+        return stats
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise RecoveryError(f"Failed to rebase paths: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def db_get_session_subtree(session_id: str) -> list[str]:
+    """Retrieve the given session ID and all its recursive subagent child session IDs."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return []
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        
+        # Recursive CTE to find all descendant sessions
+        cursor.execute("""
+            WITH RECURSIVE session_tree(id) AS (
+                SELECT id FROM session WHERE id = ?
+                UNION
+                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+            )
+            SELECT id FROM session_tree;
+        """, (session_id,))
+        
+        ids = [row[0] for row in cursor.fetchall()]
+        return ids
+    except Exception:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def bundle_session_data(session_id: str, bundle_path: Path) -> None:
+    """Export a session and its subagents into an .ocbox ZIP bundle."""
+    import zipfile
+    import json
+    
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    
+    session_ids = db_get_session_subtree(session_id)
+    if not session_ids:
+        raise RecoveryError(f"Session {session_id} not found.")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        # Configure cursor to return row dictionaries
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        # Get parent project details
+        cursor.execute("""
+            SELECT p.id, p.name, p.worktree FROM project p
+            JOIN session s ON s.project_id = p.id
+            WHERE s.id = ?
+        """, (session_id,))
+        proj_row = cursor.fetchone()
+        proj_meta = dict(proj_row) if proj_row else {}
+
+        # Extract database rows
+        db_export = {}
+        placeholders = ",".join("?" for _ in session_ids)
+        
+        for table, col in SESSION_RELATIONAL_TABLES:
+            cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+            db_export[table] = [dict(row) for row in cursor.fetchall()]
+
+    except Exception as e:
+        raise RecoveryError(f"Failed to query export data from database: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    # Create Zip Bundle
+    try:
+        # Ensure parent directory of bundle exists
+        bundle_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            # Write metadata
+            meta = {
+                "export_version": "1.0",
+                "exported_at": datetime.now().isoformat(),
+                "main_session_id": session_id,
+                "all_session_ids": session_ids,
+                "source_project": proj_meta
+            }
+            zipf.writestr("meta.json", json.dumps(meta, indent=2))
+            zipf.writestr("db_data.json", json.dumps(db_export, indent=2))
+
+            # Write storage diff files
+            for sid in session_ids:
+                diff_file = OPENCODE_STORAGE_DIR / f"{sid}.json"
+                if diff_file.exists():
+                    zipf.write(diff_file, f"session_diffs/{sid}.json")
+    except Exception as e:
+        raise RecoveryError(f"Failed to write export ZIP bundle: {e}")
+
+
+def extract_and_import_session(
+    bundle_path: Path, 
+    target_project_id: str | None = None, 
+    new_project_path: str | None = None
+) -> str:
+    """
+    Import session database rows and diff files from an .ocbox bundle.
+    Handles UUID rewriting upon collision and project association.
+    """
+    import zipfile
+    import json
+    import uuid
+
+    if not bundle_path.exists():
+        raise RecoveryError(f"Bundle file not found: {bundle_path}")
+
+    # Read zip bundle
+    try:
+        with zipfile.ZipFile(bundle_path, "r") as zipf:
+            meta = json.loads(zipf.read("meta.json").decode("utf-8"))
+            db_data = json.loads(zipf.read("db_data.json").decode("utf-8"))
+    except Exception as e:
+        raise RecoveryError(f"Failed to read or parse bundle contents: {e}")
+
+    all_ids = meta["all_session_ids"]
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # 1. Collision Check
+        collision = False
+        placeholders = ",".join("?" for _ in all_ids)
+        cursor.execute(f"SELECT id FROM session WHERE id IN ({placeholders})", all_ids)
+        if cursor.fetchall():
+            collision = True
+
+        # Generate translation map if collisions occur
+        id_map = {}
+        for sid in all_ids:
+            id_map[sid] = f"ses_{uuid.uuid4().hex}" if collision else sid
+
+        # 2. Project Remapping Resolution
+        proj_id = target_project_id
+        if not proj_id:
+            # Check if original project ID exists on target
+            orig_proj = meta.get("source_project", {})
+            orig_proj_id = orig_proj.get("id")
+            if orig_proj_id:
+                cursor.execute("SELECT id FROM project WHERE id = ?", (orig_proj_id,))
+                if cursor.fetchone():
+                    proj_id = orig_proj_id
+            
+            if not proj_id:
+                if new_project_path:
+                    # Create a new project row
+                    proj_id = f"proj_{uuid.uuid4().hex[:8]}"
+                    proj_name = orig_proj.get("name", "Imported Project")
+                    cursor.execute(
+                        "INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
+                        (proj_id, str(Path(new_project_path).resolve()), proj_name)
+                    )
+                else:
+                    raise RecoveryError("Project mapping required. Specify --to-project or --new-project-path.")
+
+        # 3. Apply translations & Rewrite paths
+        orig_worktree = meta.get("source_project", {}).get("worktree", "")
+        target_worktree = ""
+        if orig_worktree:
+            cursor.execute("SELECT worktree FROM project WHERE id = ?", (proj_id,))
+            p_row = cursor.fetchone()
+            if p_row:
+                target_worktree = p_row[0]
+
+    except Exception as e:
+        if conn:
+            conn.close()
+        if isinstance(e, RecoveryError):
+            raise
+        raise RecoveryError(f"Pre-flight import failed: {e}")
+
+    # Pre-flight backup
+    backup_file = db_create_rollback_backup()
+    copied_diffs = []
+    
+    try:
+        # Re-open or use connection, begin transaction
+        cursor.execute("BEGIN TRANSACTION")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+
+        # Update and Insert Rows
+        for table, rows in db_data.items():
+            if not rows:
+                continue
+            
+            for row in rows:
+                # Rewrite session IDs
+                for col_name, val in list(row.items()):
+                    if col_name in ("id", "parent_id", "session_id", "aggregate_id") and val in id_map:
+                        row[col_name] = id_map[val]
+                
+                # Rewrite project ID and directory paths for sessions
+                if table == "session":
+                    row["project_id"] = proj_id
+                    if row.get("directory") and orig_worktree and target_worktree:
+                        # Rebase path
+                        old_dir = row["directory"]
+                        if old_dir.startswith(orig_worktree):
+                            row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
+
+                # Format dynamically into parameterized SQL
+                cols = ", ".join(row.keys())
+                vals_placeholders = ", ".join("?" for _ in row.values())
+                sql = f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({vals_placeholders})"
+                cursor.execute(sql, list(row.values()))
+
+        # 4. Copy Session Diffs to local disk
+        storage_dir = OPENCODE_STORAGE_DIR
+        storage_dir.mkdir(parents=True, exist_ok=True)
+        
+        with zipfile.ZipFile(bundle_path, "r") as zipf:
+            for old_id, new_id in id_map.items():
+                zip_member = f"session_diffs/{old_id}.json"
+                try:
+                    diff_data = json.loads(zipf.read(zip_member).decode("utf-8"))
+                    # Rewrite session ID references inside JSON structure if colliding
+                    if collision:
+                        # Perform recursive string substitution in JSON structure
+                        diff_data_str = json.dumps(diff_data)
+                        for o_id, n_id in id_map.items():
+                            diff_data_str = diff_data_str.replace(o_id, n_id)
+                        diff_data = json.loads(diff_data_str)
+
+                    target_file = storage_dir / f"{new_id}.json"
+                    target_file.write_text(json.dumps(diff_data, indent=2), encoding="utf-8")
+                    copied_diffs.append(target_file)
+                except KeyError:
+                    pass # File not found in zip, skip
+
+        conn.commit()
+        if backup_file.exists():
+            backup_file.unlink()
+            
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        db_restore_rollback_backup(backup_file)
+        if backup_file.exists():
+            backup_file.unlink()
+        # Clean up any written disk files
+        for f in copied_diffs:
+            if f.exists():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+        raise RecoveryError(f"Import failed: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    return id_map[meta["main_session_id"]]
 
 
 def db_run_cleanup(
@@ -6331,6 +6985,227 @@ def main() -> None:
             cli_restore(source=args.restore)
         except Exception as e:
             die(str(e))
+        return
+
+    # Handle session export/import early
+    if getattr(args, "export_session", None) is not None:
+        if not args.to:
+            die("Error: --export-session requires a destination file path specified by --to <file_path.ocbox>.")
+        try:
+            all_db_sessions = db_list_sessions(None)
+            resolved = resolve_session_spec(
+                args.export_session,
+                all_db_sessions,
+                filter_subagents=False
+            ) if all_db_sessions else None
+            
+            sess_id = resolved["id"] if resolved else args.export_session
+            
+            print(f"[*] Exporting session '{sess_id}' to '{args.to}'...")
+            bundle_session_data(sess_id, Path(args.to))
+            print(color_green(f"[+] Successfully exported session '{sess_id}' to '{args.to}'!"))
+        except Exception as e:
+            die(f"Export failed: {e}")
+        return
+
+    if getattr(args, "import_session", None) is not None:
+        bundle_path = Path(args.import_session)
+        to_project = getattr(args, "to_project", None)
+        new_project_path = getattr(args, "new_project_path", None)
+        
+        try:
+            print(f"[*] Importing session from '{bundle_path}'...")
+            imported_id = extract_and_import_session(
+                bundle_path,
+                target_project_id=to_project,
+                new_project_path=new_project_path
+            )
+            print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
+        except Exception as e:
+            die(f"Import failed: {e}")
+        return
+
+    # Handle path moving and rebasing early.
+    if getattr(args, "rebase_paths", False):
+        if not args.from_prefix or not args.to:
+            die("Error: --rebase-paths requires both --from <prefix> and --to <prefix>.")
+        try:
+            print(f"[*] Starting bulk path rebasing from '{args.from_prefix}' to '{args.to}'...")
+            stats = db_rebase_paths(args.from_prefix, args.to)
+            print(color_green(
+                f"[+] Rebase complete: {stats['projects_updated']} projects, "
+                f"{stats['sessions_updated']} sessions updated in database."
+            ))
+        except Exception as e:
+            die(f"Rebase failed: {e}")
+        return
+
+    if args.move_project is not None:
+        if not args.to:
+            die("Error: --move-project requires a destination path via --to <new_path>.")
+        # Find project
+        proj = db_find_project(args.move_project)
+        if not proj:
+            die(f"Error: Project '{args.move_project}' not found in database.")
+        proj_id, worktree = proj
+        
+        old_path = Path(worktree)
+        new_path = Path(args.to)
+        
+        metadata_only = getattr(args, "metadata_only", False)
+        if not metadata_only:
+            if not old_path.exists():
+                # Check interactive prompt
+                import sys
+                if sys.stdout.isatty():
+                    print(color_yellow(f"[*] Source directory '{worktree}' does not exist on disk."))
+                    try:
+                        choice = input("Update database metadata only? [y/N]: ").strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                        print()
+                        die("Operation aborted.")
+                    if choice in ("y", "yes"):
+                        metadata_only = True
+                    else:
+                        die("Operation aborted.")
+                else:
+                    die("Error: Source directory does not exist on disk. Use --metadata-only to update database anyway.")
+
+        if not metadata_only and new_path.exists():
+            die(f"Error: Destination path '{args.to}' already exists.")
+
+        backup_file = None
+        physical_moved = False
+        try:
+            print("[*] Creating database rollback backup...")
+            backup_file = db_create_rollback_backup()
+            
+            if not metadata_only:
+                print(f"[*] Physically moving directory: {old_path} -> {new_path}")
+                move_directory_structure(old_path, new_path)
+                physical_moved = True
+                
+            print("[*] Updating database metadata...")
+            db_move_project_metadata(proj_id, str(old_path), str(new_path))
+            
+            if backup_file and backup_file.exists():
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+            print(color_green(f"[+] Successfully moved project '{proj_id}' to '{new_path}'!"))
+        except Exception as e:
+            if backup_file and backup_file.exists():
+                print(color_yellow("[*] Rolling back database metadata changes..."))
+                db_restore_rollback_backup(backup_file)
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+            if physical_moved:
+                print(color_yellow(f"[*] Rolling back physical directory move: {new_path} -> {old_path}"))
+                try:
+                    import shutil
+                    shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
+                except Exception as re:
+                    print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
+            die(f"Failed to move project: {e}")
+        return
+
+    if args.move_session is not None:
+        if not args.to:
+            die("Error: --move-session requires a destination path via --to <new_path>.")
+        # Find session
+        sess = db_find_session(args.move_session)
+        if not sess:
+            die(f"Error: Session '{args.move_session}' not found in database.")
+        sess_id, directory, project_id = sess
+        
+        old_path = Path(directory)
+        new_path = Path(args.to)
+        
+        metadata_only = getattr(args, "metadata_only", False)
+        if not metadata_only:
+            if not old_path.exists():
+                # Check interactive prompt
+                import sys
+                if sys.stdout.isatty():
+                    print(color_yellow(f"[*] Source directory '{directory}' does not exist on disk."))
+                    try:
+                        choice = input("Update database metadata only? [y/N]: ").strip().lower()
+                    except (KeyboardInterrupt, EOFError):
+                        print()
+                        die("Operation aborted.")
+                    if choice in ("y", "yes"):
+                        metadata_only = True
+                    else:
+                        die("Operation aborted.")
+                else:
+                    die("Error: Source directory does not exist on disk. Use --metadata-only to update database anyway.")
+
+        if not metadata_only and new_path.exists():
+            die(f"Error: Destination path '{args.to}' already exists.")
+
+        backup_file = None
+        physical_moved = False
+        try:
+            print("[*] Creating database rollback backup...")
+            backup_file = db_create_rollback_backup()
+            
+            if not metadata_only:
+                print(f"[*] Physically moving directory: {old_path} -> {new_path}")
+                move_directory_structure(old_path, new_path)
+                physical_moved = True
+                
+            print("[*] Updating database metadata...")
+            db_move_session_metadata(sess_id, str(old_path), str(new_path))
+            
+            if backup_file and backup_file.exists():
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+            print(color_green(f"[+] Successfully moved session '{sess_id}' to '{new_path}'!"))
+        except Exception as e:
+            if backup_file and backup_file.exists():
+                print(color_yellow("[*] Rolling back database metadata changes..."))
+                db_restore_rollback_backup(backup_file)
+                try:
+                    backup_file.unlink()
+                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
+                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
+                    if wal_backup.exists():
+                        wal_backup.unlink()
+                    if shm_backup.exists():
+                        shm_backup.unlink()
+                except Exception:
+                    pass
+            if physical_moved:
+                print(color_yellow(f"[*] Rolling back physical directory move: {new_path} -> {old_path}"))
+                try:
+                    import shutil
+                    shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
+                except Exception as re:
+                    print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
+            die(f"Failed to move session: {e}")
         return
 
     # Bridge --compact to --use-model for backward compatibility.
