@@ -241,3 +241,53 @@ def test_import_session_remap_project(temp_db, tmp_path):
     assert row[0] == "proj-2"
     assert row[1] == str(Path("/new/local/path/s1").resolve())
     conn.close()
+
+
+def test_import_session_sql_injection_rejection(temp_db, tmp_path):
+    import zipfile
+    import json
+
+    bundle_file = tmp_path / "malicious_sql.ocbox"
+    meta = {
+        "export_version": "1.0",
+        "exported_at": "2026-06-25T12:00:00",
+        "main_session_id": "s1",
+        "all_session_ids": ["s1"],
+        "source_project": {"id": "p1", "name": "Test", "worktree": "/path"}
+    }
+    # Inject malicious table name
+    db_data = {
+        "session; DROP TABLE project; --": [{"id": "s1", "project_id": "p1"}]
+    }
+
+    with zipfile.ZipFile(bundle_file, "w") as zipf:
+        zipf.writestr("meta.json", json.dumps(meta))
+        zipf.writestr("db_data.json", json.dumps(db_data))
+
+    with pytest.raises(RecoveryError, match="Invalid or unauthorized database table name"):
+        extract_and_import_session(bundle_file, target_project_id="p1")
+
+
+def test_import_session_path_traversal_rejection(temp_db, tmp_path):
+    import zipfile
+    import json
+
+    bundle_file = tmp_path / "malicious_traversal.ocbox"
+    meta = {
+        "export_version": "1.0",
+        "exported_at": "2026-06-25T12:00:00",
+        "main_session_id": "../evil",
+        "all_session_ids": ["../evil"],
+        "source_project": {"id": "p1", "name": "Test", "worktree": "/path"}
+    }
+    db_data = {
+        "session": [{"id": "../evil", "project_id": "p1"}]
+    }
+
+    with zipfile.ZipFile(bundle_file, "w") as zipf:
+        zipf.writestr("meta.json", json.dumps(meta))
+        zipf.writestr("db_data.json", json.dumps(db_data))
+
+    with pytest.raises(RecoveryError, match="Invalid session ID format"):
+        extract_and_import_session(bundle_file, target_project_id="p1")
+

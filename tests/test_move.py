@@ -210,4 +210,56 @@ def test_db_rollback_backup(temp_db):
     conn.close()
 
     # Clean up backup
-    backup_file.unlink()
+    if backup_file.exists():
+        backup_file.unlink()
+
+
+def test_cli_move_project_metadata_only(temp_db, monkeypatch):
+    # Setup some test data
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/nonexistent/old', 'n1')")
+    conn.commit()
+    conn.close()
+
+    # Call main with --move-project and --metadata-only
+    monkeypatch.setattr("sys.argv", ["ocman", "--move-project", "p1", "--to", "/nonexistent/new", "--metadata-only"])
+    
+    # Run main, should not raise SystemExit with failure code
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0 or e.code is None
+
+    # Verify metadata was updated
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
+    assert cursor.fetchone()[0] == "/nonexistent/new"
+    conn.close()
+
+
+def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
+    # Setup some test data
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/nonexistent/old', 'n1')")
+    conn.commit()
+    conn.close()
+
+    # Call main without --metadata-only, mock isatty and input
+    monkeypatch.setattr("sys.argv", ["ocman", "--move-project", "p1", "--to", "/nonexistent/new"])
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0 or e.code is None
+
+    # Verify metadata was updated because we said yes to prompt
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
+    assert cursor.fetchone()[0] == "/nonexistent/new"
+    conn.close()

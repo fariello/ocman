@@ -170,6 +170,16 @@ ocman --create-config
 | | `--create-config` | Interactively generate the `ocman.toml` file |
 | | `--backup-opencode` | Create a system backup archive ZIP file |
 | | `--restore PATH` | Restore configuration, database, and diffs from backup |
+| | `--move-project PATH`| Relocate a project (re-assign worktree path in DB and disk) |
+| | `--move-session ID` | Relocate a single session |
+| | `--to PATH` | Destination path for moves, rebasing, and session exports |
+| | `--metadata-only` | Update DB project/session paths only, bypassing disk move |
+| | `--rebase-paths` | Bulk rebase DB workspace path prefixes (requires --from and --to) |
+| | `--from PATH` | Source prefix path for bulk rebasing |
+| | `--export-session ID`| Export a session and subagents to a portable `.ocbox` bundle |
+| | `--import-session PATH`| Import a session from a portable `.ocbox` bundle |
+| | `--to-project ID` | Remap imported session to an existing project ID |
+| | `--new-project-path PATH`| Remap imported session to a new project worktree path |
 | `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |
 
 ---
@@ -227,3 +237,7 @@ Run the test suite using `pytest`. The tests mock database instances and isolate
 ```bash
 PYTHONPATH=. pytest
 ```
+
+> [!IMPORTANT]
+> **Module Resolution**: Always run `pytest` with `PYTHONPATH=.` prefix (or install the package in editable dev mode with `pip install -e .[dev]`). Otherwise, Python might resolve imports from the globally installed PyPI package instead of the local workspace directory, causing `ImportError` or test resolution errors.
+

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ocman"
-version = "1.0.1"
+version = "1.0.2"
 description = "Interactive TUI for browsing, recovering, and compacting opencode sessions"
 readme = "README.md"
 license = "BSD-3-Clause"
@@ -34,3 +34,10 @@ packages = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "ocman.py" = "ocman.py"
+
+[tool.hatch.build.targets.sdist]
+exclude = [
+    "opencode.json",
+    "opencode.jsonc",
+    "repository-review/",
+]

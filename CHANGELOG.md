@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.2] - 2026-06-25
+
+### Added
+- **CLI/TUI Relocation**: Support for relocating/moving projects and sessions, either physically or metadata-only (`--move-project`, `--move-session`, `--to`, `--metadata-only`, `--rebase-paths`).
+- **CLI/TUI Export & Import**: Support for exporting sessions into `.ocbox` ZIP bundles and importing them, complete with UUID remapping and path rebasing (`--export-session`, `--import-session`, `--to-project`, `--new-project-path`).
+
+### Security
+- **Hardened Import Engine**: Implemented whitelisting of table names and strict regex validation of session IDs on session import to prevent SQL Injection and Path Traversal vulnerabilities.
+
 ## [1.0.1] - 2026-06-24
 
 ### Fixed

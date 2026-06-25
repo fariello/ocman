@@ -183,7 +183,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
-__version__: str = "1.0.1"
+__version__: str = "1.0.2"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {
@@ -5477,7 +5477,18 @@ def extract_and_import_session(
     except Exception as e:
         raise RecoveryError(f"Failed to read or parse bundle contents: {e}")
 
-    all_ids = meta["all_session_ids"]
+    # Validate session IDs format to prevent path traversal
+    import re
+    sid_regex = re.compile(r"^[a-zA-Z0-9_\-]+$")
+    all_ids = meta.get("all_session_ids", [])
+    if not isinstance(all_ids, list):
+        raise RecoveryError("Invalid all_session_ids format in bundle metadata.")
+    for sid in all_ids:
+        if not isinstance(sid, str) or not sid_regex.match(sid):
+            raise RecoveryError(f"Invalid session ID format in bundle metadata: {sid}")
+    main_sid = meta.get("main_session_id")
+    if not main_sid or not isinstance(main_sid, str) or not sid_regex.match(main_sid):
+        raise RecoveryError(f"Invalid main session ID format in bundle metadata: {main_sid}")
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
@@ -5548,9 +5559,12 @@ def extract_and_import_session(
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
         # Update and Insert Rows
+        allowed_tables = {t for t, _ in SESSION_RELATIONAL_TABLES}
         for table, rows in db_data.items():
             if not rows:
                 continue
+            if not isinstance(table, str) or not table.isidentifier() or table not in allowed_tables:
+                raise RecoveryError(f"Invalid or unauthorized database table name in import bundle: {table}")
             
             for row in rows:
                 # Rewrite session IDs
@@ -5568,6 +5582,8 @@ def extract_and_import_session(
                             row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
 
                 # Format dynamically into parameterized SQL
+                if not all(isinstance(c, str) and c.isidentifier() for c in row.keys()):
+                    raise RecoveryError(f"Invalid database column name in import bundle for table '{table}'")
                 cols = ", ".join(row.keys())
                 vals_placeholders = ", ".join("?" for _ in row.values())
                 sql = f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({vals_placeholders})"
