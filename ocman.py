@@ -183,7 +183,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
-__version__: str = "1.0.2"
+__version__: str = "1.0.3"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {
@@ -4532,7 +4532,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
     # Check for active processes
-    if not force:
+    if not force and sys.platform != "win32":
         import subprocess
         try:
             proc_check = subprocess.run(
@@ -4780,7 +4780,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
     # Check for active processes
-    if not force:
+    if not force and sys.platform != "win32":
         import subprocess
         try:
             proc_check = subprocess.run(
@@ -5663,7 +5663,7 @@ def db_run_cleanup(
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
     # Check for active processes if not forced
-    if not force:
+    if not force and sys.platform != "win32":
         import subprocess
         try:
             proc_check = subprocess.run(
