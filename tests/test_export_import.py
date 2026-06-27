@@ -153,7 +153,7 @@ def test_import_session_standard(temp_db, tmp_path):
     cursor = conn.cursor()
     cursor.execute("SELECT id, project_id, title, directory FROM session")
     s_row = cursor.fetchone()
-    assert s_row == ("s1", "proj-1", "Root", "/old/path/s1")
+    assert s_row == ("s1", "proj-1", "Root", str(Path("/old/path/s1")))
 
     cursor.execute("SELECT id, session_id FROM message")
     m_row = cursor.fetchone()
