@@ -235,7 +235,7 @@ def test_cli_move_project_metadata_only(temp_db, monkeypatch):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
-    assert cursor.fetchone()[0] == "/nonexistent/new"
+    assert cursor.fetchone()[0] == str(Path("/nonexistent/new").resolve())
     conn.close()
 
 
@@ -261,5 +261,5 @@ def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
-    assert cursor.fetchone()[0] == "/nonexistent/new"
+    assert cursor.fetchone()[0] == str(Path("/nonexistent/new").resolve())
     conn.close()

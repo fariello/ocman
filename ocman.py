@@ -5195,11 +5195,12 @@ def db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: s
                     s_dir_abs = str(Path(s_dir).expanduser().resolve())
                     if s_dir_abs == old_worktree_abs:
                         updated_dir = new_worktree_abs
-                    elif s_dir_abs.startswith(old_worktree_abs + "/"):
-                        suffix = s_dir_abs[len(old_worktree_abs):]
-                        updated_dir = new_worktree_abs + suffix
                     else:
-                        continue
+                        try:
+                            relative = Path(s_dir_abs).relative_to(Path(old_worktree_abs))
+                            updated_dir = str(Path(new_worktree_abs) / relative)
+                        except ValueError:
+                            continue
                     cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
                 except Exception:
                     pass
@@ -5254,11 +5255,12 @@ def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> Non
                     s_dir_abs = str(Path(s_dir).expanduser().resolve())
                     if s_dir_abs == old_dir_abs:
                         updated_dir = new_dir_abs
-                    elif s_dir_abs.startswith(old_dir_abs + "/"):
-                        suffix = s_dir_abs[len(old_dir_abs):]
-                        updated_dir = new_dir_abs + suffix
                     else:
-                        continue
+                        try:
+                            relative = Path(s_dir_abs).relative_to(Path(old_dir_abs))
+                            updated_dir = str(Path(new_dir_abs) / relative)
+                        except ValueError:
+                            continue
                     cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
                 except Exception:
                     pass
@@ -5309,11 +5311,12 @@ def db_rebase_paths(old_prefix: str, new_prefix: str) -> dict[str, int]:
                     p_worktree_abs = str(Path(p_worktree).expanduser().resolve())
                     if p_worktree_abs == old_prefix_abs:
                         updated_worktree = new_prefix_abs
-                    elif p_worktree_abs.startswith(old_prefix_abs + "/"):
-                        suffix = p_worktree_abs[len(old_prefix_abs):]
-                        updated_worktree = new_prefix_abs + suffix
                     else:
-                        continue
+                        try:
+                            relative = Path(p_worktree_abs).relative_to(Path(old_prefix_abs))
+                            updated_worktree = str(Path(new_prefix_abs) / relative)
+                        except ValueError:
+                            continue
                     cursor.execute("UPDATE project SET worktree = ? WHERE id = ?", (updated_worktree, p_id))
                     stats["projects_updated"] += 1
                 except Exception:
@@ -5328,11 +5331,12 @@ def db_rebase_paths(old_prefix: str, new_prefix: str) -> dict[str, int]:
                     s_dir_abs = str(Path(s_dir).expanduser().resolve())
                     if s_dir_abs == old_prefix_abs:
                         updated_dir = new_prefix_abs
-                    elif s_dir_abs.startswith(old_prefix_abs + "/"):
-                        suffix = s_dir_abs[len(old_prefix_abs):]
-                        updated_dir = new_prefix_abs + suffix
                     else:
-                        continue
+                        try:
+                            relative = Path(s_dir_abs).relative_to(Path(old_prefix_abs))
+                            updated_dir = str(Path(new_prefix_abs) / relative)
+                        except ValueError:
+                            continue
                     cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
                     stats["sessions_updated"] += 1
                 except Exception:
@@ -5385,9 +5389,10 @@ def db_get_session_subtree(session_id: str) -> list[str]:
 
 
 def bundle_session_data(session_id: str, bundle_path: Path) -> None:
-    """Export a session and its subagents into an .ocbox ZIP bundle."""
+    """Export a session and its subagents into an .ocbox ZIP bundle using a low-memory streaming format."""
     import zipfile
     import json
+    import tempfile
     
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
@@ -5413,14 +5418,6 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
         proj_row = cursor.fetchone()
         proj_meta = dict(proj_row) if proj_row else {}
 
-        # Extract database rows
-        db_export = {}
-        placeholders = ",".join("?" for _ in session_ids)
-        
-        for table, col in SESSION_RELATIONAL_TABLES:
-            cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-            db_export[table] = [dict(row) for row in cursor.fetchall()]
-
     except Exception as e:
         raise RecoveryError(f"Failed to query export data from database: {e}")
     finally:
@@ -5435,14 +5432,43 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
         with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             # Write metadata
             meta = {
-                "export_version": "1.0",
+                "export_version": "2.0",
                 "exported_at": datetime.now().isoformat(),
                 "main_session_id": session_id,
                 "all_session_ids": session_ids,
                 "source_project": proj_meta
             }
             zipf.writestr("meta.json", json.dumps(meta, indent=2))
-            zipf.writestr("db_data.json", json.dumps(db_export, indent=2))
+
+            # Query and write each table to a temporary JSONL file in batches, then add to ZIP
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            placeholders = ",".join("?" for _ in session_ids)
+            
+            for table, col in SESSION_RELATIONAL_TABLES:
+                # Query in batches of 1000 to keep memory flat
+                cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+                
+                temp_file = Path(tempfile.gettempdir()) / f"ocman_export_{table}_{session_id}.jsonl"
+                try:
+                    with open(temp_file, "w", encoding="utf-8") as f:
+                        while True:
+                            rows = cursor.fetchmany(1000)
+                            if not rows:
+                                break
+                            for row in rows:
+                                f.write(json.dumps(dict(row)) + "\n")
+                    
+                    zipf.write(temp_file, f"db_data/{table}.jsonl")
+                finally:
+                    if temp_file.exists():
+                        try:
+                            temp_file.unlink()
+                        except Exception:
+                            pass
+            
+            conn.close()
 
             # Write storage diff files
             for sid in session_ids:
@@ -5469,11 +5495,10 @@ def extract_and_import_session(
     if not bundle_path.exists():
         raise RecoveryError(f"Bundle file not found: {bundle_path}")
 
-    # Read zip bundle
+    # Read zip bundle metadata
     try:
         with zipfile.ZipFile(bundle_path, "r") as zipf:
             meta = json.loads(zipf.read("meta.json").decode("utf-8"))
-            db_data = json.loads(zipf.read("db_data.json").decode("utf-8"))
     except Exception as e:
         raise RecoveryError(f"Failed to read or parse bundle contents: {e}")
 
@@ -5558,36 +5583,70 @@ def extract_and_import_session(
         cursor.execute("BEGIN TRANSACTION")
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
-        # Update and Insert Rows
-        allowed_tables = {t for t, _ in SESSION_RELATIONAL_TABLES}
-        for table, rows in db_data.items():
-            if not rows:
-                continue
-            if not isinstance(table, str) or not table.isidentifier() or table not in allowed_tables:
-                raise RecoveryError(f"Invalid or unauthorized database table name in import bundle: {table}")
+        # Update and Insert Rows using helper
+        def process_and_insert_row(table, row):
+            # Rewrite session IDs
+            for col_name, val in list(row.items()):
+                if col_name in ("id", "parent_id", "session_id", "aggregate_id") and val in id_map:
+                    row[col_name] = id_map[val]
             
-            for row in rows:
-                # Rewrite session IDs
-                for col_name, val in list(row.items()):
-                    if col_name in ("id", "parent_id", "session_id", "aggregate_id") and val in id_map:
-                        row[col_name] = id_map[val]
-                
-                # Rewrite project ID and directory paths for sessions
-                if table == "session":
-                    row["project_id"] = proj_id
-                    if row.get("directory") and orig_worktree and target_worktree:
-                        # Rebase path
-                        old_dir = row["directory"]
+            # Rewrite project ID and directory paths for sessions
+            if table == "session":
+                row["project_id"] = proj_id
+                if row.get("directory") and orig_worktree and target_worktree:
+                    # Rebase path using pathlib if possible, otherwise string replacement fallback
+                    old_dir = row["directory"]
+                    try:
+                        relative = Path(old_dir).relative_to(Path(orig_worktree))
+                        row["directory"] = str(Path(target_worktree) / relative)
+                    except ValueError:
                         if old_dir.startswith(orig_worktree):
                             row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
 
-                # Format dynamically into parameterized SQL
-                if not all(isinstance(c, str) and c.isidentifier() for c in row.keys()):
-                    raise RecoveryError(f"Invalid database column name in import bundle for table '{table}'")
-                cols = ", ".join(row.keys())
-                vals_placeholders = ", ".join("?" for _ in row.values())
-                sql = f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({vals_placeholders})"
-                cursor.execute(sql, list(row.values()))
+            # Format dynamically into parameterized SQL
+            if not all(isinstance(c, str) and c.isidentifier() for c in row.keys()):
+                raise RecoveryError(f"Invalid database column name in import bundle for table '{table}'")
+            cols = ", ".join(row.keys())
+            vals_placeholders = ", ".join("?" for _ in row.values())
+            sql = f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({vals_placeholders})"
+            cursor.execute(sql, list(row.values()))
+
+        # Check if the bundle uses the new streaming format (individual jsonl files)
+        has_new_format = False
+        with zipfile.ZipFile(bundle_path, "r") as zipf:
+            namelist = zipf.namelist()
+            if any(name.startswith("db_data/") and name.endswith(".jsonl") for name in namelist):
+                has_new_format = True
+
+        allowed_tables = {t for t, _ in SESSION_RELATIONAL_TABLES}
+
+        if has_new_format:
+            # Process each table's jsonl file sequentially
+            with zipfile.ZipFile(bundle_path, "r") as zipf:
+                for table, _ in SESSION_RELATIONAL_TABLES:
+                    zip_member = f"db_data/{table}.jsonl"
+                    if zip_member not in namelist:
+                        continue
+                    
+                    with zipf.open(zip_member, "r") as f:
+                        for line in f:
+                            row = json.loads(line.decode("utf-8"))
+                            process_and_insert_row(table, row)
+        else:
+            # Fallback to old format
+            try:
+                with zipfile.ZipFile(bundle_path, "r") as zipf:
+                    db_data = json.loads(zipf.read("db_data.json").decode("utf-8"))
+            except Exception as e:
+                raise RecoveryError(f"Failed to read or parse bundle contents: {e}")
+
+            for table, rows in db_data.items():
+                if not rows:
+                    continue
+                if table not in allowed_tables:
+                    raise RecoveryError(f"Invalid or unauthorized database table name in import bundle: {table}")
+                for row in rows:
+                    process_and_insert_row(table, row)
 
         # 4. Copy Session Diffs to local disk
         storage_dir = OPENCODE_STORAGE_DIR

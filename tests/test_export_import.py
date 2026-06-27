@@ -110,15 +110,16 @@ def test_bundle_session_data(temp_db, tmp_path):
     # Read zip
     with zipfile.ZipFile(bundle_file, "r") as zipf:
         meta = json.loads(zipf.read("meta.json").decode("utf-8"))
-        db_data = json.loads(zipf.read("db_data.json").decode("utf-8"))
+        session_rows = [json.loads(line.decode("utf-8")) for line in zipf.read("db_data/session.jsonl").splitlines() if line]
+        message_rows = [json.loads(line.decode("utf-8")) for line in zipf.read("db_data/message.jsonl").splitlines() if line]
         diff_content = json.loads(zipf.read("session_diffs/s1.json").decode("utf-8"))
 
     assert meta["main_session_id"] == "s1"
     assert meta["source_project"]["id"] == "proj-1"
-    assert len(db_data["session"]) == 1
-    assert db_data["session"][0]["id"] == "s1"
-    assert len(db_data["message"]) == 1
-    assert db_data["message"][0]["id"] == "m1"
+    assert len(session_rows) == 1
+    assert session_rows[0]["id"] == "s1"
+    assert len(message_rows) == 1
+    assert message_rows[0]["id"] == "m1"
     assert diff_content["session_id"] == "s1"
 
 
@@ -212,10 +213,13 @@ def test_import_session_with_collision(temp_db, tmp_path):
 def test_import_session_remap_project(temp_db, tmp_path):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/path', 'My Project')")
+    old_path = str(Path("/old/path").resolve())
+    new_path = str(Path("/new/local/path").resolve())
+    old_s1 = str(Path("/old/path/s1").resolve())
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', ?, 'My Project')", (old_path,))
     # Add a target project to remap to
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-2', '/new/local/path', 'Target Project')")
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1', 'proj-1', 'Root', '/old/path/s1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-2', ?, 'Target Project')", (new_path,))
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1', 'proj-1', 'Root', ?)", (old_s1,))
     conn.commit()
     conn.close()
 
