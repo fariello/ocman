@@ -5388,7 +5388,7 @@ def db_get_session_subtree(session_id: str) -> list[str]:
             conn.close()
 
 
-def bundle_session_data(session_id: str, bundle_path: Path) -> None:
+def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=None) -> None:
     """Export a session and its subagents into an .ocbox ZIP bundle using a low-memory streaming format."""
     import zipfile
     import json
@@ -5398,9 +5398,14 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     
+    if progress_callback:
+        progress_callback(f"[*] Analyzing session subtree for '{session_id}'...")
     session_ids = db_get_session_subtree(session_id)
     if not session_ids:
         raise RecoveryError(f"Session {session_id} not found.")
+    
+    if progress_callback:
+        progress_callback(f"    -> Found {len(session_ids)} session(s) in subtree.")
 
     conn = None
     try:
@@ -5430,6 +5435,8 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
         bundle_path.parent.mkdir(parents=True, exist_ok=True)
         
         with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            if progress_callback:
+                progress_callback("[*] Writing metadata...")
             # Write metadata
             meta = {
                 "export_version": "2.0",
@@ -5446,12 +5453,17 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
             cursor = conn.cursor()
             placeholders = ",".join("?" for _ in session_ids)
             
-            for table, col in SESSION_RELATIONAL_TABLES:
+            total_tables = len(SESSION_RELATIONAL_TABLES)
+            for idx, (table, col) in enumerate(SESSION_RELATIONAL_TABLES):
+                if progress_callback:
+                    progress_callback(f"[*] Exporting database table '{table}' ({idx+1}/{total_tables})...")
+                
                 # Query in batches of 1000 to keep memory flat
                 cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
                 
                 temp_file = Path(tempfile.gettempdir()) / f"ocman_export_{table}_{session_id}.jsonl"
                 try:
+                    row_count = 0
                     with open(temp_file, "w", encoding="utf-8") as f:
                         while True:
                             rows = cursor.fetchmany(1000)
@@ -5459,8 +5471,11 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
                                 break
                             for row in rows:
                                 f.write(json.dumps(dict(row)) + "\n")
+                                row_count += 1
                     
                     zipf.write(temp_file, f"db_data/{table}.jsonl")
+                    if progress_callback:
+                        progress_callback(f"    -> Exported {row_count} rows.")
                 finally:
                     if temp_file.exists():
                         try:
@@ -5471,10 +5486,16 @@ def bundle_session_data(session_id: str, bundle_path: Path) -> None:
             conn.close()
 
             # Write storage diff files
+            if progress_callback:
+                progress_callback("[*] Packing session storage diff files...")
+            diff_count = 0
             for sid in session_ids:
                 diff_file = OPENCODE_STORAGE_DIR / f"{sid}.json"
                 if diff_file.exists():
                     zipf.write(diff_file, f"session_diffs/{sid}.json")
+                    diff_count += 1
+            if progress_callback:
+                progress_callback(f"    -> Packed {diff_count} diff file(s).")
     except Exception as e:
         raise RecoveryError(f"Failed to write export ZIP bundle: {e}")
 
@@ -7077,7 +7098,7 @@ def main() -> None:
             sess_id = resolved["id"] if resolved else args.export_session
             
             print(f"[*] Exporting session '{sess_id}' to '{args.to}'...")
-            bundle_session_data(sess_id, Path(args.to))
+            bundle_session_data(sess_id, Path(args.to), progress_callback=print)
             print(color_green(f"[+] Successfully exported session '{sess_id}' to '{args.to}'!"))
         except Exception as e:
             die(f"Export failed: {e}")
