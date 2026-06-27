@@ -292,8 +292,8 @@ async def test_tui_config_tab(tui_db, tmp_path):
         await pilot.pause()
         keep_temp_check = app.query_one("#cfg-keep-temp", Checkbox)
         assert keep_temp_check.value is False
-        keep_temp_check.value = True
-        
+        keep_temp_check.focus()
+        await pilot.press("space")
         await pilot.pause()
         
         config = ocman.load_ocman_config()

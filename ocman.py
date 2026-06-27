@@ -174,6 +174,11 @@ def color_dim(text: str) -> str:
     return _ansi("2", text)
 
 
+def info_prefix() -> str:
+    """Return the standard INFO log prefix with green coloring."""
+    return f"[{color_green('INFO')}]"
+
+
 # ---------------------------------------------------------------------------
 # Threshold constants
 # ---------------------------------------------------------------------------
@@ -4634,7 +4639,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
 
         if dry_run:
             print()
-            print("[*] Dry run complete. No database changes were made.")
+            print(f"{info_prefix()} Dry run complete. No database changes were made.")
             return
 
         print()
@@ -4658,7 +4663,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[*] Creating database family backup in {backup_dir} ...")
+            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
             shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
             
             wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
@@ -4675,7 +4680,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
 
         # Perform deletion
         size_before = get_file_size_local(OPENCODE_DB_PATH)
-        print("[*] Starting transaction...")
+        print(f"{info_prefix()} Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
         transaction_started = True
@@ -4710,7 +4715,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
                 print(color_yellow(f"Warning: could not delete file {f}: {e}"))
 
         # Vacuum database
-        print("[*] Executing VACUUM to reclaim disk space...")
+        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
@@ -4752,7 +4757,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         if conn and transaction_started:
             try:
                 conn.rollback()
-                print(color_yellow("[*] Transaction rolled back."))
+                print(f"{info_prefix()} " + color_yellow("Transaction rolled back."))
             except Exception:
                 pass
         if isinstance(e, RecoveryError):
@@ -4889,7 +4894,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
 
         if dry_run:
             print()
-            print("[*] Dry run complete. No database changes were made.")
+            print(f"{info_prefix()} Dry run complete. No database changes were made.")
             return
 
         print()
@@ -4913,7 +4918,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[*] Creating database family backup in {backup_dir} ...")
+            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
             shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
 
             wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
@@ -4930,7 +4935,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
 
         # Perform deletion
         size_before = get_file_size_local(OPENCODE_DB_PATH)
-        print("[*] Starting transaction...")
+        print(f"{info_prefix()} Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
         transaction_started = True
@@ -4968,7 +4973,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
                 print(color_yellow(f"Warning: could not delete file {f}: {e}"))
 
         # Vacuum database
-        print("[*] Executing VACUUM to reclaim disk space...")
+        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
@@ -5009,7 +5014,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         if conn and transaction_started:
             try:
                 conn.rollback()
-                print(color_yellow("[*] Transaction rolled back."))
+                print(f"{info_prefix()} " + color_yellow("Transaction rolled back."))
             except Exception:
                 pass
         if isinstance(e, RecoveryError):
@@ -5399,7 +5404,7 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
         raise RecoveryError("sqlite3 module not available.")
     
     if progress_callback:
-        progress_callback(f"[*] Analyzing session subtree for '{session_id}'...")
+        progress_callback(f"{info_prefix()} Analyzing session subtree for '{session_id}'...")
     session_ids = db_get_session_subtree(session_id)
     if not session_ids:
         raise RecoveryError(f"Session {session_id} not found.")
@@ -5436,7 +5441,7 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
         
         with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             if progress_callback:
-                progress_callback("[*] Writing metadata...")
+                progress_callback(f"{info_prefix()} Writing metadata...")
             # Write metadata
             meta = {
                 "export_version": "2.0",
@@ -5456,7 +5461,7 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
             total_tables = len(SESSION_RELATIONAL_TABLES)
             for idx, (table, col) in enumerate(SESSION_RELATIONAL_TABLES):
                 if progress_callback:
-                    progress_callback(f"[*] Exporting database table '{table}' ({idx+1}/{total_tables})...")
+                    progress_callback(f"{info_prefix()} Exporting database table '{table}' ({idx+1}/{total_tables})...")
                 
                 # Query in batches of 1000 to keep memory flat
                 cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
@@ -5487,7 +5492,7 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
 
             # Write storage diff files
             if progress_callback:
-                progress_callback("[*] Packing session storage diff files...")
+                progress_callback(f"{info_prefix()} Packing session storage diff files...")
             diff_count = 0
             for sid in session_ids:
                 diff_file = OPENCODE_STORAGE_DIR / f"{sid}.json"
@@ -5503,7 +5508,8 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
 def extract_and_import_session(
     bundle_path: Path, 
     target_project_id: str | None = None, 
-    new_project_path: str | None = None
+    new_project_path: str | None = None,
+    progress_callback = None
 ) -> str:
     """
     Import session database rows and diff files from an .ocbox bundle.
@@ -5518,6 +5524,8 @@ def extract_and_import_session(
 
     # Read zip bundle metadata
     try:
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Reading bundle metadata...")
         with zipfile.ZipFile(bundle_path, "r") as zipf:
             meta = json.loads(zipf.read("meta.json").decode("utf-8"))
     except Exception as e:
@@ -5556,6 +5564,12 @@ def extract_and_import_session(
         for sid in all_ids:
             id_map[sid] = f"ses_{uuid.uuid4().hex}" if collision else sid
 
+        if progress_callback:
+            if collision:
+                progress_callback(f"{info_prefix()} Collision detected in session IDs; rewriting IDs for safety.")
+            else:
+                progress_callback(f"{info_prefix()} No session ID collisions detected.")
+
         # 2. Project Remapping Resolution
         proj_id = target_project_id
         if not proj_id:
@@ -5576,8 +5590,13 @@ def extract_and_import_session(
                         "INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
                         (proj_id, str(Path(new_project_path).resolve()), proj_name)
                     )
+                    if progress_callback:
+                        progress_callback(f"{info_prefix()} Created new project '{proj_name}' ({proj_id}) with worktree '{new_project_path}'.")
                 else:
                     raise RecoveryError("Project mapping required. Specify --to-project or --new-project-path.")
+
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Associating imported sessions with project '{proj_id}'.")
 
         # 3. Apply translations & Rewrite paths
         orig_worktree = meta.get("source_project", {}).get("worktree", "")
@@ -5596,6 +5615,8 @@ def extract_and_import_session(
         raise RecoveryError(f"Pre-flight import failed: {e}")
 
     # Pre-flight backup
+    if progress_callback:
+        progress_callback(f"{info_prefix()} Creating database rollback backup...")
     backup_file = db_create_rollback_backup()
     copied_diffs = []
     
@@ -5605,6 +5626,7 @@ def extract_and_import_session(
         cursor.execute("PRAGMA foreign_keys = OFF;")
 
         # Update and Insert Rows using helper
+        table_counts = {}
         def process_and_insert_row(table, row):
             # Rewrite session IDs
             for col_name, val in list(row.items()):
@@ -5631,6 +5653,7 @@ def extract_and_import_session(
             vals_placeholders = ", ".join("?" for _ in row.values())
             sql = f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({vals_placeholders})"
             cursor.execute(sql, list(row.values()))
+            table_counts[table] = table_counts.get(table, 0) + 1
 
         # Check if the bundle uses the new streaming format (individual jsonl files)
         has_new_format = False
@@ -5649,10 +5672,14 @@ def extract_and_import_session(
                     if zip_member not in namelist:
                         continue
                     
+                    if progress_callback:
+                        progress_callback(f"{info_prefix()} Importing database table '{table}'...")
                     with zipf.open(zip_member, "r") as f:
                         for line in f:
                             row = json.loads(line.decode("utf-8"))
                             process_and_insert_row(table, row)
+                    if progress_callback and table in table_counts:
+                        progress_callback(f"    -> Imported {table_counts[table]} rows.")
         else:
             # Fallback to old format
             try:
@@ -5666,13 +5693,19 @@ def extract_and_import_session(
                     continue
                 if table not in allowed_tables:
                     raise RecoveryError(f"Invalid or unauthorized database table name in import bundle: {table}")
+                if progress_callback:
+                    progress_callback(f"{info_prefix()} Importing database table '{table}'...")
                 for row in rows:
                     process_and_insert_row(table, row)
+                if progress_callback and table in table_counts:
+                    progress_callback(f"    -> Imported {table_counts[table]} rows.")
 
         # 4. Copy Session Diffs to local disk
         storage_dir = OPENCODE_STORAGE_DIR
         storage_dir.mkdir(parents=True, exist_ok=True)
         
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Restoring session storage diff files...")
         with zipfile.ZipFile(bundle_path, "r") as zipf:
             for old_id, new_id in id_map.items():
                 zip_member = f"session_diffs/{old_id}.json"
@@ -5691,7 +5724,11 @@ def extract_and_import_session(
                     copied_diffs.append(target_file)
                 except KeyError:
                     pass # File not found in zip, skip
+        if progress_callback:
+            progress_callback(f"    -> Restored {len(copied_diffs)} diff file(s).")
 
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Committing database transaction...")
         conn.commit()
         if backup_file.exists():
             backup_file.unlink()
@@ -5795,10 +5832,10 @@ def db_run_cleanup(
         # Verify database integrity (skip on dry run)
         if not dry_run:
             if force:
-                print("[*] Verifying database integrity (quick_check)...")
+                print(f"{info_prefix()} Verifying database integrity (quick_check)...")
                 cursor.execute("PRAGMA quick_check;")
             else:
-                print("[*] Verifying database integrity (integrity_check)...")
+                print(f"{info_prefix()} Verifying database integrity (integrity_check)...")
                 cursor.execute("PRAGMA integrity_check;")
             res = cursor.fetchone()[0]
             if res != "ok":
@@ -5967,7 +6004,7 @@ def db_run_cleanup(
 
         if dry_run:
             print()
-            print("[*] Dry run complete. No database changes were made.")
+            print(f"{info_prefix()} Dry run complete. No database changes were made.")
             return
 
         # 3. Confirmation
@@ -5988,7 +6025,7 @@ def db_run_cleanup(
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"[*] Creating database family backup in {backup_dir} ...")
+            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
             shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
             
             wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
@@ -6005,7 +6042,7 @@ def db_run_cleanup(
 
         # Measure database size before deletion/vacuum
         db_size_orig = get_file_size_local(OPENCODE_DB_PATH)
-        print("[*] Starting transaction...")
+        print(f"{info_prefix()} Starting transaction...")
         cursor.execute("PRAGMA foreign_keys = OFF;")
         cursor.execute("BEGIN TRANSACTION;")
         transaction_started = True
@@ -6055,7 +6092,7 @@ def db_run_cleanup(
             print(f"[-] Deleted {deleted_files_count} JSON files from disk.")
 
         # 7. Reclaim space via VACUUM
-        print("[*] Executing VACUUM to reclaim disk space...")
+        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
         conn.execute("VACUUM;")
         print("[+] VACUUM complete.")
 
@@ -6095,7 +6132,7 @@ def db_run_cleanup(
         if conn and transaction_started:
             try:
                 conn.rollback()
-                print(color_yellow("[*] Transaction rolled back."))
+                print(f"{info_prefix()} " + color_yellow("Transaction rolled back."))
             except Exception:
                 pass
         if isinstance(e, RecoveryError):
@@ -6999,7 +7036,7 @@ def cli_clean_backups(days: int, dry_run: bool, verbosity: int) -> None:
     print(f"Total size to reclaim: {human_size_local(total_size)}")
     
     if dry_run:
-        print("[*] Dry run complete. No backups were deleted.")
+        print(f"{info_prefix()} Dry run complete. No backups were deleted.")
         return
         
     try:
@@ -7097,7 +7134,7 @@ def main() -> None:
             
             sess_id = resolved["id"] if resolved else args.export_session
             
-            print(f"[*] Exporting session '{sess_id}' to '{args.to}'...")
+            print(f"{info_prefix()} Exporting session '{sess_id}' to '{args.to}'...")
             bundle_session_data(sess_id, Path(args.to), progress_callback=print)
             print(color_green(f"[+] Successfully exported session '{sess_id}' to '{args.to}'!"))
         except Exception as e:
@@ -7110,11 +7147,12 @@ def main() -> None:
         new_project_path = getattr(args, "new_project_path", None)
         
         try:
-            print(f"[*] Importing session from '{bundle_path}'...")
+            print(f"{info_prefix()} Importing session from '{bundle_path}'...")
             imported_id = extract_and_import_session(
                 bundle_path,
                 target_project_id=to_project,
-                new_project_path=new_project_path
+                new_project_path=new_project_path,
+                progress_callback=print
             )
             print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
         except Exception as e:
@@ -7126,7 +7164,7 @@ def main() -> None:
         if not args.from_prefix or not args.to:
             die("Error: --rebase-paths requires both --from <prefix> and --to <prefix>.")
         try:
-            print(f"[*] Starting bulk path rebasing from '{args.from_prefix}' to '{args.to}'...")
+            print(f"{info_prefix()} Starting bulk path rebasing from '{args.from_prefix}' to '{args.to}'...")
             stats = db_rebase_paths(args.from_prefix, args.to)
             print(color_green(
                 f"[+] Rebase complete: {stats['projects_updated']} projects, "
@@ -7154,7 +7192,7 @@ def main() -> None:
                 # Check interactive prompt
                 import sys
                 if sys.stdout.isatty():
-                    print(color_yellow(f"[*] Source directory '{worktree}' does not exist on disk."))
+                    print(f"{info_prefix()} " + color_yellow(f"Source directory '{worktree}' does not exist on disk."))
                     try:
                         choice = input("Update database metadata only? [y/N]: ").strip().lower()
                     except (KeyboardInterrupt, EOFError):
@@ -7173,15 +7211,15 @@ def main() -> None:
         backup_file = None
         physical_moved = False
         try:
-            print("[*] Creating database rollback backup...")
+            print(f"{info_prefix()} Creating database rollback backup...")
             backup_file = db_create_rollback_backup()
             
             if not metadata_only:
-                print(f"[*] Physically moving directory: {old_path} -> {new_path}")
+                print(f"{info_prefix()} Physically moving directory: {old_path} -> {new_path}")
                 move_directory_structure(old_path, new_path)
                 physical_moved = True
                 
-            print("[*] Updating database metadata...")
+            print(f"{info_prefix()} Updating database metadata...")
             db_move_project_metadata(proj_id, str(old_path), str(new_path))
             
             if backup_file and backup_file.exists():
@@ -7198,7 +7236,7 @@ def main() -> None:
             print(color_green(f"[+] Successfully moved project '{proj_id}' to '{new_path}'!"))
         except Exception as e:
             if backup_file and backup_file.exists():
-                print(color_yellow("[*] Rolling back database metadata changes..."))
+                print(f"{info_prefix()} " + color_yellow("Rolling back database metadata changes..."))
                 db_restore_rollback_backup(backup_file)
                 try:
                     backup_file.unlink()
@@ -7211,7 +7249,7 @@ def main() -> None:
                 except Exception:
                     pass
             if physical_moved:
-                print(color_yellow(f"[*] Rolling back physical directory move: {new_path} -> {old_path}"))
+                print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
                 try:
                     import shutil
                     shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
@@ -7238,7 +7276,7 @@ def main() -> None:
                 # Check interactive prompt
                 import sys
                 if sys.stdout.isatty():
-                    print(color_yellow(f"[*] Source directory '{directory}' does not exist on disk."))
+                    print(f"{info_prefix()} " + color_yellow(f"Source directory '{directory}' does not exist on disk."))
                     try:
                         choice = input("Update database metadata only? [y/N]: ").strip().lower()
                     except (KeyboardInterrupt, EOFError):
@@ -7257,15 +7295,15 @@ def main() -> None:
         backup_file = None
         physical_moved = False
         try:
-            print("[*] Creating database rollback backup...")
+            print(f"{info_prefix()} Creating database rollback backup...")
             backup_file = db_create_rollback_backup()
             
             if not metadata_only:
-                print(f"[*] Physically moving directory: {old_path} -> {new_path}")
+                print(f"{info_prefix()} Physically moving directory: {old_path} -> {new_path}")
                 move_directory_structure(old_path, new_path)
                 physical_moved = True
                 
-            print("[*] Updating database metadata...")
+            print(f"{info_prefix()} Updating database metadata...")
             db_move_session_metadata(sess_id, str(old_path), str(new_path))
             
             if backup_file and backup_file.exists():
@@ -7282,7 +7320,7 @@ def main() -> None:
             print(color_green(f"[+] Successfully moved session '{sess_id}' to '{new_path}'!"))
         except Exception as e:
             if backup_file and backup_file.exists():
-                print(color_yellow("[*] Rolling back database metadata changes..."))
+                print(f"{info_prefix()} " + color_yellow("Rolling back database metadata changes..."))
                 db_restore_rollback_backup(backup_file)
                 try:
                     backup_file.unlink()
@@ -7295,7 +7333,7 @@ def main() -> None:
                 except Exception:
                     pass
             if physical_moved:
-                print(color_yellow(f"[*] Rolling back physical directory move: {new_path} -> {old_path}"))
+                print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
                 try:
                     import shutil
                     shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
