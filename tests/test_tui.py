@@ -206,6 +206,39 @@ async def test_tui_app_deletion(tui_db):
 
 
 @pytest.mark.anyio
+async def test_tui_app_deletion_metadata_fetch_fails(tui_db, monkeypatch):
+    """Regression (20260703-134213-S2-E1): if fetching session metadata for the
+    summary fails, the successful deletion must still render the summary rather
+    than crash with UnboundLocalError on the (previously) unbound summary locals."""
+    # Force the metadata formatting to raise so the summary locals would be unbound
+    # under the old code, while the delete itself (separate query) still succeeds.
+    import ocman_tui.app as tui_app_mod
+    monkeypatch.setattr(ocman, "_fmt_ts", lambda *_a, **_k: (_ for _ in ()).throw(ValueError("boom")))
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "Session 1"
+
+        app.confirm_and_delete_session()
+        await pilot.pause()
+        assert isinstance(app.screen, DeletionSafetyModal)
+
+        await pilot.click("#input-confirm-yes")
+        await pilot.press(*"yes")
+        await pilot.pause()
+        await pilot.click("#btn-confirm-del")
+        await pilot.pause()
+
+        # The worker must reach the summary modal (no UnboundLocalError crash).
+        for _ in range(50):
+            if isinstance(app.screen, PostExecutionSummaryModal):
+                break
+            await pilot.pause(0.1)
+        assert isinstance(app.screen, PostExecutionSummaryModal)
+
+
+@pytest.mark.anyio
 async def test_tui_app_pruning(tui_db):
     """Test that the database admin prune operation completes successfully in the background."""
     app = OrsessionApp()

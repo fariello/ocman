@@ -172,6 +172,23 @@ def test_restore_rollback_safety(temp_env, monkeypatch):
     conn.close()
 
 
+def test_restore_rejects_zip_slip(temp_env, tmp_path):
+    """Regression (20260703-134213-S2-S1): a restore ZIP containing a path-traversal
+    member must be rejected rather than extracted outside the destination."""
+    malicious_zip = tmp_path / "malicious_backup.zip"
+    with zipfile.ZipFile(malicious_zip, "w") as zf:
+        # A valid-looking db so structure checks are not the first failure...
+        zf.writestr("opencode.db", "dummy")
+        # ...and a traversal member that would escape the extraction dir.
+        zf.writestr("../../evil.txt", "pwned")
+
+    with pytest.raises(RecoveryError, match="unsafe archive member"):
+        cli_restore(str(malicious_zip))
+
+    # Ensure nothing was written outside the intended area.
+    assert not (tmp_path.parent / "evil.txt").exists()
+
+
 def test_clean_backups(temp_env, monkeypatch):
     import time
     
