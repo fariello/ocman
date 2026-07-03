@@ -3229,6 +3229,38 @@ def render_compact_prompt(
     )
 
 
+def _safe_extract_zip(zipf: "zipfile.ZipFile", dest: Path) -> None:
+    """
+    Safely extract all members of a ZIP archive into ``dest``, rejecting any
+    member whose resolved path would escape ``dest`` (Zip-Slip protection).
+
+    ``zipfile.ZipFile.extractall`` will happily write members with absolute
+    paths or ``..`` components outside the destination directory. Backup
+    archives passed to ``--restore`` are user-supplied and may be untrusted or
+    corrupt, so every member path is validated to resolve within ``dest``
+    before extraction.
+
+    Args:
+        zipf: An open ``zipfile.ZipFile`` in read mode.
+        dest: Destination directory the archive is extracted into.
+
+    Raises:
+        RecoveryError: If any member would be written outside ``dest``.
+    """
+
+    dest_root = Path(dest).resolve()
+    for member in zipf.namelist():
+        # Reject absolute paths and drive-letter/UNC style paths outright.
+        member_path = (dest_root / member).resolve()
+        try:
+            member_path.relative_to(dest_root)
+        except ValueError:
+            raise RecoveryError(
+                f"Refusing to extract unsafe archive member outside destination: {member!r}"
+            )
+    zipf.extractall(dest_root)
+
+
 def _backup_if_exists(path: Path) -> Path | None:
     """
     If path exists, rename it to a numbered .NN.bak backup.
@@ -5452,43 +5484,46 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
             }
             zipf.writestr("meta.json", json.dumps(meta, indent=2))
 
-            # Query and write each table to a temporary JSONL file in batches, then add to ZIP
+            # Query and write each table to a temporary JSONL file in batches, then add to ZIP.
+            # The connection is wrapped in try/finally so it is always closed, including on the
+            # error path (previously it was closed only on success, leaking a handle on failure).
             conn = sqlite3.connect(str(OPENCODE_DB_PATH))
-            conn.row_factory = sqlite3.Row
-            cursor = conn.cursor()
-            placeholders = ",".join("?" for _ in session_ids)
-            
-            total_tables = len(SESSION_RELATIONAL_TABLES)
-            for idx, (table, col) in enumerate(SESSION_RELATIONAL_TABLES):
-                if progress_callback:
-                    progress_callback(f"{info_prefix()} Exporting database table '{table}' ({idx+1}/{total_tables})...")
-                
-                # Query in batches of 1000 to keep memory flat
-                cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-                
-                temp_file = Path(tempfile.gettempdir()) / f"ocman_export_{table}_{session_id}.jsonl"
-                try:
-                    row_count = 0
-                    with open(temp_file, "w", encoding="utf-8") as f:
-                        while True:
-                            rows = cursor.fetchmany(1000)
-                            if not rows:
-                                break
-                            for row in rows:
-                                f.write(json.dumps(dict(row)) + "\n")
-                                row_count += 1
-                    
-                    zipf.write(temp_file, f"db_data/{table}.jsonl")
+            try:
+                conn.row_factory = sqlite3.Row
+                cursor = conn.cursor()
+                placeholders = ",".join("?" for _ in session_ids)
+
+                total_tables = len(SESSION_RELATIONAL_TABLES)
+                for idx, (table, col) in enumerate(SESSION_RELATIONAL_TABLES):
                     if progress_callback:
-                        progress_callback(f"    -> Exported {row_count} rows.")
-                finally:
-                    if temp_file.exists():
-                        try:
-                            temp_file.unlink()
-                        except Exception:
-                            pass
-            
-            conn.close()
+                        progress_callback(f"{info_prefix()} Exporting database table '{table}' ({idx+1}/{total_tables})...")
+
+                    # Query in batches of 1000 to keep memory flat
+                    cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
+
+                    temp_file = Path(tempfile.gettempdir()) / f"ocman_export_{table}_{session_id}.jsonl"
+                    try:
+                        row_count = 0
+                        with open(temp_file, "w", encoding="utf-8") as f:
+                            while True:
+                                rows = cursor.fetchmany(1000)
+                                if not rows:
+                                    break
+                                for row in rows:
+                                    f.write(json.dumps(dict(row)) + "\n")
+                                    row_count += 1
+
+                        zipf.write(temp_file, f"db_data/{table}.jsonl")
+                        if progress_callback:
+                            progress_callback(f"    -> Exported {row_count} rows.")
+                    finally:
+                        if temp_file.exists():
+                            try:
+                                temp_file.unlink()
+                            except Exception:
+                                pass
+            finally:
+                conn.close()
 
             # Write storage diff files
             if progress_callback:
@@ -6783,7 +6818,7 @@ def cli_restore(source: str) -> None:
         restore_dir = Path(temp_dir)
         try:
             with zipfile.ZipFile(source_path, "r") as zipf:
-                zipf.extractall(restore_dir)
+                _safe_extract_zip(zipf, restore_dir)
         except Exception as e:
             shutil.rmtree(temp_dir, ignore_errors=True)
             raise RecoveryError(f"Failed to extract ZIP archive: {e}")
@@ -6920,7 +6955,7 @@ def cli_restore(source: str) -> None:
                             f.unlink()
 
                 temp_rollback = tempfile.mkdtemp(prefix="ocman-rollback-")
-                zipf.extractall(temp_rollback)
+                _safe_extract_zip(zipf, Path(temp_rollback))
                 rb_dir = Path(temp_rollback)
 
                 rb_toml = rb_dir / "ocman.toml"

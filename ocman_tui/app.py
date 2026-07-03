@@ -532,7 +532,7 @@ class MoveProjectModal(ModalScreen[bool]):
                 self.app.notify("Project successfully moved!", severity="information")
                 self.dismiss(True)
 
-            self.call_from_thread(update_success)
+            self.app.call_from_thread(update_success)
 
         except Exception as e:
             # Rollback DB
@@ -560,7 +560,7 @@ class MoveProjectModal(ModalScreen[bool]):
             def update_failure() -> None:
                 self.app.notify(f"Move failed: {e}", severity="error")
 
-            self.call_from_thread(update_failure)
+            self.app.call_from_thread(update_failure)
 
 
 class ExportSessionModal(ModalScreen[bool]):
@@ -616,11 +616,11 @@ class ExportSessionModal(ModalScreen[bool]):
             def on_success() -> None:
                 self.app.notify(f"Successfully exported session to {dest_path.name}!", severity="information")
                 self.dismiss(True)
-            self.call_from_thread(on_success)
+            self.app.call_from_thread(on_success)
         except Exception as e:
             def on_failure() -> None:
                 self.app.notify(f"Export failed: {e}", severity="error")
-            self.call_from_thread(on_failure)
+            self.app.call_from_thread(on_failure)
 
 
 class ImportSessionModal(ModalScreen[bool]):
@@ -717,11 +717,11 @@ class ImportSessionModal(ModalScreen[bool]):
             def on_success() -> None:
                 self.app.notify(f"Successfully imported session as {imported_id}!", severity="information")
                 self.dismiss(True)
-            self.call_from_thread(on_success)
+            self.app.call_from_thread(on_success)
         except Exception as e:
             def on_failure() -> None:
                 self.app.notify(f"Import failed: {e}", severity="error")
-            self.call_from_thread(on_failure)
+            self.app.call_from_thread(on_failure)
 
 
 class PostExecutionSummaryModal(ModalScreen[None]):
@@ -1375,7 +1375,14 @@ class OrsessionApp(App):
 
     def _do_delete_session_worker(self, session_id: str) -> None:
         db_path = get_db_path()
-        
+
+        # Initialize summary fields to safe defaults so the post-deletion summary
+        # never crashes with UnboundLocalError when session metadata cannot be
+        # fetched (DB missing, row absent, or query error).
+        session_title = "Untitled"
+        time_created_str = "-"
+        time_updated_str = "-"
+
         conn = None
         try:
             sqlite3 = _get_sqlite()
