@@ -26,3 +26,8 @@
 ## Section 4 checkpoint
 - Docs assessed; CHANGELOG 1.0.3 gap (S1-A1), clone URL (S1-A2), rollback filename (S4-U1), no ARCHITECTURE.md
   (S4-KD1). Self-documenting CLI/TUI bar met. Cold-start assessment written. Commit: pending.
+
+## Section 5 checkpoint
+- All-eight persona pass. Feature-complete for scope; no over/under-scope. Guiding-principles finalized
+  (fallback, mostly adherent). Principles -> ARCHITECTURE.md. Maintainability: dual __version__ (S1-A3) to fix;
+  no modularization. Commit: pending.

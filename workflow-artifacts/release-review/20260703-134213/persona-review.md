@@ -35,6 +35,17 @@ Per-persona observations accumulated across sections. Seeded in Section 1.
 - **UI/UX (3):** CHANGELOG drift (no 1.0.3) and two minor doc inaccuracies (clone URL S1-A2, rollback filename
   S4-U1) slightly erode trust. Architecture/decision docs missing for maintainers (S4-KD1).
 
-## Section 5
+## Section 5 (feature/usability/maintainability — all eight)
+- **Novice (7):** Can install and run first useful command from README/`--help` alone. Acceptable.
+- **Power user (6):** Rich flag set, natural-language commands, scriptable, `--dry-run`/`--force`, `--db` override,
+  move/export/import/rebase. Strong for expert use.
+- **UI/UX (3):** TUI has clear tabs, key hints, typed confirmations. The move/export/import crash (S2-B1) was
+  the one severe UX defect — fixed.
+- **Architect (4):** Monolithic ocman.py is the main maintainability concern but internally organized; TUI reuses
+  CLI via ocman_tui/core.py (good). No over-engineering; general-case config engine. No refactor warranted.
+- **Software engineer (5):** dual __version__ (S1-A3) is the one maintainability nit worth fixing.
+- **Stakeholder (8):** Delivers stated goals; ships on PyPI; rollback-safety-first design protects user data.
+- No new feature gaps: capabilities match the stated scope; no under-scope required capability missing.
+
 ## Section 6
 ## Section 8 (final eight-persona sign-off)
