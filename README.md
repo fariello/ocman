@@ -226,9 +226,16 @@ The backup operation archives:
 *   All individual session JSON logs under `~/.local/share/opencode/storage/session_diff/`.
 
 ### Rollback Protection
-Before executing a restoration, `ocman` packages the existing active state into a temporary archive (`~/.local/share/opencode/backups/rollback_before_restore_TIMESTAMP.zip`). If any stage of the restoration (file unpacking, database overwriting, config validation) throws an error, the rollback routine immediately triggers to extract the temporary rollback file, leaving your system state completely safe and unmodified.
+Before executing a restoration, `ocman` packages the existing active state into a temporary archive (`~/.local/share/opencode/backups/rollback-before-restore-TIMESTAMP.zip`). If any stage of the restoration (file unpacking, database overwriting, config validation) throws an error, the rollback routine immediately triggers to extract the temporary rollback file, leaving your system state completely safe and unmodified.
 
 ---
+
+## Known Limitations
+
+*   **Large session exports/recovery**: Recovery and compaction load the full exported session
+    transcript into memory. Very large sessions (tens of MB or more) can therefore use several times
+    that amount of RAM on constrained hosts. Portable `.ocbox` exports themselves stream to disk in
+    batches and are not affected.
 
 ## Development & Test Verification
 

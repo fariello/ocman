@@ -1,5 +1,35 @@
 # Changelog
 
+## [1.0.3] - 2026-07-03
+
+### Added
+- **Cross-platform support**: Windows/macOS path compatibility and a macOS/Windows CI matrix
+  (Python 3.10-3.14). On non-Linux platforms the CLI falls back to the standard-library `sqlite3`
+  module when `pysqlite3` is unavailable.
+- **Progress reporting**: Real-time progress feedback during session exports and imports.
+- **Logging**: Standardized log prefix to `[INFO]` with verbose progress reporting.
+
+### Changed
+- **Low-memory exports**: Session exports stream table rows to JSONL in batches to keep memory flat.
+
+### Fixed
+- **TUI move/export/import crash**: `MoveProjectModal`, `ExportSessionModal`, and `ImportSessionModal`
+  background workers called `self.call_from_thread`, which only exists on the `App`; the operation
+  completed but the app then raised `AttributeError` and exited non-zero. Now use
+  `self.app.call_from_thread`.
+- **TUI delete summary**: The post-deletion summary could raise `UnboundLocalError` when session
+  metadata could not be fetched; summary fields now have safe defaults.
+
+### Security
+- **Restore hardening (Zip-Slip)**: `--restore` now validates every ZIP member path before extraction
+  and rejects entries that would escape the destination directory.
+- **Export connection safety**: The export database connection is now always closed, including on the
+  error path.
+
+### Documentation
+- Added `ARCHITECTURE.md` describing entry points, the CLI/TUI relationship, data contracts
+  (`.ocbox`, backup ZIP, `ocman.toml`), the database model, and the rollback-safety pattern.
+
 ## [1.0.2] - 2026-06-25
 
 ### Added
