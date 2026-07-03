@@ -55,3 +55,12 @@ Per-persona observations accumulated across sections. Seeded in Section 1.
   (only additive move/export/import + fixes). Dual __version__ (S1-A3) is the packaging nit to fix.
 
 ## Section 8 (final eight-persona sign-off)
+- **QA/QC (1):** Acceptable. The two crash paths (S2-B1, S2-E1) are fixed and covered.
+- **Testing/regression (2):** Acceptable. 58 tests pass; new regressions guard the security + delete fixes.
+- **UI/UX (3):** Acceptable. TUI move/export/import now completes cleanly.
+- **Architect (4):** Acceptable. No new complexity; safe helper added; ARCHITECTURE.md records structure.
+- **Software engineer (5):** Acceptable. Leak closed; version single-sourced; connections closed deterministically.
+- **Power user (6):** Acceptable. No capability regressions.
+- **Novice (7):** Acceptable. README/help self-documenting; ARCHITECTURE aids handoff.
+- **Stakeholder (8):** Acceptable. Ships stated goals; security hardened; docs honest. GO.
+- No blocking concerns from any persona.

@@ -41,3 +41,9 @@
 - Implemented Batch A (41867c7), B (28ff29e), C (5216f09). 58 tests pass. All findings fixed except
   S2-MEM2 (deferred: functionality risk; documented) and S1-A2 (n/a: README correct, local remote stale).
 - Registers/actions reconciled. Commit: pending (artifacts).
+
+## Section 8 checkpoint
+- Final sanity audit (final-bug-security-audit.md): no new risk. Final validation: 58 pass, tree clean.
+- Eight-persona sign-off: all acceptable. Cold-start: all areas adequate/thin, none missing.
+- Recommendation: GO. Push: no (no permission). Restart: no. Section 9: only with explicit approval.
+- 10-validation-results.md, 11-push-plan.md, 12-final-response.md written. Commit: pending (final).
