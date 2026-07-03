@@ -29,7 +29,12 @@ Per-persona observations accumulated across sections. Seeded in Section 1.
 - Note: `test_restore_rollback_safety` asserts error message `match="Restoration failed and rolled back"` —
   preserve that contract when editing restore.
 
-## Section 4
+## Section 4 (docs/specs/examples)
+- **Complete novice (7):** README quickstart + argument reference + config template are strong; `ocman --help`
+  has short forms and worked examples. A novice can get going without a manual. Good self-documenting bar.
+- **UI/UX (3):** CHANGELOG drift (no 1.0.3) and two minor doc inaccuracies (clone URL S1-A2, rollback filename
+  S4-U1) slightly erode trust. Architecture/decision docs missing for maintainers (S4-KD1).
+
 ## Section 5
 ## Section 6
 ## Section 8 (final eight-persona sign-off)
