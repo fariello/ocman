@@ -231,3 +231,6 @@ tmp/
 run_log.txt
 
 
+
+# agent-workflows installer local backups
+.agent-workflows-installer-backups/
