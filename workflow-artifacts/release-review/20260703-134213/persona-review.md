@@ -47,5 +47,11 @@ Per-persona observations accumulated across sections. Seeded in Section 1.
 - **Stakeholder (8):** Delivers stated goals; ships on PyPI; rollback-safety-first design protects user data.
 - No new feature gaps: capabilities match the stated scope; no under-scope required capability missing.
 
-## Section 6
+## Section 6 (compatibility/packaging/release)
+- **Operator (8):** From README + PyPI, an operator can `pip install ocman` and run `ocman ui`. First-run
+  `--create-config` works non-interactively. Backup/restore rollback-safety protects state. Install path clear.
+- **Software engineer (5):** pysqlite3-binary is linux-only marker; macOS/Windows fall back to stdlib sqlite3
+  (`_get_sqlite`) — cross-platform safe, validated by the CI matrix. No breaking public-contract change in 1.0.3
+  (only additive move/export/import + fixes). Dual __version__ (S1-A3) is the packaging nit to fix.
+
 ## Section 8 (final eight-persona sign-off)

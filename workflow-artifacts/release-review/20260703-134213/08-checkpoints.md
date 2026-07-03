@@ -31,3 +31,8 @@
 - All-eight persona pass. Feature-complete for scope; no over/under-scope. Guiding-principles finalized
   (fallback, mostly adherent). Principles -> ARCHITECTURE.md. Maintainability: dual __version__ (S1-A3) to fix;
   no modularization. Commit: pending.
+
+## Section 6 checkpoint
+- Packaging cross-platform safe (pysqlite3 fallback). No breaking 1.0.3 change. schema-validation.md +
+  ci-assessment.md written (no CI change). Version single-source is safe -> S1-A3 rem-risk Low. Sections 1-6
+  complete. Commit: pending. Next: implementation-plan.md then Section 7.
