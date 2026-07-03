@@ -1,8 +1,13 @@
 id,source_finding_ids,section,status,description,remediation_risk,files_changed,commit,validation,reason_not_done,next_step
-20260703-134213-S7-A1,20260703-134213-S2-B1,7,completed,Fix self.call_from_thread -> self.app.call_from_thread in Move/Export/Import modals,Low,ocman_tui/app.py,pending,pytest 56 passed,,Commit with run
-20260703-134213-S7-A2,20260703-134213-S2-S1,7,planned,Add safe-extract helper and use it instead of extractall in cli_restore,Low,ocman.py,pending,new regression test,,Implement in S7
-20260703-134213-S7-A3,20260703-134213-S2-MEM1,7,planned,Wrap 2nd connection in bundle_session_data in try/finally,Low,ocman.py,pending,pytest,,Implement in S7
-20260703-134213-S7-A4,20260703-134213-S1-A1,7,planned,Add [1.0.3] CHANGELOG entry,Low,CHANGELOG.md,pending,n/a,,Implement in S7
-20260703-134213-S7-A5,20260703-134213-S1-A3,7,planned,Single-source __version__ for ocman_tui (import from ocman) or document sync,Medium,ocman_tui/__init__.py,pending,pytest version tests,,Assess in S7
-20260703-134213-S7-A6,20260703-134213-S2-E1,7,planned,Guard possibly-None/unbound locals in CompactionScreen,Low,ocman_tui/app.py,pending,manual,,Inspect in S7
-20260703-134213-S7-A7,20260703-134213-S2-MEM2,7,planned,Document large-export memory limitation in README,Low,README.md,pending,n/a,,Document in S7; defer streaming refactor (Medium-High functionality risk)
+20260703-134213-S7-A1,20260703-134213-S2-B1,7,completed,Fix self.call_from_thread -> self.app.call_from_thread in Move/Export/Import modals,Low,ocman_tui/app.py,41867c7,pytest 58 passed,,Done
+20260703-134213-S7-A2,20260703-134213-S2-S1,7,completed,Add _safe_extract_zip and use instead of extractall in cli_restore (both call sites),Low,ocman.py,41867c7,test_restore_rejects_zip_slip passes,,Done
+20260703-134213-S7-A3,20260703-134213-S2-MEM1,7,completed,Wrap 2nd connection in bundle_session_data in try/finally,Low,ocman.py,41867c7,pytest 58 passed,,Done
+20260703-134213-S7-A6,20260703-134213-S2-E1,7,completed,Initialize delete-summary locals to safe defaults,Low,ocman_tui/app.py,41867c7,test_tui_app_deletion_metadata_fetch_fails passes,,Done
+20260703-134213-S7-T1,20260703-134213-S3-T1,7,completed,Add Zip-Slip restore regression test,Low,tests/test_config_backup_restore.py,28ff29e,passes,,Done
+20260703-134213-S7-T2,20260703-134213-S3-T2,7,completed,Add delete-summary metadata-fail regression test,Low,tests/test_tui.py,28ff29e,passes,,Done
+20260703-134213-S7-A4,20260703-134213-S1-A1,7,completed,Add [1.0.3] CHANGELOG entry,Low,CHANGELOG.md,5216f09,n/a,,Done
+20260703-134213-S7-A5,20260703-134213-S1-A3,7,completed,Single-source ocman_tui.__version__ from ocman,Low,ocman_tui/__init__.py,5216f09,tui version 1.0.3 verified,,Done
+20260703-134213-S7-A8,20260703-134213-S4-KD1,7,completed,Create ARCHITECTURE.md (incl. principles),Low,ARCHITECTURE.md,5216f09,n/a,,Done
+20260703-134213-S7-U1,20260703-134213-S4-U1,7,completed,Fix README rollback filename,Low,README.md,5216f09,n/a,,Done
+20260703-134213-S7-A7,20260703-134213-S2-MEM2,7,completed,Document large-export memory limitation (defer refactor),Low(doc)/MedHigh(refactor),README.md,5216f09,n/a,Streaming refactor deferred (functionality risk),Doc done; refactor deferred
+20260703-134213-S7-A9,20260703-134213-S1-A2,7,not_applicable,README clone URL,Low,-,-,-,README is correct per user; local git remote is stale (advise user),No repo change

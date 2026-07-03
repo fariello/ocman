@@ -10,3 +10,11 @@
 | 6 | grep class boundaries in app.py | Confirm which call_from_thread are in App vs Screen | App spans 761->EOF; 1119+/1448+/1559 are App (correct); modals 535-724 were the bug |
 
 Working directory: /home/gfariello/VC/ocman for all. No secrets in output.
+
+## Section 7
+| # | Command | Purpose | Result |
+|---|---|---|---|
+| 7 | pytest (targeted) | Validate T1/T2 new tests | both pass |
+| 8 | `PYTHONPATH=. pytest` | Full suite after all fixes | 58 passed |
+| 9 | `import ocman_tui` | Verify single-sourced version | 1.0.3 |
+Files re-opened before fixing (protocol): ocman.py:6770-6929, ocman.py:5440-5505, app.py:1376-1429.
