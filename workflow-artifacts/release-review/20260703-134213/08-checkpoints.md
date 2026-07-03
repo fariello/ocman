@@ -17,3 +17,8 @@
 - Verified move/delete/import DB ops are transactional with rollback + finally-close (no new finding).
 - Persona notes appended. No product code changed this section (audit only). Registers updated.
 - Commit: pending (Section 2 boundary).
+
+## Section 3 checkpoint
+- Read restore/export-import tests. Coverage strong; gaps T-1 (Zip-Slip regression) and T-2 (delete-summary
+  metadata-absent) map to this run's fixes. Preserve restore error-message contract.
+- No product code changed. Registers updated (S3-T1, S3-T2). Commit: pending.

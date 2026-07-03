@@ -21,7 +21,14 @@ Per-persona observations accumulated across sections. Seeded in Section 1.
   No pickle/eval/exec. API keys HTTPS-guarded and never printed. Import path traversal already defended.
 - No new finding from power-user/novice/stakeholder specific to Section 2 beyond those carried forward.
 
-## Section 3
+## Section 3 (tests/regression)
+- **Testing/regression expert (2):** Restore has happy-path + rollback tests but no Zip-Slip regression (T-1);
+  import has strong SQLi + traversal rejection tests. Delete-summary metadata-absent path untested (T-2).
+- **QA/QC (1):** 56 tests pass; move/export/import/backup/restore/cleanup all have coverage. Coverage is
+  behavior-focused, not just quantity. Gaps map exactly to the two fixes this run will make.
+- Note: `test_restore_rollback_safety` asserts error message `match="Restoration failed and rolled back"` —
+  preserve that contract when editing restore.
+
 ## Section 4
 ## Section 5
 ## Section 6
