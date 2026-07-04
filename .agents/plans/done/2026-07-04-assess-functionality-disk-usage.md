@@ -5,7 +5,7 @@
 - Scope: **narrowed** (user request) to disk-usage reporting — how much space each
   project uses on disk, and how much the backups directory uses. Touches `ocman info`
   (`db_show_info`) and the CLI; TUI parity is a follow-up.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (approved by user 2026-07-04; implemented — see Execution outcome below)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -93,6 +93,30 @@ Severity = impact if left alone; Remediation Risk = Fix-Bar gate.
    exact figures only; no estimated DB bytes, per honest-docs. Confirm.)
 3. Should `ocman info` show the backups section **always**, or only with `-v`? (Assumption:
    always — it is high-value and cheap.)
+
+## Execution outcome (2026-07-04)
+
+Executed with explicit user approval. All steps done; FUNC-3 (per-project DB bytes) and FUNC-5 (TUI parity)
+remained deferred as planned.
+
+- **Step 1:** added `dir_usage(path) -> (total_bytes, entry_count)` (os.scandir/os.walk, no shell-out,
+  tolerates unreadable entries).
+- **Step 2:** added a **"Backups (Disk Storage)"** section to `db_show_info` (path, count, total size via
+  `dir_usage`, oldest/newest mtime, prune hint; prints "0 B (no backups directory)" when empty). Verified on
+  the real environment: **24 backups, 7.23 GB**.
+- **Step 3:** added `--by-project` → `_per_project_disk_usage()` computing exact per-project session-diff
+  bytes + session/message/token counts, sorted by diff bytes desc, with an explicit honest-docs note that DB
+  bytes are not per-project attributable. **No per-project DB bytes reported** (FUNC-3 respected).
+- **Step 4:** README updated (info section + argument table); added `disk`/`du` natural-language alias in
+  `preprocess_argv` → `--info --by-project`.
+- **Step 5:** CHANGELOG `[Unreleased]` "Added" entry.
+
+Open-question resolutions: interface = `ocman info --by-project` + `disk`/`du` alias (Q1); exact figures only,
+no estimated DB share (Q2); backups section shown always (Q3).
+
+Tests added to `tests/test_ocman.py`: `test_dir_usage`, `test_db_show_info_backups_section`,
+`test_db_show_info_by_project`, `test_preprocess_argv_disk_alias`. Validation: `PYTHONPATH=. pytest` →
+**95 passed, 2 skipped** (was 91). Targets the next release (1.0.5).
 
 ## Approval and execution gate
 
