@@ -4,7 +4,7 @@
 - Concern: testing (rigor and completeness)
 - Scope: whole project; emphasis on the recovery/compaction pipeline and the TUI
   compaction path, which are currently untested
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (approved by user 2026-07-04; implemented — see Execution outcome below)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -135,6 +135,35 @@ re-reading the cited source:
 - Added open question 4 (app.py edits during a testing IPD).
 
 Verdict: APPROVE WITH REVISIONS APPLIED.
+
+## Execution outcome (2026-07-04)
+
+Executed with explicit user approval (including the app.py edits per open question 4). All
+steps completed; TEST-10 (coverage gating) remained deferred as planned.
+
+- **TEST-2 (step 1):** `tests/fixtures/opencode_export.json` fixture + golden
+  `find_turns`/`extract_opencode_turns` tests (with/without tools, raw-text + unknown-dict
+  fallbacks) in `tests/test_recovery.py`.
+- **TEST-5 (step 2):** renderer contract tests calling `render_transcript`/
+  `render_restart_context`/`render_compact_prompt` with real signatures + real `SessionInfo`.
+- **TEST-4 (step 3):** `call_compaction_api` unit tests mocking only `urllib.request.urlopen`
+  (success returns a str; non-HTTPS refusal; empty choices/content; HTTPError → RecoveryError).
+- **TEST-1 (step 4):** `test_tui_compaction_end_to_end_network_mocked` mocks only the
+  network. Verified **red on pre-fix code** (`TypeError: render_compact_prompt() missing 1
+  required positional argument: 'session'`) and **green after the fix**. Fixed all three
+  app.py bugs: `render_compact_prompt` now passes `source_name=` + a real `SessionInfo`
+  (app.py:1303 and the sibling "write prompt" export action at ~1279); `call_compaction_api`
+  now passes `verbosity=0`; the returned string is used directly (dropped `["content"]`).
+  Added `SessionInfo` to `ocman_tui/core.py` re-exports and `app.py` imports.
+- **TEST-3 (step 5):** end-to-end `recover_from_export` test using the fixture (no
+  subprocess/network dependency) asserting restart + transcript files are written.
+- **TEST-6 (step 6):** `tests/test_config_parsing.py` for `strip_jsonc_comments`,
+  `parse_json_text` (strict/lenient), `_read_file_ref`, `expand_env_vars`.
+- **TEST-7 (step 7):** `estimate_tokens`/`estimate_cost` unit tests.
+- **TEST-8 (step 8):** positive legacy `db_data.json` import round-trip.
+- **TEST-9 (step 9):** README documents the benchmark opt-in; CHANGELOG notes the compaction fix.
+
+Validation: `PYTHONPATH=. pytest` → **91 passed, 2 skipped** (was 66). Commit: see git history.
 
 ## Approval and execution gate
 
