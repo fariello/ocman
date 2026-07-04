@@ -39,6 +39,9 @@ warning). Constraint: gathering this must be fast (~≤2s), no deep/recursive an
 | SD-5 | Low | Medium (functionality) | power user | True "last activity" time is not cheaply/reliably available | /proc/<pid>/stat, platform-specific |
 | SD-6 | Low | Low | operator | Must stay cross-platform + within ~2s (no deep recursion) | ocman.py:4596 win32 skip |
 | SD-7 | Low | Low | novice | Keep/clarify the actionable `--force` + "close these PIDs" guidance | ocman.py:4608 |
+| SD-8 | Medium | Low | QA / architect | **Safety-gate semantics must be preserved (added in plan-review).** The current check *fails open*: the `except Exception: if isinstance(e, RecoveryError): raise; pass` at ocman.py:4610-4613 swallows any non-RecoveryError and lets the destructive op proceed if the check itself errors. The new detector MUST replicate this (a `ps` failure/timeout must not block a delete) and MUST NOT raise its own non-RecoveryError into the caller. | ocman.py:4610-4613, 4858-4861, 5858-5861 |
+| SD-9 | Medium | Low | QA / stakeholder | **Filter direction is safety-critical (added in plan-review).** SD-3's plausible-process filter reduces false *positives*, but on a destructive-op **gate** an over-tight filter creates false *negatives* (a real running opencode is missed → op proceeds → potential data loss). The gate decision must err toward inclusion; only the *display* may be conservatively labelled. | ocman.py:4605 (gate on returncode) |
+| SD-10 | Low | Low | software engineer | CWD→project match must be path-aware (added in plan-review). Naive string-prefix (`/a/b` vs `/a/bc`) mismatches; use resolved-path containment, consistent with the existing `_rebased_dir` approach. | ocman.py:5159 db_find_project; `_rebased_dir` |
 
 ## Proposed changes (ordered, validatable)
 
@@ -46,8 +49,8 @@ warning). Constraint: gathering this must be fast (~≤2s), no deep/recursive an
 |------|-----------|--------|-------|-----------|------------|
 | 1 | SD-2, SD-3, SD-6 | Add one helper `detect_running_opencode() -> list[dict]` returning per-process `{pid, tty, cwd, started, elapsed, cmdline}`. Implement via a single `ps -eo pid,tty,etimes,lstart,args` call (parse output), add CWD from `/proc/<pid>/cwd` on Linux (best-effort readlink), filter to plausible opencode processes (argv contains `opencode` as the program + a `continue`/session arg — not a bare substring match), and exclude the current process and its ancestors. Hard-timeout the `ps` call (e.g. 3s); on any failure degrade to returning PIDs-only or an empty list (never crash the delete flow). No per-process forking beyond the cheap cwd readlink. | ocman.py | Low | Unit test parsing a canned `ps` output into the expected dicts; test the plausible-process filter rejects a substring-only match; test graceful-degrade when `ps` missing |
 | 2 | SD-1, SD-7 | Add `format_running_opencode(procs) -> str` producing a readable block: a count header ("N opencode process(es) are running:") then one line per process — `PID <pid>  tty <tty>  up <elapsed>  started <ts>  cwd <cwd>`. Footer: "Close the processes above, or re-run with --force to bypass this safety check." | ocman.py | Low | Unit test: given N proc dicts, output has the count, one line per PID, and the footer |
-| 3 | SD-4 (partial) | Best-effort project attribution: for each proc CWD, look up a matching `project.worktree` (prefix match) in the DB and append `-> project <name/id>` when found. Do NOT print a session id (not reliably derivable). Add a one-line note that the mapping is best-effort by CWD. | ocman.py | Low | Test: a proc whose cwd is under a seeded project worktree shows that project; unknown cwd shows no project |
-| 4 | SD-1, SD-2, SD-7 | Replace the three duplicated `pgrep` blocks so that when processes are found (and not `--force`), they raise `RecoveryError(format_running_opencode(...))`. Preserve exact current control flow: found + not force -> raise; `--force` -> bypass; none -> proceed. Keep the `RecoveryError` type and the win32 skip. | ocman.py:4595-4612, 4843-4860, 5843-5860 | Low | Existing delete/cleanup tests still pass; add a test that monkeypatches the detector to return 2 procs and asserts the raised message lists both PIDs |
+| 3 | SD-4 (partial), SD-10 | Best-effort project attribution: for each proc CWD, map to a `project.worktree` using **path-aware containment** (resolve both, then `Path.is_relative_to`/`relative_to` — NOT naive string prefix, to avoid `/a/b` vs `/a/bc` mismatches), consistent with the existing `_rebased_dir` logic. Append `-> project <name/id>` when found. Do NOT print a session id (not reliably derivable). One-line "best-effort by CWD" note. | ocman.py | Low | Test: proc cwd nested under a seeded worktree shows that project; a sibling path like `/a/bc` vs worktree `/a/b` does NOT match; unknown cwd shows no project |
+| 4 | SD-1, SD-2, SD-7, SD-8, SD-9 | Replace the three duplicated `pgrep` blocks with the helper. **Preserve the exact gate semantics:** found+!force → raise `RecoveryError(format_running_opencode(...))`; `--force` → bypass; none → proceed; win32 → skip. **Preserve fail-open (SD-8):** the detector must be wrapped so that if enumeration itself errors/times out, the op proceeds (as today) — the detector returns `[]`/PIDs-only on failure and never raises a non-RecoveryError into the caller. **Preserve gate strength (SD-9):** the gate fires whenever a plausible opencode process is found; the plausibility filter must not be so strict that a genuine running instance is missed (err toward inclusion for the gate; conservative labelling only in display). | ocman.py:4595-4613, 4843-4861, 5843-5861 | Low | Existing delete/cleanup tests pass; monkeypatched detector returns 2 procs → message lists both PIDs and op refuses; `--force` bypasses; detector raising an internal error → op still proceeds (fail-open preserved) |
 | 5 | docs | Document the richer process-lock output in README (delete/cleanup safety section) + note the best-effort/`--force` behavior. CHANGELOG `[Unreleased]` entry. | README.md, CHANGELOG.md | Low | Docs only |
 
 ## Deferred / out of scope (with reason)
@@ -66,11 +69,21 @@ warning). Constraint: gathering this must be fast (~≤2s), no deep/recursive an
 
 ## Required tests / validation
 
-- `PYTHONPATH=. pytest` stays green + new unit tests: `ps`-output parser, plausible-process
-  filter (rejects substring-only false positives; excludes self), formatter (count + per-PID
-  lines + footer), CWD->project attribution, and a delete-flow test (monkeypatched detector
-  returns 2 procs -> raised message lists both, `--force` bypasses). Tests must not depend on
-  a real opencode process — feed canned `ps` output / monkeypatch the detector.
+- `PYTHONPATH=. pytest` stays green + new unit tests. The detector MUST be testable without
+  spawning real `ps` or depending on the OS — inject/monkeypatch the command-runner and feed
+  **canned `ps` output** (SD-6/F determinism). Required cases:
+  - `ps`-output parser → expected per-process dicts.
+  - Plausibility filter: rejects a bare substring-only match (SD-3) and excludes self, **but a
+    genuine `opencode ... continue` line IS matched** (SD-9 regression guard — the gate must not
+    drop a real instance).
+  - Formatter: count header + one line per PID + actionable footer.
+  - CWD→project: nested cwd matches; sibling `/a/bc` vs worktree `/a/b` does NOT match (SD-10);
+    unknown cwd → no project.
+  - **Gate behavior (SD-8):** detector returns 2 procs → destructive op raises and message lists
+    both PIDs; `--force` → bypass; **detector raising internally → op still proceeds (fail-open),
+    matching current behavior**; timeout → fail-open, no hang.
+- Timestamps rendered with the same `datetime.fromtimestamp(...).strftime('%Y-%m-%d %H:%M:%S')`
+  convention used elsewhere in `db_show_info` (PR-6 consistency).
 
 ## Spec / documentation sync
 
@@ -88,6 +101,31 @@ warning). Constraint: gathering this must be fast (~≤2s), no deep/recursive an
 3. macOS has no `/proc`, so CWD there needs `lsof -p <pid>` (an extra call) or is omitted.
    Acceptable to omit CWD on macOS (show PID/TTY/start) to stay within the time budget?
    (Assumption: omit CWD on non-Linux rather than pay `lsof` cost.)
+4. On the filter-direction tension (SD-9): confirm the gate should **err toward inclusion**
+   (over-warn rather than risk missing a real running instance on a destructive op). The lenient
+   filter (Q2) is consistent with this; strict argv0 matching is NOT recommended for the gate.
+   (Assumption: err toward inclusion for the gate.)
+
+## Plan-review provenance (2026-07-04)
+
+Hardened by the `plan-review` workflow (run 20260704-180500) after re-reading the three check
+sites (ocman.py:4595-4613, 4843-4861, 5843-5861). Changes applied:
+
+- **Added SD-8 (safety-gate fail-open semantics):** the current check swallows non-RecoveryError
+  exceptions and proceeds if the check itself errors. Step 4 now explicitly requires the new
+  detector to preserve fail-open (a `ps` failure/timeout must not block a delete) and never raise
+  a non-RecoveryError into the caller.
+- **Added SD-9 (filter-direction is safety-critical):** on a destructive-op gate, an over-tight
+  plausible-process filter risks a false negative (missing a real instance → data loss). Step 4 +
+  tests now require the gate to err toward inclusion, with a regression test that a genuine
+  `opencode continue` line is still matched.
+- **Added SD-10 (path-aware CWD→project match):** step 3 now uses resolved-path containment
+  (`is_relative_to`), not naive string prefix, with a sibling-path test.
+- **Tightened the test plan:** injectable command-runner (no real `ps`), fail-open + timeout tests,
+  and the SD-9 regression guard.
+- **PR-6 (consistency):** render timestamps with the existing `db_show_info` convention.
+
+Verdict: APPROVE WITH REVISIONS APPLIED.
 
 ## Approval and execution gate
 
