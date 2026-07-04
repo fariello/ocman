@@ -117,12 +117,22 @@ The interactive terminal user interface organizes your workflow across several t
 *   `ocman show logs` $\rightarrow$ `--show-logs`
 
 ### Database & Storage Status (`ocman info`)
-Prints a breakdown of your current database state on disk, including:
+Prints a breakdown of your current database state on disk, including the SQLite database
+family size, session-diff file storage, and a **Backups (Disk Storage)** section showing
+the total size, count, and age range of your backups directory:
 ```bash
 ocman info
 # Add -v to trigger a SQLite database PRAGMA integrity check
 ocman info -v
+
+# Add a per-project on-disk breakdown (session-diff bytes + session/message/token counts)
+ocman info --by-project
+# Or the natural-language alias:
+ocman disk
 ```
+> [!NOTE]
+> Per-project figures cover **session-diff files only**. The SQLite database is a single
+> shared file, so its bytes are not attributable to an individual project.
 
 ### Historical Auditing (`ocman show logs`)
 Outputs a list of past cleanups and recoveries in reverse chronological order, ending with a comprehensive all-time totalization card:
@@ -165,7 +175,8 @@ ocman --create-config
 | | `--delete-project`| Recursively delete the project specified by `-P` (includes all project sessions/files/DB rows) |
 | | `--dry-run` | Run cleanup/delete tasks without writing changes |
 | | `--force` | Bypass active process lock checks during delete/cleanup |
-| | `--info` | Show database and storage usage information |
+| | `--info` | Show database and storage usage information (incl. backups disk usage) |
+| | `--by-project` | With `info`: add a per-project on-disk session-diff usage breakdown |
 | | `--clear-history` | Wipes the historical activity ledger and resets totals |
 | | `--create-config` | Interactively generate the `ocman.toml` file |
 | | `--backup-opencode` | Create a system backup archive ZIP file |

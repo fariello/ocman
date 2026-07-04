@@ -204,6 +204,89 @@ def test_db_show_info(temp_db, capsys):
     assert "gpt-4 (openai)" in captured.out
 
 
+def test_dir_usage(tmp_path):
+    from ocman import dir_usage
+    # Empty dir
+    assert dir_usage(tmp_path) == (0, 0)
+    # A top-level file
+    (tmp_path / "a.zip").write_bytes(b"x" * 100)
+    # A top-level backup directory with nested files
+    d = tmp_path / "opencode-db-cleanup-20260101-000000"
+    d.mkdir()
+    (d / "opencode.db").write_bytes(b"y" * 250)
+    (d / "opencode.db-wal").write_bytes(b"z" * 50)
+    total, count = dir_usage(tmp_path)
+    assert total == 400  # 100 + 250 + 50
+    assert count == 2     # one file + one dir at top level
+    # Nonexistent path is tolerated
+    assert dir_usage(tmp_path / "nope") == (0, 0)
+
+
+def test_db_show_info_backups_section(temp_db, capsys, monkeypatch, tmp_path):
+    import ocman
+    from ocman import db_show_info, save_ocman_config, DEFAULT_CONFIG, OCMAN_CONFIG_PATH
+
+    # Point config at a temp backup dir with a known-size backup.
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir()
+    d = backup_dir / "opencode-db-cleanup-20260101-000000"
+    d.mkdir()
+    (d / "opencode.db").write_bytes(b"x" * 1024)
+    cfg_path = tmp_path / "ocman_test.toml"
+    monkeypatch.setattr(ocman, "OCMAN_CONFIG_PATH", cfg_path)
+    cfg = dict(DEFAULT_CONFIG)
+    cfg["default_backup_dir"] = str(backup_dir)
+    save_ocman_config(cfg, cfg_path)
+
+    class Args:
+        verbose = 0
+        by_project = False
+    db_show_info(Args())
+    out = capsys.readouterr().out
+    assert "Backups (Disk Storage):" in out
+    assert "Backups:         1" in out
+    assert "1.00 KB" in out
+
+
+def test_db_show_info_by_project(temp_db, capsys, monkeypatch, tmp_path):
+    import ocman
+    from ocman import db_show_info
+    # Isolate storage dir so we do not touch the real one.
+    storage = tmp_path / "session_diff"
+    monkeypatch.setattr(ocman, "OPENCODE_STORAGE_DIR", storage)
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/w1', 'Proj One')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/w2', 'Proj Two')")
+    cursor.execute("INSERT INTO session (id, project_id, title, tokens_input, tokens_output) VALUES ('s1', 'p1', 'S1', 100, 50)")
+    cursor.execute("INSERT INTO session (id, project_id, title, tokens_input, tokens_output) VALUES ('s2', 'p2', 'S2', 10, 5)")
+    cursor.execute("INSERT INTO message (id, session_id) VALUES ('m1', 's1')")
+    conn.commit()
+    conn.close()
+
+    # Seed session-diff files so p1 has more on-disk bytes than p2.
+    (ocman.OPENCODE_STORAGE_DIR).mkdir(parents=True, exist_ok=True)
+    (ocman.OPENCODE_STORAGE_DIR / "s1.json").write_bytes(b"x" * 500)
+    (ocman.OPENCODE_STORAGE_DIR / "s2.json").write_bytes(b"y" * 10)
+
+    class Args:
+        verbose = 0
+        by_project = True
+    db_show_info(Args())
+    out = capsys.readouterr().out
+    assert "Per-Project Disk Usage (session-diff files):" in out
+    assert "single shared file" in out  # honest-docs note, no per-project DB bytes
+    # p1 (500 B) must be listed before p2 (10 B) — sorted by diff bytes desc.
+    assert out.index("Proj One") < out.index("Proj Two")
+    assert "Sessions: 1" in out
+
+
+def test_preprocess_argv_disk_alias():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "disk"]) == ["ocman", "--info", "--by-project"]
+    assert preprocess_argv(["ocman", "du"]) == ["ocman", "--info", "--by-project"]
+
+
 def test_parse_args_help(monkeypatch, capsys):
     import sys
     from ocman import parse_args

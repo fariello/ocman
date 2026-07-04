@@ -3862,6 +3862,12 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             new_args.append("--show-logs")
             i += 2
             continue
+
+        # Check for "disk" / "du" -> info with per-project breakdown
+        if arg.lower() in ("disk", "du"):
+            new_args.extend(["--info", "--by-project"])
+            i += 1
+            continue
             
         # Check for "list"
         if arg.lower() == "list" and i + 1 < len(args_to_process):
@@ -4239,6 +4245,12 @@ Examples:
         "--info",
         action="store_true",
         help="Show database and storage info.",
+    )
+
+    parser.add_argument(
+        "--by-project",
+        action="store_true",
+        help="With info: add a per-project on-disk session-diff usage breakdown.",
     )
 
     parser.add_argument(
@@ -6195,6 +6207,42 @@ def db_run_cleanup(
                 pass
 
 # Helper sizing functions locally
+def dir_usage(path: Path) -> tuple[int, int]:
+    """Return (total_bytes, entry_count) for a directory tree.
+
+    Recursively sums the on-disk size of every file under ``path`` (including files
+    nested inside subdirectories). ``entry_count`` counts the top-level entries in
+    ``path`` (each backup is a top-level ``*.zip`` file or an ``opencode-db-cleanup-*``
+    directory), which is the natural "how many backups" number. Unreadable entries are
+    skipped rather than raising, so a permission error on one file does not break the
+    whole tally. Uses ``os.scandir``/``stat`` (no shell-out) to stay cross-platform.
+    """
+    total = 0
+    count = 0
+    try:
+        entries = list(os.scandir(path))
+    except OSError:
+        return (0, 0)
+    for entry in entries:
+        count += 1
+        try:
+            if entry.is_dir(follow_symlinks=False):
+                for root, _dirs, files in os.walk(entry.path):
+                    for fname in files:
+                        try:
+                            total += os.stat(os.path.join(root, fname)).st_size
+                        except OSError:
+                            pass
+            elif entry.is_file(follow_symlinks=False):
+                try:
+                    total += entry.stat(follow_symlinks=False).st_size
+                except OSError:
+                    pass
+        except OSError:
+            pass
+    return (total, count)
+
+
 def get_file_size_local(file_path: Path) -> int:
     try:
         return file_path.stat().st_size
@@ -6434,6 +6482,83 @@ def cli_show_logs() -> None:
     print(f"  - Total Cost Reclaimed:    ${cost_deleted:.4f}")
     print(f"  - Total Disk Space Saved:  {human_size_local(space_saved_deleted)}")
     print(color_green("========================================================"))
+
+
+def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[dict]:
+    """Compute per-project on-disk session-diff usage and counts, sorted by diff bytes desc.
+
+    Session-diff files are named ``<session_id>.json`` and each session has a
+    ``project_id``, so on-disk diff bytes ARE exactly attributable to a project. The
+    shared SQLite DB is deliberately excluded (its bytes are not per-project).
+    Returns a list of dicts: id, name, sessions, messages, tokens, diff_files, diff_bytes.
+    """
+    if not db_path.exists():
+        return []
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cursor = conn.cursor()
+        # Project id -> name
+        try:
+            cursor.execute("SELECT id, name FROM project;")
+            proj_names = {row[0]: row[1] for row in cursor.fetchall()}
+        except Exception:
+            proj_names = {}
+        # Per-project session ids + aggregate counts.
+        cursor.execute(
+            "SELECT project_id, id, "
+            "COALESCE(tokens_input,0)+COALESCE(tokens_output,0) "
+            "FROM session"
+        )
+        sessions_by_project: dict[str, list[str]] = {}
+        tokens_by_project: dict[str, int] = {}
+        for project_id, session_id, tok in cursor.fetchall():
+            pid = project_id or "(no project)"
+            sessions_by_project.setdefault(pid, []).append(session_id)
+            tokens_by_project[pid] = tokens_by_project.get(pid, 0) + (tok or 0)
+        # Message counts per project (join through session).
+        msg_by_project: dict[str, int] = {}
+        try:
+            cursor.execute(
+                "SELECT s.project_id, COUNT(*) FROM message m "
+                "JOIN session s ON m.session_id = s.id GROUP BY s.project_id"
+            )
+            for pid, cnt in cursor.fetchall():
+                msg_by_project[pid or "(no project)"] = cnt or 0
+        except Exception:
+            pass
+    except Exception:
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+    rows = []
+    for pid, sess_ids in sessions_by_project.items():
+        diff_bytes = 0
+        diff_files = 0
+        for sid in sess_ids:
+            f = storage_dir / f"{sid}.json"
+            try:
+                if f.is_file():
+                    diff_bytes += f.stat().st_size
+                    diff_files += 1
+            except OSError:
+                pass
+        rows.append({
+            "id": pid,
+            "name": proj_names.get(pid, ""),
+            "sessions": len(sess_ids),
+            "messages": msg_by_project.get(pid, 0),
+            "tokens": tokens_by_project.get(pid, 0),
+            "diff_files": diff_files,
+            "diff_bytes": diff_bytes,
+        })
+    rows.sort(key=lambda r: r["diff_bytes"], reverse=True)
+    return rows
 
 
 def db_show_info(args) -> None:
@@ -6681,6 +6806,62 @@ def db_show_info(args) -> None:
     print(f"  Path:            {color_dim(str(storage_dir))}")
     print(f"  JSON Files:      {diff_files_count}")
     print(f"  Total Size:      {color_yellow(diff_size_str)}")
+    print()
+
+    # Backups directory usage.
+    try:
+        backup_dir = Path(load_ocman_config()["default_backup_dir"]).expanduser()
+    except Exception:
+        backup_dir = Path(DEFAULT_CONFIG["default_backup_dir"]).expanduser()
+    print(color_bold("Backups (Disk Storage):"))
+    print(f"  Path:            {color_dim(str(backup_dir))}")
+    if backup_dir.exists() and backup_dir.is_dir():
+        backup_total, backup_count = dir_usage(backup_dir)
+        oldest_b = "N/A"
+        newest_b = "N/A"
+        try:
+            entries = list(os.scandir(backup_dir))
+            if entries:
+                mtimes = []
+                for e in entries:
+                    try:
+                        mtimes.append(e.stat(follow_symlinks=False).st_mtime)
+                    except OSError:
+                        pass
+                if mtimes:
+                    oldest_b = datetime.fromtimestamp(min(mtimes)).strftime('%Y-%m-%d %H:%M:%S')
+                    newest_b = datetime.fromtimestamp(max(mtimes)).strftime('%Y-%m-%d %H:%M:%S')
+        except OSError:
+            pass
+        print(f"  Backups:         {backup_count}")
+        print(f"  Total Size:      {color_yellow(human_size_local(backup_total))}")
+        if backup_count:
+            print(f"  Oldest / Newest: {oldest_b} / {newest_b}")
+            print(color_dim("  Prune old backups with: ocman --clean-backups --days N"))
+    else:
+        print(f"  Backups:         0")
+        print(f"  Total Size:      {color_yellow('0 B')} (no backups directory)")
+
+    # Optional per-project on-disk breakdown (session-diff bytes are the only figure
+    # exactly attributable to a project; the SQLite DB is one shared file and its bytes
+    # are NOT attributable per project, so we do not report per-project DB size).
+    if getattr(args, "by_project", False):
+        print()
+        print(color_bold("Per-Project Disk Usage (session-diff files):"))
+        print(color_dim("  Note: the SQLite database is a single shared file; its bytes are not"))
+        print(color_dim("  attributable per project. Only session-diff files are shown per project."))
+        rows = _per_project_disk_usage(sqlite3, db_path, storage_dir)
+        if not rows:
+            print("  (no projects / no per-project data)")
+        else:
+            for r in rows:
+                name = r["name"] or r["id"]
+                print(f"  {color_cyan(name)}")
+                print(
+                    f"    Diff files: {r['diff_files']} ({human_size_local(r['diff_bytes'])})"
+                    f" | Sessions: {r['sessions']} | Messages: {r['messages']:,}"
+                    f" | Tokens: {r['tokens']:,}"
+                )
     print(title_bar)
 
 

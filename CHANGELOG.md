@@ -1,5 +1,14 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- **Disk-usage reporting in `ocman info`:** a **Backups (Disk Storage)** section (total size,
+  count, oldest/newest) so backup growth is visible without shell tools, plus an optional
+  per-project breakdown via `ocman info --by-project` (or the `ocman disk` alias) showing
+  exact session-diff bytes and session/message/token counts per project. Per-project DB
+  bytes are intentionally not reported — the SQLite database is a single shared file.
+
 ## [1.0.4] - 2026-07-04
 
 ### Fixed
