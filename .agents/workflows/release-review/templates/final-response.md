@@ -60,6 +60,23 @@ item: how many were must/should/out-of-scope/stale, which were fixed, which were
 reclassified, which were escalated, and what edits were made to keep `TODO.md`
 honest. Reference `todo-reconciliation.md`.
 
+## Pending plans / staged prompts
+
+State loudly whether any pending agent plans (IPDs) or staged prompt files were found
+(`.agents/plans/pending/`, IPDs marked pending/awaiting-approval, `prompts/` staging
+dirs, or status/location mismatches). If any in-scope pending item exists, lead with a
+bold warning line, for example:
+
+**WARNING: 2 pending plan(s)/prompt(s) NOT executed - review before release.**
+
+| Path | Kind (IPD / prompt) | Status | In scope for this release? | Recommended action |
+|---|---|---|---|---|
+|  |  |  |  |  |
+
+If none exist, state explicitly: "No pending plans or staged prompts." Any in-scope
+pending item is a prerequisite/decision that blocks a clean GO (see Final release
+recommendation).
+
 ## Guiding-principles adherence summary
 
 Per-principle verdict against the repository's guiding-principles document (or the
@@ -108,6 +125,12 @@ State whether pushing is recommended, whether permission exists, and what comman
 GO, CONDITIONAL GO, or NO-GO.
 
 Include rationale and blocking IDs if applicable.
+
+If any in-scope pending plan / staged prompt was found (see Pending plans / staged
+prompts above) or any unaddressed `LIVE`/High data-integrity finding remains, repeat the
+loud warning here and state that the recommendation is at most CONDITIONAL GO with those
+items named as explicit prerequisites. Do not issue a clean GO over an un-actioned
+in-scope pending plan.
 
 ## Restart recommendation
 

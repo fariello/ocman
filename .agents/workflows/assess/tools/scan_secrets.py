@@ -372,17 +372,27 @@ def summarize(findings: list[Finding]) -> dict:
             "by_location": by_where}
 
 
-def emit(findings: list[Finding], fmt: str, out, avail: dict[str, bool]) -> None:
+def emit(findings: list[Finding], fmt: str, out, avail: dict[str, bool],
+         skipped_external: bool = False) -> None:
     recs = install_recommendations(avail)
     used = [n for n, p in avail.items() if p]
+    have_mature = bool(used)
     if fmt == "json":
+        if have_mature:
+            note = ("This built-in scanner is a dependency-free safety net. A mature "
+                    "scanner is installed and was run alongside it.")
+        elif skipped_external:
+            note = ("This built-in scanner is a dependency-free safety net. External "
+                    "scanners were skipped (--no-external); none were run this pass.")
+        else:
+            note = ("This built-in scanner is a dependency-free safety net. For production "
+                    "assurance, install and run a mature, actively-maintained scanner too.")
         json.dump({
             "summary": summarize(findings),
             "external_tools": {"available": used,
                                "missing_recommended": [n for n, p in avail.items() if not p],
                                "install": {n: EXTERNAL_TOOLS[n] for n in EXTERNAL_TOOLS if not avail.get(n)}},
-            "note": ("This built-in scanner is a dependency-free safety net. For production "
-                     "assurance, install and run a mature, actively-maintained scanner too."),
+            "note": note,
             "findings": [asdict(f) for f in findings],
         }, out, indent=2)
         out.write("\n")
@@ -408,7 +418,15 @@ def emit(findings: list[Finding], fmt: str, out, avail: dict[str, bool]) -> None
     if fmt != "json":
         msg = ["", "External scanner status (this built-in scanner is a safety net, not a replacement):"]
         msg.append(f"  used: {', '.join(used) if used else 'none'}")
-        if recs:
+        if have_mature:
+            # A mature scanner is present and was run; do not nag to install one. Only
+            # mention any others as optional additional coverage.
+            if recs:
+                msg.append("  optional - additional scanners available for broader coverage:")
+                msg.extend(f"    - {r}" for r in recs)
+        elif skipped_external:
+            msg.append("  external scanners skipped (--no-external); install status not checked this pass.")
+        elif recs:
             msg.append("  RECOMMENDED - install a mature scanner for stronger assurance:")
             msg.extend(f"    - {r}" for r in recs)
         print("\n".join(msg), file=sys.stderr)
@@ -483,7 +501,7 @@ def main() -> int:
 
     out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
     try:
-        emit(findings, args.format, out, avail)
+        emit(findings, args.format, out, avail, skipped_external=args.no_external)
     finally:
         if args.out:
             out.close()

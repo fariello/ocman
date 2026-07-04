@@ -34,6 +34,7 @@ Also discover, in this section:
 
 - **Guiding-principles document(s):** `GUIDING_PRINCIPLES.md`, `PRINCIPLES.md`, `.agents/GUIDING_PRINCIPLES.md`, a "Principles" section in `README.md`/`CONTRIBUTING.md`, or any equivalent referenced by `AGENTS.md`. Record its location and a concise summary of each principle. If none exists, record that the universal fallback principles in `00-run-protocol.md` apply.
 - **Backlog / TODO sources:** `TODO.md`, `TODO`, `TODOS.md`, `BACKLOG.md`, `ROADMAP.md`, `KNOWN_ISSUES.md`, `.agents/TODO.md`, issue-tracker exports, and in-code `TODO`/`FIXME`/`HACK`/`XXX` markers. Inventory each source and roughly how many open items it holds. Do not triage them yet beyond noting obvious release blockers; full triage happens across Sections 2 through 7 and is consolidated in `todo-reconciliation.md`.
+- **Pending agent plans and staged prompts:** implementation plans / IPDs and queued prompt files that were prepared but not yet executed. Check `.agents/plans/pending/` (and any sibling `pending/`-style plan-staging dir), IPDs anywhere whose `Status:` line marks them pending/awaiting-approval/not-executed, `prompts/`/`.agents/prompts/` or similar staging dirs, and any status/location mismatch (a plan in `done/` still marked pending, or vice versa). List each pending plan or staged prompt with its path and apparent status. Do NOT execute any of them. Classify each against this release (in-scope-and-pending, deferred to a later release, or stale/superseded); this list feeds the loud Section 8 Go/No-Go warning per `00-run-protocol.md`.
 - **Project intent and stakeholders:** what outcome/goal the project exists to serve, and who its users, operators, and stakeholders are. This grounds the eight-persona review.
 
 ## Allowed actions
@@ -95,6 +96,7 @@ Do not proceed to Section 2 until all are true (MUST):
 - [ ] `00-run-metadata.md` and `01-repository-inventory.md` are complete enough to guide later review.
 - [ ] `02-execution-plan.md` exists; registers are initialized.
 - [ ] Guiding-principles doc, backlog/TODO sources, and durable-knowledge doc locations are discovered and recorded (or noted absent).
+- [ ] Pending agent plans (IPDs) and staged prompts discovered and inventoried with path + status (or noted absent), for the Section 8 Go/No-Go warning.
 - [ ] `deprecation-candidates.md`, `todo-reconciliation.md`, `guiding-principles-assessment.md`, `persona-review.md` are initialized.
 - [ ] Parallel-audit decision recorded in `05-decisions.md`.
 - [ ] Per-phase report `section-summaries/01-current-state.md` written.

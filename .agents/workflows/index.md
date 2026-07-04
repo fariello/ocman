@@ -1,7 +1,7 @@
 # Agent Workflows
 
-<!-- WORKFLOWS-VERSION: 20260704-01 -->
-Version: `20260704-01` (source of truth: `.agents/workflows/VERSION`). Scheme:
+<!-- WORKFLOWS-VERSION: 20260704-03 -->
+Version: `20260704-03` (source of truth: `.agents/workflows/VERSION`). Scheme:
 `YYYYMMDD-NN` (calendar date plus a same-day sequence). The installer stamps this into
 each target so `/list-workflows` and `setup-repo` can report the installed version.
 
@@ -84,8 +84,8 @@ the convenience of a native `/command` is tool-specific.
 
 | Tool | How to run a workflow |
 |---|---|
-| **OpenCode** | Native `/command`: type e.g. `/release-review`, `/assess-security`, `/setup-repo`. Shims live in `.opencode/commands/`. Arguments: `/assess-performance src/server`. |
-| **Claude Code** | Native `/command` via `.claude/commands/` (works; the repo also has these). Type e.g. `/assess-security`. Arguments supported (`$ARGUMENTS`). |
+| **OpenCode** | Native `/command`: type e.g. `/release-review`, `/assess security`, `/setup-repo`. Shims live in `.opencode/commands/`. The concern is the first argument; add a scope after it, e.g. `/assess performance src/server`. |
+| **Claude Code** | Native `/command` via `.claude/commands/` (works; the repo also has these). Type e.g. `/assess security`. Arguments supported (`$ARGUMENTS`). |
 | **Cursor, Codex, Antigravity, VS Code Copilot, or any other agent** | **No repo-file slash-command mechanism** - use the universal fallback: tell the agent to *read and execute* the workflow body, e.g. "Read and execute `.agents/workflows/assess/assess.md`, applying the lens `.agents/workflows/assess/lenses/security.md`" (or for a non-lens workflow, just its body path, e.g. "Read and execute `.agents/workflows/setup-repo/setup-repo.md`"). The body paths are listed in the manifest above. |
 
 `AGENTS.md` at the repo root points here, so any tool that reads `AGENTS.md` can discover

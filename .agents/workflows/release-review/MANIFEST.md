@@ -28,7 +28,7 @@ Read and execute .agents/workflows/release-review/README.md
 
 `README.md` is the controlling instruction. The agent should read `00-run-protocol.md`, then execute sections `01` through `08` in order. Section `09` (release execution) runs only after a GO/CONDITIONAL GO and explicit user approval.
 
-The review is conducted through eight expert personas (QA/QC, testing/regression, UI/UX, architect, software engineer, power user, novice, stakeholder) and, on every run, reconciles any `TODO.md`/backlog against the release, honors the repository's guiding principles, holds a self-documenting / learn-as-you-go bar, treats memory/resource and live-interaction-surface correctness as first-class, and produces a mandatory per-phase report for each section.
+The review is conducted through eight expert personas (QA/QC, testing/regression, UI/UX, architect, software engineer, power user, novice, stakeholder) and, on every run, reconciles any `TODO.md`/backlog against the release, loudly warns about any pending agent plans (IPDs) or staged prompts that were prepared but not executed, honors the repository's guiding principles, holds a self-documenting / learn-as-you-go bar, treats memory/resource and live-interaction-surface correctness as first-class, and produces a mandatory per-phase report for each section.
 
 ## Slash commands (generated shims)
 
@@ -58,14 +58,14 @@ commands.
 | `00-run-protocol.md` | Global operating protocol, safety rules, ID rules, the Fix Bar, artifacts, TodoWrite use, commit and push policy, and final reporting requirements. |
 | `fix-decision-policy.md` | Canonical fix-decision policy: fix by default; defer only when the Remediation Risk of the fix itself is Medium-High or higher. |
 | `reference.md` | On-demand look-up material kept out of the always-read core: ID type codes, ID examples, schema/data-contract types, CI checks, register statuses. |
-| `01-current-state.md` | Repository inventory, current-state assessment, public contract discovery, drift analysis, and early deprecation signals. |
+| `01-current-state.md` | Repository inventory (incl. pending agent plans / staged prompts), current-state assessment, public contract discovery, drift analysis, and early deprecation signals. |
 | `02-quality-security-edge-cases.md` | Bugs, correctness, security, privacy, error handling, resource handling, reliability, and edge-case audit. |
 | `03-tests-regression.md` | Test coverage, regression protection, fixtures, CI test behavior, and missing critical tests. |
 | `04-docs-specs-examples.md` | Documentation, specification, examples, README, help text, behavior-documentation alignment, and durable cold-start knowledge (intent, architecture, decision rationale). |
 | `05-feature-usability-maintainability.md` | Feature completeness, usability, developer/operator experience, maintainability, guiding-principles adherence, cold-start orientation, and stale-code impact. |
 | `06-compatibility-packaging-release.md` | Compatibility, packaging, build, CI, deployment, versioning, changelog, migration, and release artifacts. |
 | `07-implementation.md` | Consolidated implementation plan and safe, significant-value fixes, including mandatory handling of `LIVE`/High data-integrity findings and `TODO.md` updates. |
-| `08-final-ship-review.md` | Final release readiness assessment, final bug/security/memory sanity audit, eight-persona sign-off, TODO/backlog and guiding-principles reconciliation, validation reconciliation, final report, push/no-push decision, and restart assessment. |
+| `08-final-ship-review.md` | Final release readiness assessment, final bug/security/memory sanity audit, eight-persona sign-off, TODO/backlog and guiding-principles reconciliation, loud pending-plans / staged-prompts warning in the Go/No-Go, validation reconciliation, final report, push/no-push decision, and restart assessment. |
 | `09-release-execution.md` | Project-agnostic post-GO release execution: push, CI verification, artifact build, annotated tagging, publish/deploy (credential-gated), and post-release smoke test. Runs only after a GO/CONDITIONAL GO and explicit user approval. |
 | `templates/execution-plan.md` | Template for the early run execution plan. |
 | `templates/implementation-plan.md` | Template for the implementation plan created after audit sections and before fixes. |

@@ -181,6 +181,19 @@ Many repositories carry a `TODO.md` (or equivalent: `TODO`, `TODOS.md`, `BACKLOG
 4. **Update `TODO.md` itself** in Section 7 when items are completed, become obsolete, or change status - keep it honest. Do **not** use `TODO.md` as a dumping ground to silently defer High-severity findings discovered in this review (see Section 7 non-deferral rule).
 5. Record the full triage in `todo-reconciliation.md` and summarize it in the Section 8 report.
 
+## Pending agent plans and staged prompts (release blocker signal)
+
+Repositories driven by agent workflows often accumulate **planned-but-not-executed work**: implementation plans / IPDs awaiting approval or execution, and staged prompt files queued to be run. These are distinct from `TODO.md` backlog items - they are concrete, often-approved units of work that were prepared and then left un-actioned. Shipping while such plans sit pending frequently means releasing with known, already-planned work deliberately or accidentally skipped. This review must surface them **loudly**, not silently.
+
+1. **Discover** in Section 1 and inventory in `01-repository-inventory.md`. Common locations (check those that exist, do not invent):
+   - `.agents/plans/pending/` (and any sibling `pending/`-style plan staging dir); IPDs anywhere clearly marked pending/awaiting-approval/not-executed by their `Status:` line.
+   - `prompts/`, `.agents/prompts/`, or a similar staging directory holding prompt files queued for execution.
+   - Plans in a `done/`/executed dir whose `Status:` still says pending, or vice versa (a status/location mismatch).
+2. **Do not execute them.** Discovering a pending plan or staged prompt never authorizes running it during the review.
+3. **Classify** each pending plan/prompt against this release: is it work that was expected to ship in this release (a blocker signal), legitimately deferred to a later release, or stale/superseded?
+4. **Surface loudly.** Any pending plan or staged prompt that is not clearly out-of-scope for this release is a WARNING that must appear prominently in the Section 8 Go/No-Go and summary (see `08-final-ship-review.md`). Pending in-scope plans push the recommendation off a clean GO toward CONDITIONAL GO with the pending items named as prerequisites/decisions.
+5. Record the inventory and per-item classification and reflect it in the Section 8 report.
+
 ## Where cross-cutting concerns are performed (ownership map)
 
 Several concerns span the whole review. To avoid both omission and pointless repetition, each has a defined owner section for the substantive work; other sections only contribute incremental findings. Do the substantive work once, in the owner section, and reference it elsewhere.
@@ -189,6 +202,7 @@ Several concerns span the whole review. To avoid both omission and pointless rep
 |---|---|---|---|
 | Guiding principles | Section 1 (locate + summarize) | Section 5 (per-principle adherence) | Section 7 (fix toward), Section 8 (final verdict) |
 | TODO.md / backlog triage | Section 1 (inventory sources) | Section 5 (full triage in `todo-reconciliation.md`), with in-code `TODO`/`FIXME` captured in Section 2 | Section 7 (fix + update `TODO.md`), Section 8 (confirm) |
+| Pending agent plans / staged prompts | Section 1 (inventory pending IPDs, staged prompts, status/location mismatches) | Section 1 (classify against this release) | Section 8 (loud WARNING in Go/No-Go + summary; blocks a clean GO if in-scope) |
 | Self-documenting / learn-as-you-go | - | Sections 4 (docs side) and 5 (behavior side) | Section 7 (fix in-product), Section 8 (assess) |
 | Durable project knowledge / cold-start orientation (`KD`) | Section 1 (locate existing convention) | Sections 4 (intent/architecture/decision docs) and 5 (principles, orientation) | Section 7 (create/update by default), Section 8 (cold-start verdict) |
 | Eight personas | - | Sections 2-6 lead-persona notes; Section 5 all eight | Section 8 (full sign-off) |
@@ -445,7 +459,7 @@ It begins with two tables defined in the template:
 
 The second table must include audit findings that were identified but not implemented, not only actions that were started and left incomplete. It must include any `LIVE`/High live-interaction-surface finding that was not fixed, flagged `LIVE - needs user decision`; such a finding must never be silently moved into `TODO.md` in place of being reported here. Under the Fix Bar, any unaddressed item was deferred because the fix's Remediation Risk is Medium-High or higher; the Reason must name the axis, not effort/cost.
 
-After the two tables, include every remaining section listed in `templates/final-response.md` (summary of changes, Fix Bar summary, validations run, CI assessment, schema validation, deprecated-code, final bug/security/memory sanity audit, TODO/backlog reconciliation, guiding-principles adherence, eight-persona sign-off, self-documenting/learn-as-you-go assessment, documentation/artifact updates, remaining risks, push/no-push decision, GO/CONDITIONAL GO/NO-GO recommendation, restart recommendation, and Section 9 readiness).
+After the two tables, include every remaining section listed in `templates/final-response.md` (summary of changes, Fix Bar summary, validations run, CI assessment, schema validation, deprecated-code, final bug/security/memory sanity audit, TODO/backlog reconciliation, pending plans / staged prompts, guiding-principles adherence, eight-persona sign-off, self-documenting/learn-as-you-go assessment, documentation/artifact updates, remaining risks, push/no-push decision, GO/CONDITIONAL GO/NO-GO recommendation, restart recommendation, and Section 9 readiness).
 
 ## Restart assessment
 

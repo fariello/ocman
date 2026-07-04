@@ -64,6 +64,7 @@ A finding obvious to one persona is often invisible to another. Hunt long and ha
 This review must also, on every run:
 
 - **Reconcile any `TODO.md`/backlog/roadmap and `TODO`/`FIXME` code markers** against the release: triage each item, fix or escalate the ones that should not ship, update `TODO.md` to stay honest, and record the triage in `todo-reconciliation.md`.
+- **Loudly warn about pending agent plans and staged prompts**: discover any prepared-but-unexecuted plans/IPDs (`.agents/plans/pending/`, IPDs marked pending) or queued prompt files, and surface in-scope pending items as a prominent WARNING in the Go/No-Go and summary. Such items block a clean GO until the user decides on them; the review never auto-executes them.
 - **Honor the repository's guiding principles** (`GUIDING_PRINCIPLES.md` or equivalent) as a binding contract, or apply the universal fallback principles in `00-run-protocol.md`; record per-principle adherence in `guiding-principles-assessment.md`.
 - **Hold the self-documenting / learn-as-you-go bar**: file and, where safe, fix anything that forces a user to read the manual to do a basic task.
 - **Ensure durable cold-start knowledge exists**: establish/maintain intent, philosophy, architecture, and design-decision rationale in the project's own docs (respecting its existing convention), so a no-context LLM or engineer can orient. Recover intent from the current conversation as a guarded secondary source; verify material claims with the user or mark them as assumptions.
