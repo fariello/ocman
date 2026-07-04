@@ -532,7 +532,7 @@ class MoveProjectModal(ModalScreen[bool]):
                 self.app.notify("Project successfully moved!", severity="information")
                 self.dismiss(True)
 
-            self.app.call_from_thread(update_success)
+            self.app._safe_call_from_thread(update_success)
 
         except Exception as e:
             # Rollback DB
@@ -560,7 +560,7 @@ class MoveProjectModal(ModalScreen[bool]):
             def update_failure() -> None:
                 self.app.notify(f"Move failed: {e}", severity="error")
 
-            self.app.call_from_thread(update_failure)
+            self.app._safe_call_from_thread(update_failure)
 
 
 class ExportSessionModal(ModalScreen[bool]):
@@ -616,11 +616,11 @@ class ExportSessionModal(ModalScreen[bool]):
             def on_success() -> None:
                 self.app.notify(f"Successfully exported session to {dest_path.name}!", severity="information")
                 self.dismiss(True)
-            self.app.call_from_thread(on_success)
+            self.app._safe_call_from_thread(on_success)
         except Exception as e:
             def on_failure() -> None:
                 self.app.notify(f"Export failed: {e}", severity="error")
-            self.app.call_from_thread(on_failure)
+            self.app._safe_call_from_thread(on_failure)
 
 
 class ImportSessionModal(ModalScreen[bool]):
@@ -717,11 +717,11 @@ class ImportSessionModal(ModalScreen[bool]):
             def on_success() -> None:
                 self.app.notify(f"Successfully imported session as {imported_id}!", severity="information")
                 self.dismiss(True)
-            self.app.call_from_thread(on_success)
+            self.app._safe_call_from_thread(on_success)
         except Exception as e:
             def on_failure() -> None:
                 self.app.notify(f"Import failed: {e}", severity="error")
-            self.app.call_from_thread(on_failure)
+            self.app._safe_call_from_thread(on_failure)
 
 
 class PostExecutionSummaryModal(ModalScreen[None]):
@@ -787,6 +787,9 @@ class OrsessionApp(App):
         self.export_lock = threading.Lock()
         self.compaction_running = False
         self.config_loaded = False
+        # Set once the app begins tearing down, so background worker threads that
+        # outlive the app do not try to marshal callbacks into a stopped event loop.
+        self._shutting_down = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -1116,10 +1119,10 @@ class OrsessionApp(App):
                     self.current_turns = turns
                     
                     # Ask UI thread to render transcript
-                    self.call_from_thread(self.render_current_transcript)
+                    self._safe_call_from_thread(self.render_current_transcript)
                 except Exception as e:
-                    self.call_from_thread(self.app.notify, f"Export failed: {e}", severity="error")
-                    self.call_from_thread(self.query_one("#transcript-md", Markdown).update, f"**Error loading transcript:** {e}")
+                    self._safe_call_from_thread(self.app.notify, f"Export failed: {e}", severity="error")
+                    self._safe_call_from_thread(self.query_one("#transcript-md", Markdown).update, f"**Error loading transcript:** {e}")
 
         threading.Thread(target=export_worker, daemon=True).start()
 
@@ -1306,7 +1309,7 @@ class OrsessionApp(App):
                 models = extract_models_from_config(config)
                 model_info = resolve_model(models, model_spec)
 
-                self.call_from_thread(status_lbl.update, f"Calling completions API ({model_info.name})...")
+                self._safe_call_from_thread(status_lbl.update, f"Calling completions API ({model_info.name})...")
                 
                 # Execute API Call
                 result = call_compaction_api(model_info, prompt_content)
@@ -1324,12 +1327,12 @@ class OrsessionApp(App):
                 self.log_compaction_to_history(model_spec, dest_path)
 
                 # Update UI
-                self.call_from_thread(self.app.notify, f"Compaction completed successfully! Written to {dest_path}", severity="information")
-                self.call_from_thread(status_lbl.update, f"Success! Written to {dest_path.name}")
-                self.call_from_thread(self.load_audit_trail)
+                self._safe_call_from_thread(self.app.notify, f"Compaction completed successfully! Written to {dest_path}", severity="information")
+                self._safe_call_from_thread(status_lbl.update, f"Success! Written to {dest_path.name}")
+                self._safe_call_from_thread(self.load_audit_trail)
             except Exception as e:
-                self.call_from_thread(self.app.notify, f"Compaction failed: {e}", severity="error")
-                self.call_from_thread(status_lbl.update, f"Failed: {e}")
+                self._safe_call_from_thread(self.app.notify, f"Compaction failed: {e}", severity="error")
+                self._safe_call_from_thread(status_lbl.update, f"Failed: {e}")
             finally:
                 self.compaction_running = False
 
@@ -1452,9 +1455,9 @@ class OrsessionApp(App):
                 # Refresh trees & stats
                 self.action_refresh_data()
 
-            self.call_from_thread(update_ui)
+            self._safe_call_from_thread(update_ui)
         except Exception as e:
-            self.call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
+            self._safe_call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
 
     def confirm_and_delete_project(self) -> None:
         """Spawn safety check confirmation modal overlay before project deletion."""
@@ -1563,9 +1566,9 @@ class OrsessionApp(App):
                 # Refresh trees & stats
                 self.action_refresh_data()
 
-            self.call_from_thread(update_ui)
+            self._safe_call_from_thread(update_ui)
         except Exception as e:
-            self.call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
+            self._safe_call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
 
     def load_tui_config(self) -> None:
         """Load TOML configuration settings into input widgets."""
@@ -1674,7 +1677,28 @@ class OrsessionApp(App):
         if getattr(self, "config_loaded", False):
             self.save_tui_config(notify=False)
 
+    def _safe_call_from_thread(self, callback, *args, **kwargs) -> None:
+        """Marshal ``callback`` onto the UI thread, tolerating a stopped app.
+
+        Background worker threads are daemonic and can outlive the app (for
+        example, an export or delete worker still running when the user quits or
+        starts another operation). Once the app has stopped, ``call_from_thread``
+        raises ``RuntimeError("App is not running")``. Such late callbacks are
+        pure UI updates with nothing left to update, so they are safely dropped
+        rather than allowed to crash the worker thread with an unhandled
+        traceback.
+        """
+        if getattr(self, "_shutting_down", False):
+            return
+        try:
+            self.call_from_thread(callback, *args, **kwargs)
+        except RuntimeError:
+            # App already stopped between the check above and the call, or the
+            # worker outlived the event loop. Nothing to update; drop the callback.
+            pass
+
     def on_unmount(self) -> None:
+        self._shutting_down = True
         # Auto-save before quitting
         if getattr(self, "config_loaded", False):
             with contextlib.suppress(Exception):

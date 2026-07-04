@@ -117,6 +117,28 @@ def tui_db(tmp_path, monkeypatch):
     ocman.OPENCODE_HISTORY_PATH = orig_history_path
 
 
+def test_safe_call_from_thread_swallows_stopped_app():
+    """Regression (20260703-134213-S2-B2): background workers that outlive the app
+    must not crash when marshalling a callback into a stopped event loop."""
+    app = OrsessionApp()
+
+    # 1. When shutting down, the callback is dropped and nothing is called.
+    app._shutting_down = True
+    calls = []
+    app._safe_call_from_thread(lambda: calls.append("x"))
+    assert calls == []
+
+    # 2. When call_from_thread raises "App is not running", it is swallowed.
+    app._shutting_down = False
+
+    def boom(*_a, **_k):
+        raise RuntimeError("App is not running")
+
+    app.call_from_thread = boom  # type: ignore[assignment]
+    # Must not raise:
+    app._safe_call_from_thread(lambda: calls.append("y"))
+
+
 @pytest.mark.anyio
 async def test_tui_app_startup(tui_db):
     """Test that OrsessionApp starts up without errors and populates the sidebar and workspace."""

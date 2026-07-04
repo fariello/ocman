@@ -44,7 +44,7 @@ class TextualLogRedirector(io.TextIOBase):
             clean_s = clean_s.replace("\x1b[33m", "").replace("\x1b[31m", "")
             clean_s = clean_s.replace("\x1b[36m", "")
             # Ensure thread safety when writing to widget from background thread
-            self.log_widget.app.call_from_thread(self.log_widget.write, clean_s.rstrip("\n"))
+            self.log_widget.app._safe_call_from_thread(self.log_widget.write, clean_s.rstrip("\n"))
         return len(s)
 
     def flush(self) -> None:
@@ -389,10 +389,10 @@ class DatabaseAdminWidget(Static):
                     clean_orphans=sweep_orphans,
                     verbosity=0
                 )
-            self.app.call_from_thread(self.app.notify, "Prune operation finished.", severity="information")
+            self.app._safe_call_from_thread(self.app.notify, "Prune operation finished.", severity="information")
         except Exception as e:
-            log_widget.app.call_from_thread(log_widget.write, f"ERROR: {e}")
-            self.app.call_from_thread(self.app.notify, f"Cleanup failed: {e}", severity="error")
+            log_widget.app._safe_call_from_thread(log_widget.write, f"ERROR: {e}")
+            self.app._safe_call_from_thread(self.app.notify, f"Cleanup failed: {e}", severity="error")
         finally:
             builtins.input = original_input
 
@@ -401,7 +401,7 @@ class DatabaseAdminWidget(Static):
             self.refresh_metrics()
             self.app.post_message(self.app.RefreshSidebar())
 
-        self.app.call_from_thread(update_ui)
+        self.app._safe_call_from_thread(update_ui)
 
     def run_backup_operation(self) -> None:
         """Run system backup in a background worker thread."""
@@ -416,12 +416,12 @@ class DatabaseAdminWidget(Static):
             try:
                 with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
                     dest = cli_backup()
-                self.app.call_from_thread(self.app.notify, f"Backup created: {dest.name}", severity="information")
+                self.app._safe_call_from_thread(self.app.notify, f"Backup created: {dest.name}", severity="information")
             except Exception as e:
-                log_widget.app.call_from_thread(log_widget.write, f"ERROR: {e}")
-                self.app.call_from_thread(self.app.notify, f"Backup failed: {e}", severity="error")
+                log_widget.app._safe_call_from_thread(log_widget.write, f"ERROR: {e}")
+                self.app._safe_call_from_thread(self.app.notify, f"Backup failed: {e}", severity="error")
             finally:
-                self.app.call_from_thread(self.refresh_metrics)
+                self.app._safe_call_from_thread(self.refresh_metrics)
 
         self.run_worker(do_backup, thread=True)
 
@@ -441,16 +441,16 @@ class DatabaseAdminWidget(Static):
             try:
                 with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
                     cli_restore(path)
-                self.app.call_from_thread(self.app.notify, "System restoration completed.", severity="information")
+                self.app._safe_call_from_thread(self.app.notify, "System restoration completed.", severity="information")
             except Exception as e:
-                log_widget.app.call_from_thread(log_widget.write, f"ERROR: {e}")
-                self.app.call_from_thread(self.app.notify, f"Restoration failed: {e}", severity="error")
+                log_widget.app._safe_call_from_thread(log_widget.write, f"ERROR: {e}")
+                self.app._safe_call_from_thread(self.app.notify, f"Restoration failed: {e}", severity="error")
             finally:
                 def update_ui():
                     self.refresh_metrics()
                     self.app.post_message(self.app.RefreshSidebar())
                     with contextlib.suppress(Exception):
                         self.app.load_tui_config()
-                self.app.call_from_thread(update_ui)
+                self.app._safe_call_from_thread(update_ui)
 
         self.run_worker(do_restore, thread=True)
