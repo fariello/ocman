@@ -1,0 +1,12 @@
+# 06 Commands
+
+| # | Command | Purpose | Result |
+|---|---|---|---|
+| 1 | git rev-parse/status/log/remote | Baseline | main @ 4b34802; clean; 1 ahead of origin; remote fariello/ocman |
+| 2 | git log v1.0.3..HEAD | Identify delta | 3 product commits (280cfc8, 428aaf7, 2cfd3d2) + docs/plan commits |
+| 3 | git show --stat b5b902c | Check framework update | tooling only (agent-workflows 20260704-01); no product code |
+| 4 | PYTHONPATH=. pytest | Baseline test state | 91 passed, 2 skipped |
+| 5 | grep __version__ / TODO markers | Version sources + backlog | 1.0.3 in ocman.py/pyproject/ocman_tui fallback; no TODO/FIXME in product |
+| 6 | git diff --stat v1.0.3..HEAD | Delta size | +979/-127 across ocman.py, ocman_tui, tests, docs |
+
+Working dir: /home/gfariello/VC/ocman. No secrets in output.
