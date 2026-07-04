@@ -4,7 +4,7 @@
 - Concern: performance
 - Scope: whole project (ocman.py CLI + ocman_tui), emphasis on the export/import,
   move, recovery/compaction, and history hot paths
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (approved by user 2026-07-04; implemented — see Execution outcome below)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -117,6 +117,35 @@ mapping; clarified the PERF-3 SQL scan is a candidate pre-filter with the author
 match kept in Python (safe on non-canonical stored paths); marked the benchmark as
 informational-only (never a CI gate); specified PERF-4 trims on save only (never on read).
 Verdict: APPROVE WITH REVISIONS APPLIED.
+
+## Execution outcome (2026-07-04)
+
+Executed with explicit user approval. All steps completed; PERF-2 remained deferred as
+planned. One in-flight scope adjustment was confirmed with the user:
+
+- **PERF-3:** the SQL `LIKE` candidate pre-filter was **dropped** (not implemented)
+  because it cannot safely reproduce the current `Path.resolve()`-based matching for
+  non-canonical stored paths (PR-5 tension). Implemented the behavior-preserving part:
+  a shared `_rebased_dir` helper across all three functions, resolving prefixes once.
+  The per-row `resolve()` is retained (it is the correctness mechanism). This deferral
+  is Medium-High Remediation Risk on the **functionality** axis.
+
+Results:
+- **PERF-1:** `_remap_ids_in_json` structural remap replaces the substring-replace loop.
+  Measured ~**26× faster** per diff (6.73 ms → 0.26 ms, 300-session id_map) and fixes a
+  latent correctness bug (substring corruption of unrelated tokens). Regression test
+  `test_import_session_collision_remaps_ids_in_diffs_no_substring_corruption` added
+  (fails on old code, passes now).
+- **PERF-3:** shared `_rebased_dir` helper; `test_move.py` green + new non-canonical-path
+  characterization test.
+- **PERF-4:** `history_max_runs` (default 500), trim-on-save only; two tests added.
+- **PERF-5:** per-run `mkdtemp` export staging dir + `rmtree`; leftover-temp test added.
+- **PERF-6:** `tests/test_perf.py` opt-in benchmarks (`OCMAN_BENCHMARK=1`), never a CI gate.
+- Bonus latent fix: `save_ocman_config` now merges over defaults (partial-config saves
+  can't break when new keys are added — surfaced by the TUI config-tab test).
+
+Validation: `PYTHONPATH=. pytest` → 64 passed, 2 skipped. Docs synced (README config
+template, CHANGELOG). Commit: see git history (feat/perf + test commits).
 
 ## Approval and execution gate
 
