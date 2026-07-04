@@ -58,10 +58,15 @@ Two small, pure pieces + one thin I/O seam, all in `ocman.py` (no new module/pac
    - `action_verb` (e.g. "delete", "prune", "overwrite"), `noun` ("backups", "sessions"),
      `irreversible: bool`.
 2. **A pure renderer** `render_destructive_preview(preview) -> str`: builds the color-independent
-   table — a leading `DELETE`(red)/`KEEP`(green) status word per item (words carry meaning; color is
-   enhancement), plain-text padded before coloring; totals; and a **forceful warning when
-   `keep == []` and `remove != []`** ("this will <verb> ALL <N> <noun> — nothing will remain"). Pure
-   (returns a string) so both CLI and TUI can use it.
+   table with **column headers** (e.g. `Item` / `Size` / `Detail` / `Action`, adapted to the op's noun —
+   for backups: `Backup` / `Size` / `Modified` / `Action`) and a separator rule; per item a row with the
+   label (left), **size right-aligned** in its column, detail, and an `Action` cell holding the literal
+   `DELETE`(red)/`KEEP`(green) word (words carry meaning; color is enhancement). Column widths are computed
+   from plain-text content and **plain text is padded before coloring** so alignment holds with color on/off.
+   Then totals and a **forceful warning when `keep == []` and `remove != []`** ("this will <verb> ALL
+   <N> <noun> — nothing will remain"). Size column is right-aligned; header labels are provided by the caller
+   (via `noun`/column config) so different ops can label the detail column appropriately. Pure (returns a
+   string) so both CLI and TUI can use it.
 3. **A confirm seam** `confirm_destructive(preview, *, dry_run, assume_yes, interactive=True) -> bool`:
    prints the rendered preview; if `dry_run` → print "(dry run)" and return False (no action); if
    `assume_yes`/`not interactive` → return True (bypass, as `--force`/`confirm=False` do today);
@@ -73,7 +78,7 @@ Two small, pure pieces + one thin I/O seam, all in `ocman.py` (no new module/pac
 | Step | Source IDs | Change | Files | Rem. Risk | Validation |
 |------|-----------|--------|-------|-----------|------------|
 | 1 | ARCH-7 | **Characterization tests first** for the current confirm behavior of the four ops: typed `yes` proceeds; any other input / EOF / KeyboardInterrupt cancels; `dry_run` never prompts nor deletes; `force`/`confirm=False` bypasses. Green before any refactor. | tests/ | Low | New tests pass against current code |
-| 2 | ARCH-3, ARCH-6 | Add the `PreviewItem`/`DestructivePreview` dataclass + `render_destructive_preview()` (pure) + `confirm_destructive()` (I/O seam) in `ocman.py`. Color-independent DELETE/KEEP; forceful all-affected warning; pad-before-color. No config-driven rendering; no new dependency. | ocman.py | Low | Unit tests: renderer output (DELETE per remove, KEEP per keep, labels + alignment with color off); all-affected warning iff keep==[]; confirm seam returns True only on typed 'yes', respects dry_run/assume_yes |
+| 2 | ARCH-3, ARCH-6 | Add the `PreviewItem`/`DestructivePreview` dataclass + `render_destructive_preview()` (pure) + `confirm_destructive()` (I/O seam) in `ocman.py`. Column **headers** + separator; **Size column right-aligned**; color-independent DELETE/KEEP `Action` column; forceful all-affected warning; pad-before-color. No config-driven rendering; no new dependency. | ocman.py | Low | Unit tests (color forced off): header row present; Size right-aligned (shared right edge); DELETE per remove, KEEP per keep; all-affected warning iff keep==[]; confirm seam returns True only on typed 'yes', respects dry_run/assume_yes |
 | 3 | ARCH-1, ARCH-8 | **First adopter — `cli_clean_backups`:** build a `DestructivePreview` (remove=old backups, keep=retained), call `render_destructive_preview` + `confirm_destructive`. This realizes the clean-backups KEEP/DELETE request through the shared helper (supersedes the bespoke renderer in the clean-backups IPD; cross-reference it). | ocman.py:7224-7331 | Low | Characterization test (step 1) still green; clean-backups shows KEEP/DELETE + all-deleted warning |
 | 4 | ARCH-1, ARCH-2, ARCH-5 | Migrate the other three CLI confirmations to `confirm_destructive` **one at a time**, each behind its own characterization test: delete-session (4705-4714), delete-project (4960-4967), clean-orphans prune (6074-6079). Keep each op owning WHAT to delete; only the confirm/preview I/O moves to the helper. | ocman.py | Low | Per-op characterization tests green before+after each migration |
 | 5 | ARCH-2 | Bring `--clear-history` under the helper: add a `confirm_destructive` gate ("erase all N runs and reset grand totals"), currently unconfirmed. | ocman.py:7607-7624 | Low | Test: non-'yes' cancels; 'yes' clears; dry-run/force respected if applicable |

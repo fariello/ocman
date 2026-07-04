@@ -38,13 +38,15 @@ rollback safety would remain). Distinction must survive without color.
 | CB-6 | Low | Medium (complexity) | power user | Listing ALL backups could bury DELETE rows at scale | behavioral |
 | CB-7 | Low | Low | QA | Dry-run should show the same annotated view + warning | ocman.py:7283-7285 |
 | CB-8 | Low | Low | accessibility | Must not rely on color alone (color-blind / no-color terminals) | new output |
+| CB-9 | Low | Low | novice / UI-UX | No column headers; the reader must infer that the fields are name/size/date. Add a header row: `Backup`, `Size`, `Created`/`Modified`, `Action`. | ocman.py:7263-7278 (no header printed) |
+| CB-10 | Low | Low | UI-UX | Size column is left-aligned (`{human_size_local(size):<10}`), so numbers don't line up by magnitude (e.g. `56.00 KB` vs `4.43 GB`). Right-align the Size column. | ocman.py:7278 |
 
 ## Proposed changes (ordered, validatable)
 
 | Step | Source IDs | Change | Files | Rem. Risk | Validation |
 |------|-----------|--------|-------|-----------|------------|
 | 1 | CB-4 | In the single scan pass, collect **both** `to_delete` and `to_keep` lists of `(item, mtime, size)`. Compute size once per item here (reused for both display and reclaim total) rather than re-walking dirs later. | ocman.py:7239-7256 | Low | Unit test: given a temp backup dir with mixed mtimes, the two lists partition correctly at the cutoff |
-| 2 | CB-1, CB-8, CB-5 | Render an annotated table of **all** backups: a leading fixed-width status column with the literal word `DELETE` (red) or `KEEP` (green), then name / size / modified. **Pad the plain-text fields before applying color** so alignment holds with color on/off. The words DELETE/KEEP carry the meaning; color is enhancement only (CB-8). Sort DELETE rows first (oldest→newest), then KEEP rows. | ocman.py:7262-7281 | Low | Test: output contains a DELETE row per doomed item and a KEEP row per retained item; assert alignment/labels with color forced off |
+| 2 | CB-1, CB-8, CB-5, CB-9, CB-10 | Render an annotated table of **all** backups with **column headers** `Backup`, `Size`, `Created`/`Modified` (per CB-3), `Action` (CB-9) and a separator rule. Each row: name (left-aligned), **size right-aligned** in its column (CB-10), date, and an `Action` cell with the literal word `DELETE` (red) or `KEEP` (green). Compute each column's width from the plain-text content, then **pad plain text before applying color** so alignment holds with color on/off (CB-5); the DELETE/KEEP words carry meaning, color is enhancement only (CB-8). Sort DELETE rows first (oldest→newest), then KEEP rows. | ocman.py:7262-7281 | Low | Test (color forced off): a header row with `Backup`/`Size`/`Action` is present; the Size column is right-aligned (values share a right edge); a DELETE row per doomed item and a KEEP row per retained item |
 | 3 | CB-6 | Always list DELETE rows in full. For KEEP rows, list them in full up to a threshold (e.g. 20); beyond that, print the first few then `… and N more kept` — unless `-v`, which lists all. Keeps the actionable DELETE signal from being buried. | ocman.py (render) | Low | Test: with > threshold keeps, output summarizes; with `-v`, all keeps shown |
 | 4 | CB-2 | After the table, compute `kept = len(to_keep)`. If `kept == 0` and `len(to_delete) >= 1`, print a prominent red block: `WARNING: this will delete ALL <N> backups — NO rollback backups will remain.` Otherwise print the normal `N to delete, M kept` summary + reclaim size. | ocman.py:7280-7281 | Low | Test: all-old set → ALL-backups warning present; partial set → warning absent, "M kept" shown |
 | 5 | CB-3 | Header/summary: keep the day count but also show the concrete cutoff timestamp (already computed as `cutoff_time`) e.g. `Deleting backups modified before <cutoff ts> (older than <days> days)`. Relabel the per-row `Created:` → `Modified:` (it is `st_mtime`). | ocman.py:7263, 7277 | Low | Test: header shows cutoff ts; row label is "Modified" |
@@ -68,10 +70,11 @@ rollback safety would remain). Distinction must survive without color.
 
 - `PYTHONPATH=. pytest` stays green + new unit tests (seed a temp backup dir with fixed mtimes/sizes;
   monkeypatch `default_backup_dir` and `input`): partition correctness (step 1); annotated table shows
-  DELETE per doomed + KEEP per retained with correct labels and alignment when color is forced off
-  (steps 2/5); ALL-backups warning present iff kept==0 (step 4); KEEP summarization past threshold and
-  full under `-v` (step 3); dry-run shows table+warning and deletes nothing (step 6). Reuse/extend the
-  existing `test_clean_backups` fixture.
+  a **header row** (`Backup`/`Size`/`Modified`/`Action`, CB-9), the **Size column right-aligned** (values
+  share a right edge, CB-10), DELETE per doomed + KEEP per retained with correct labels and alignment when
+  color is forced off (steps 2/5); ALL-backups warning present iff kept==0 (step 4); KEEP summarization past
+  threshold and full under `-v` (step 3); dry-run shows table+warning and deletes nothing (step 6).
+  Reuse/extend the existing `test_clean_backups` fixture.
 - Determinism: force NO_COLOR (or call the color helpers' no-color path) in assertions so tests match
   plain text, independent of terminal.
 
