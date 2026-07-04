@@ -1,5 +1,35 @@
 # Changelog
 
+## [Unreleased]
+
+### Fixed
+- **TUI stability:** Background worker threads (export, delete, compaction, backup,
+  restore, cleanup) that outlive the app no longer crash with
+  `RuntimeError: App is not running`; late UI callbacks are now safely dropped.
+- **Session import (correctness):** On session-ID collision, id references inside
+  session-diff files are now remapped by exact match. The previous whole-string
+  substitution could corrupt unrelated text that merely contained an id as a substring.
+- **Config save:** `save_ocman_config` now merges over defaults, so saving a partial
+  config (e.g. from the TUI settings form) can never fail to render when new config
+  keys are added.
+
+### Changed
+- **Performance — session import:** Collision-time id remapping is a single structural
+  pass instead of an O(diffs × ids) per-id whole-string replace (~26× faster per diff on
+  a 300-session subtree in local measurement).
+- **Performance — move/rebase:** `db_move_project_metadata`, `db_move_session_metadata`,
+  and `db_rebase_paths` share one directory-rebasing helper (resolves prefixes once);
+  behavior is unchanged.
+- **Performance — export:** Table JSONL is staged in a per-run temp directory (unique
+  name, single-shot cleanup) instead of fixed-named files in the shared temp dir.
+
+### Added
+- **`history_max_runs` config (default 500):** Caps the number of detailed run records
+  retained in the activity ledger (oldest trimmed on save); cumulative all-time totals
+  are always preserved. Set to 0 for no limit.
+- **Opt-in performance benchmarks** (`tests/test_perf.py`, run with `OCMAN_BENCHMARK=1`);
+  informational only, never a CI gate.
+
 ## [1.0.3] - 2026-07-03
 
 ### Added

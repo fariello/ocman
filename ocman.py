@@ -233,6 +233,12 @@ default_backup_dir = {default_backup_dir}
 # Default: 5
 default_retention_days = {default_retention_days}
 
+# Maximum number of detailed run records kept in the activity history ledger.
+# Cumulative all-time totals are always preserved; only the per-run detail list is
+# capped (oldest trimmed) to bound the history file size. Set to 0 for no limit.
+# Default: 500
+history_max_runs = {history_max_runs}
+
 # Keep temporary exported JSON files in the output directory (true/false).
 # Default: false
 keep_temp = {keep_temp}
@@ -253,6 +259,7 @@ DEFAULT_CONFIG = {
     "default_compaction_model": "",
     "default_backup_dir": str(Path.home() / ".local" / "share" / "opencode" / "backups"),
     "default_retention_days": 5,
+    "history_max_runs": 500,
     "keep_temp": False,
     "include_tools": False,
     "all_roles": False,
@@ -311,9 +318,14 @@ def save_ocman_config(config_dict: dict, config_path: Path = None) -> None:
     if config_path is None:
         config_path = OCMAN_CONFIG_PATH
     config_path.parent.mkdir(parents=True, exist_ok=True)
+    # Merge over defaults so every template placeholder is always present, even when a
+    # caller (e.g. the TUI config form) passes only a subset of keys. This keeps the
+    # template render from failing when new config keys are added.
+    merged = dict(DEFAULT_CONFIG)
+    merged.update(config_dict)
     formatted_dict = {}
     home_str = str(Path.home())
-    for key, val in config_dict.items():
+    for key, val in merged.items():
         if key in PATH_KEYS and isinstance(val, str) and val.startswith(home_str):
             val = "~" + val[len(home_str):]
         if isinstance(val, bool):
@@ -5200,6 +5212,33 @@ def db_find_session(session_id: str) -> tuple[str, str, str] | None:
             conn.close()
 
 
+def _rebased_dir(stored_dir: str, old_prefix_abs: str, new_prefix_abs: str) -> str | None:
+    """Return the rebased directory for ``stored_dir`` if it is at or under the old prefix.
+
+    ``old_prefix_abs`` and ``new_prefix_abs`` must already be resolved absolute paths
+    (resolved once by the caller, not per row). The stored directory is resolved for the
+    comparison so canonicalization (``..``, symlinks, trailing slashes) is honored,
+    preserving the historical matching semantics. Returns:
+
+    - ``new_prefix_abs`` when the stored dir equals the old prefix,
+    - ``<new_prefix>/<relative>`` when the stored dir is nested under the old prefix,
+    - ``None`` when the stored dir is unrelated (caller should skip it) or on error.
+    """
+    if not stored_dir:
+        return None
+    try:
+        s_dir_abs = str(Path(stored_dir).expanduser().resolve())
+        if s_dir_abs == old_prefix_abs:
+            return new_prefix_abs
+        try:
+            relative = Path(s_dir_abs).relative_to(Path(old_prefix_abs))
+        except ValueError:
+            return None
+        return str(Path(new_prefix_abs) / relative)
+    except Exception:
+        return None
+
+
 def db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: str) -> None:
     """Update project worktree and rewrite nested session directory prefixes in a transaction."""
     sqlite3 = _get_sqlite()
@@ -5227,20 +5266,9 @@ def db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: s
         cursor.execute("SELECT id, directory FROM session WHERE project_id = ?", (project_id,))
         sessions = cursor.fetchall()
         for s_id, s_dir in sessions:
-            if s_dir:
-                try:
-                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
-                    if s_dir_abs == old_worktree_abs:
-                        updated_dir = new_worktree_abs
-                    else:
-                        try:
-                            relative = Path(s_dir_abs).relative_to(Path(old_worktree_abs))
-                            updated_dir = str(Path(new_worktree_abs) / relative)
-                        except ValueError:
-                            continue
-                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
-                except Exception:
-                    pass
+            updated_dir = _rebased_dir(s_dir, old_worktree_abs, new_worktree_abs)
+            if updated_dir is not None:
+                cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
 
         conn.commit()
     except Exception as e:
@@ -5287,20 +5315,9 @@ def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> Non
         for s_id, s_dir in all_sessions:
             if s_id == session_id:
                 continue
-            if s_dir:
-                try:
-                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
-                    if s_dir_abs == old_dir_abs:
-                        updated_dir = new_dir_abs
-                    else:
-                        try:
-                            relative = Path(s_dir_abs).relative_to(Path(old_dir_abs))
-                            updated_dir = str(Path(new_dir_abs) / relative)
-                        except ValueError:
-                            continue
-                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
-                except Exception:
-                    pass
+            updated_dir = _rebased_dir(s_dir, old_dir_abs, new_dir_abs)
+            if updated_dir is not None:
+                cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
 
         conn.commit()
     except Exception as e:
@@ -5343,41 +5360,19 @@ def db_rebase_paths(old_prefix: str, new_prefix: str) -> dict[str, int]:
         cursor.execute("SELECT id, worktree FROM project")
         projects = cursor.fetchall()
         for p_id, p_worktree in projects:
-            if p_worktree:
-                try:
-                    p_worktree_abs = str(Path(p_worktree).expanduser().resolve())
-                    if p_worktree_abs == old_prefix_abs:
-                        updated_worktree = new_prefix_abs
-                    else:
-                        try:
-                            relative = Path(p_worktree_abs).relative_to(Path(old_prefix_abs))
-                            updated_worktree = str(Path(new_prefix_abs) / relative)
-                        except ValueError:
-                            continue
-                    cursor.execute("UPDATE project SET worktree = ? WHERE id = ?", (updated_worktree, p_id))
-                    stats["projects_updated"] += 1
-                except Exception:
-                    pass
+            updated_worktree = _rebased_dir(p_worktree, old_prefix_abs, new_prefix_abs)
+            if updated_worktree is not None:
+                cursor.execute("UPDATE project SET worktree = ? WHERE id = ?", (updated_worktree, p_id))
+                stats["projects_updated"] += 1
 
         # Update session directories
         cursor.execute("SELECT id, directory FROM session")
         sessions = cursor.fetchall()
         for s_id, s_dir in sessions:
-            if s_dir:
-                try:
-                    s_dir_abs = str(Path(s_dir).expanduser().resolve())
-                    if s_dir_abs == old_prefix_abs:
-                        updated_dir = new_prefix_abs
-                    else:
-                        try:
-                            relative = Path(s_dir_abs).relative_to(Path(old_prefix_abs))
-                            updated_dir = str(Path(new_prefix_abs) / relative)
-                        except ValueError:
-                            continue
-                    cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
-                    stats["sessions_updated"] += 1
-                except Exception:
-                    pass
+            updated_dir = _rebased_dir(s_dir, old_prefix_abs, new_prefix_abs)
+            if updated_dir is not None:
+                cursor.execute("UPDATE session SET directory = ? WHERE id = ?", (updated_dir, s_id))
+                stats["sessions_updated"] += 1
 
         conn.commit()
         return stats
@@ -5487,7 +5482,11 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
             # Query and write each table to a temporary JSONL file in batches, then add to ZIP.
             # The connection is wrapped in try/finally so it is always closed, including on the
             # error path (previously it was closed only on success, leaking a handle on failure).
+            # Table JSONL is staged in a per-run temp directory (unique name, single-shot
+            # cleanup) rather than fixed-named files in the shared temp dir, so concurrent
+            # exports can't collide and nothing is left behind on error.
             conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            export_tmp_dir = Path(tempfile.mkdtemp(prefix="ocman-export-"))
             try:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
@@ -5501,29 +5500,23 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
                     # Query in batches of 1000 to keep memory flat
                     cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
 
-                    temp_file = Path(tempfile.gettempdir()) / f"ocman_export_{table}_{session_id}.jsonl"
-                    try:
-                        row_count = 0
-                        with open(temp_file, "w", encoding="utf-8") as f:
-                            while True:
-                                rows = cursor.fetchmany(1000)
-                                if not rows:
-                                    break
-                                for row in rows:
-                                    f.write(json.dumps(dict(row)) + "\n")
-                                    row_count += 1
+                    temp_file = export_tmp_dir / f"{table}.jsonl"
+                    row_count = 0
+                    with open(temp_file, "w", encoding="utf-8") as f:
+                        while True:
+                            rows = cursor.fetchmany(1000)
+                            if not rows:
+                                break
+                            for row in rows:
+                                f.write(json.dumps(dict(row)) + "\n")
+                                row_count += 1
 
-                        zipf.write(temp_file, f"db_data/{table}.jsonl")
-                        if progress_callback:
-                            progress_callback(f"    -> Exported {row_count} rows.")
-                    finally:
-                        if temp_file.exists():
-                            try:
-                                temp_file.unlink()
-                            except Exception:
-                                pass
+                    zipf.write(temp_file, f"db_data/{table}.jsonl")
+                    if progress_callback:
+                        progress_callback(f"    -> Exported {row_count} rows.")
             finally:
                 conn.close()
+                shutil.rmtree(export_tmp_dir, ignore_errors=True)
 
             # Write storage diff files
             if progress_callback:
@@ -5538,6 +5531,30 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
                 progress_callback(f"    -> Packed {diff_count} diff file(s).")
     except Exception as e:
         raise RecoveryError(f"Failed to write export ZIP bundle: {e}")
+
+
+def _remap_ids_in_json(data: Any, id_map: dict[str, str]) -> Any:
+    """Recursively remap session ids inside a decoded JSON structure by EXACT match.
+
+    Walks dicts/lists and replaces any string that is exactly an old id (dict keys and
+    values alike) with its mapped new id. Strings that merely *contain* an old id as a
+    substring are left untouched.
+
+    This replaces an older approach that serialized the whole structure and ran
+    ``str.replace(old_id, new_id)`` for every id: that was O(nodes x ids x size) and,
+    worse, corrupted any token that merely contained an id as a substring (e.g. a longer
+    id, or unrelated text). This single structural pass is both faster and correct.
+    """
+    if isinstance(data, dict):
+        return {
+            (id_map.get(k, k) if isinstance(k, str) else k): _remap_ids_in_json(v, id_map)
+            for k, v in data.items()
+        }
+    if isinstance(data, list):
+        return [_remap_ids_in_json(item, id_map) for item in data]
+    if isinstance(data, str):
+        return id_map.get(data, data)
+    return data
 
 
 def extract_and_import_session(
@@ -5746,13 +5763,10 @@ def extract_and_import_session(
                 zip_member = f"session_diffs/{old_id}.json"
                 try:
                     diff_data = json.loads(zipf.read(zip_member).decode("utf-8"))
-                    # Rewrite session ID references inside JSON structure if colliding
+                    # Rewrite session ID references inside JSON structure if colliding.
+                    # Exact-id structural remap (single pass); does not corrupt substrings.
                     if collision:
-                        # Perform recursive string substitution in JSON structure
-                        diff_data_str = json.dumps(diff_data)
-                        for o_id, n_id in id_map.items():
-                            diff_data_str = diff_data_str.replace(o_id, n_id)
-                        diff_data = json.loads(diff_data_str)
+                        diff_data = _remap_ids_in_json(diff_data, id_map)
 
                     target_file = storage_dir / f"{new_id}.json"
                     target_file.write_text(json.dumps(diff_data, indent=2), encoding="utf-8")
@@ -6233,8 +6247,23 @@ def _load_history() -> dict:
 
 
 def _save_history(data: dict) -> None:
-    """Atomically save historical metrics to sidecar JSON."""
+    """Atomically save historical metrics to sidecar JSON.
+
+    The per-run detail list (``runs``) is capped at ``history_max_runs`` (from config;
+    0 = unlimited) by trimming the oldest entries, so the file size stays bounded over
+    time. Cumulative all-time totals live in ``data["cumulative"]`` and are never
+    affected by trimming. Trimming happens only here (on save), never on read.
+    """
     try:
+        try:
+            max_runs = int(load_ocman_config().get("history_max_runs", 500))
+        except (TypeError, ValueError):
+            max_runs = 500
+        runs = data.get("runs")
+        if max_runs > 0 and isinstance(runs, list) and len(runs) > max_runs:
+            # Keep the most recent runs (newest are appended last).
+            data["runs"] = runs[-max_runs:]
+
         OPENCODE_HISTORY_PATH.parent.mkdir(parents=True, exist_ok=True)
         with tempfile.NamedTemporaryFile("w", dir=str(OPENCODE_HISTORY_PATH.parent), delete=False, encoding="utf-8") as f:
             json.dump(data, f, indent=2)

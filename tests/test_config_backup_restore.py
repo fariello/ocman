@@ -189,6 +189,46 @@ def test_restore_rejects_zip_slip(temp_env, tmp_path):
     assert not (tmp_path.parent / "evil.txt").exists()
 
 
+def test_history_runs_capped_on_save(temp_env, monkeypatch):
+    """PERF-4: _save_history trims the runs list to history_max_runs (oldest dropped),
+    preserves cumulative totals, and load does not mutate an over-cap file."""
+    from ocman import _load_history, _save_history
+
+    # Set a small cap via the config the code reads at save time.
+    cfg = load_ocman_config(temp_env["cfg_path"])
+    cfg["history_max_runs"] = 5
+    save_ocman_config(cfg, temp_env["cfg_path"])
+    monkeypatch.setattr(ocman, "OCMAN_CONFIG_PATH", temp_env["cfg_path"])
+
+    data = _load_history()
+    data["cumulative"]["sessions_deleted"] = 42
+    data["runs"] = [{"n": i} for i in range(20)]  # 20 > cap of 5
+    _save_history(data)
+
+    reloaded = _load_history()
+    assert len(reloaded["runs"]) == 5
+    # Newest kept (15..19), oldest dropped.
+    assert reloaded["runs"][0]["n"] == 15
+    assert reloaded["runs"][-1]["n"] == 19
+    # Cumulative totals untouched by trimming.
+    assert reloaded["cumulative"]["sessions_deleted"] == 42
+
+
+def test_history_max_runs_zero_means_unlimited(temp_env, monkeypatch):
+    """PERF-4: history_max_runs = 0 disables trimming."""
+    from ocman import _load_history, _save_history
+
+    cfg = load_ocman_config(temp_env["cfg_path"])
+    cfg["history_max_runs"] = 0
+    save_ocman_config(cfg, temp_env["cfg_path"])
+    monkeypatch.setattr(ocman, "OCMAN_CONFIG_PATH", temp_env["cfg_path"])
+
+    data = _load_history()
+    data["runs"] = [{"n": i} for i in range(30)]
+    _save_history(data)
+    assert len(_load_history()["runs"]) == 30
+
+
 def test_clean_backups(temp_env, monkeypatch):
     import time
     

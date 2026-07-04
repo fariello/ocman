@@ -123,6 +123,31 @@ def test_bundle_session_data(temp_db, tmp_path):
     assert diff_content["session_id"] == "s1"
 
 
+def test_bundle_session_data_no_leftover_temp(temp_db, tmp_path, monkeypatch):
+    """PERF-5: export stages table JSONL in a per-run temp dir that is removed afterward;
+    no ocman-export-* directories should be left behind."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/path', 'My Project')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1', 'proj-1', 'Root', '/old/path/s1')")
+    cursor.execute("INSERT INTO message (id, session_id) VALUES ('m1', 's1')")
+    conn.commit()
+    conn.close()
+
+    # Redirect the system temp dir to an isolated location we can inspect.
+    fake_tmp = tmp_path / "systmp"
+    fake_tmp.mkdir()
+    monkeypatch.setattr(ocman.tempfile, "gettempdir", lambda: str(fake_tmp))
+
+    bundle_file = tmp_path / "bundle.ocbox"
+    bundle_session_data("s1", bundle_file)
+    assert bundle_file.exists()
+
+    # No per-run export staging directories should remain.
+    leftovers = list(fake_tmp.glob("ocman-export-*"))
+    assert leftovers == [], f"leftover export temp dirs: {leftovers}"
+
+
 def test_import_session_standard(temp_db, tmp_path):
     # 1. Create a bundle
     conn = sqlite3.connect(str(temp_db))
@@ -208,6 +233,60 @@ def test_import_session_with_collision(temp_db, tmp_path):
     assert (ocman.OPENCODE_STORAGE_DIR / f"{imported_child[0]}.json").exists()
     
     conn.close()
+
+
+def test_import_session_collision_remaps_ids_in_diffs_no_substring_corruption(temp_db, tmp_path):
+    """Characterization + correctness (PERF-1): on collision, every session id inside a
+    stored diff file must be remapped to its new id by EXACT match, and an id that is a
+    substring of an unrelated token must NOT be corrupted.
+
+    Guards the structural-remap refactor: the old code did json.dumps + substring
+    str.replace per id, which could corrupt substrings. The remap must be exact-id only.
+    """
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/path', 'My Project')")
+    # Two sessions; 's1' is a *substring* of the value 's1x' used elsewhere in the diff.
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1', 'proj-1', 'Root', '/old/path/s1')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory, parent_id) VALUES ('s1x', 'proj-1', 'Child', '/old/path/s1/child', 's1')")
+    conn.commit()
+    conn.close()
+
+    # Diff payloads: the string 's1' appears as an exact id value AND as a substring of 's1x'
+    # and inside an unrelated token 'prefix-s1-suffix' that must be left untouched.
+    diff1 = ocman.OPENCODE_STORAGE_DIR / "s1.json"
+    diff1.write_text(json.dumps({"session_id": "s1", "note": "prefix-s1-suffix"}), encoding="utf-8")
+    diff2 = ocman.OPENCODE_STORAGE_DIR / "s1x.json"
+    diff2.write_text(json.dumps({"session_id": "s1x", "parent": "s1"}), encoding="utf-8")
+
+    bundle_file = tmp_path / "bundle.ocbox"
+    bundle_session_data("s1", bundle_file)
+
+    # Import WITHOUT deleting originals -> collision -> ids remapped.
+    imported_id = extract_and_import_session(bundle_file, target_project_id="proj-1")
+    assert imported_id != "s1"
+    assert imported_id.startswith("ses_")
+
+    # Find the imported child (parent == imported root).
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM session WHERE parent_id = ?", (imported_id,))
+    child_row = cursor.fetchone()
+    conn.close()
+    assert child_row is not None
+    imported_child = child_row[0]
+    assert imported_child not in ("s1", "s1x")
+
+    # The imported root's diff: session_id remapped exactly; the unrelated 'prefix-s1-suffix'
+    # token must NOT have its embedded 's1' rewritten (that was the substring-corruption bug).
+    root_diff = json.loads((ocman.OPENCODE_STORAGE_DIR / f"{imported_id}.json").read_text(encoding="utf-8"))
+    assert root_diff["session_id"] == imported_id
+    assert root_diff["note"] == "prefix-s1-suffix", "unrelated substring must not be corrupted"
+
+    # The imported child's diff: its own id and its parent id remapped exactly.
+    child_diff = json.loads((ocman.OPENCODE_STORAGE_DIR / f"{imported_child}.json").read_text(encoding="utf-8"))
+    assert child_diff["session_id"] == imported_child
+    assert child_diff["parent"] == imported_id
 
 
 def test_import_session_remap_project(temp_db, tmp_path):

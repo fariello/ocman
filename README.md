@@ -208,6 +208,10 @@ default_model = "uri/its_direct/pt1-qwen3-32b-us"
 # Default retention window in days for database cleanups
 default_retention_days = 5
 
+# Maximum detailed run records kept in the activity history ledger (0 = unlimited).
+# Cumulative all-time totals are always preserved; only the per-run detail list is capped.
+history_max_runs = 500
+
 # CLI and recovery behavior settings
 keep_temp = false
 include_tools = false

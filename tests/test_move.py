@@ -163,6 +163,28 @@ def test_db_rebase_paths(temp_db):
     conn.close()
 
 
+def test_db_move_project_metadata_non_canonical_path(temp_db):
+    """Characterization (PERF-3): a stored directory with non-canonical components
+    (`..`) still matches/rebases because comparison resolves the path. Guards the
+    shared-helper refactor against silently switching to raw-string matching."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/path/to/project1', 'Project 1')")
+    # Non-canonical stored dir that resolves to /path/to/project1/session1
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'S1', '/path/to/project1/sub/../session1')")
+    conn.commit()
+    conn.close()
+
+    db_move_project_metadata("proj-1", "/path/to/project1", "/new/path/project1")
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT directory FROM session WHERE id = 'sess-1'")
+    # Resolves to .../session1 and is rebased under the new prefix.
+    assert cursor.fetchone()[0] == str(Path("/new/path/project1/session1").resolve())
+    conn.close()
+
+
 def test_move_directory_structure(tmp_path):
     old_dir = tmp_path / "old"
     old_dir.mkdir()
