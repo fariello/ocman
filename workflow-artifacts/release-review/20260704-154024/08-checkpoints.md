@@ -16,3 +16,9 @@
 - Evidence via verify tool + authoritative PYTHONPATH=. pytest (91 passed). verify's 2 "failures" = local
   non-editable PyPI ocman shadowing (S3-R1, defer; CI safe). Delta regression coverage adequate (S3-T1).
   No product code changed. Commit: pending.
+
+## Section 4-6 checkpoint
+- S4: delta docs honest (README additions present, CHANGELOG [Unreleased] accurate); only gap = version heading (S1-A1).
+- S5: principles adherent; cold-start adequate; no new feature gap; disk-usage IPD explicitly not a 1.0.4 blocker.
+- S6: clean patch (1.0.4); schema/compat safe; CI safe; gitleaks-in-CI recommended (CI1, defer). Version bump
+  locations identified. Sections 1-6 complete. Commit: pending. Next: implementation-plan.md + Section 7.

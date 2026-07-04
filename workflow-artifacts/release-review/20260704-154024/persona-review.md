@@ -25,7 +25,25 @@
 - **QA/QC (1):** Caught a real evidence subtlety (S3-R1): bare `pytest` can test an *installed* copy; the
   documented `PYTHONPATH=. pytest` and CI (editable install) are correct. Not a code defect.
 
-## Section 4
-## Section 5
-## Section 6
+## Section 4 (docs/specs)
+- **Novice (7):** README delta additions (Known Limitations, benchmark opt-in, `history_max_runs`) are clear
+  and present. No new manual-required task introduced.
+- **UI/UX (3):** CHANGELOG `[Unreleased]` honestly describes the delta; the one gap is the version heading (S1-A1).
+
+## Section 5 (feature/usability/maintainability — all eight, delta lens)
+- **Stakeholder (8):** The delta delivers real value — TUI compaction now works (was broken in 1.0.3), perf
+  improved, backups history bounded. Fit for a 1.0.4 patch.
+- **Power user (6):** New `history_max_runs` config is a welcome control; no capability regressions.
+- **Architect (4):** Delta reduced duplication (shared `_rebased_dir`) and simplified the remap — net KISS-positive.
+- **Software engineer (5):** Maintainability improved; only minor S2-M1 (broad catch) deferred.
+- No new feature gap for this release. (The disk-usage capability the user asked about is a separate,
+  planning-approved IPD — not a 1.0.4 blocker.)
+
+## Section 6 (compatibility/packaging/release)
+- **Operator (8):** `pip install ocman` + `ocman ui`; first-run `--create-config` works; new `history_max_runs`
+  is optional/defaulted. 1.0.4 is a clean patch — no migration, no breaking change. Backups still grow (the
+  user's 7.3 GB) but that visibility feature is a separate IPD, not a 1.0.4 gap.
+- **Software engineer (5):** Version bump needed in 3 places (ocman.py, pyproject, ocman_tui fallback);
+  single-sourcing means the fallback is belt-and-suspenders. CI is correctly configured (editable + PYTHONPATH).
+
 ## Section 8 (final eight-persona sign-off)
