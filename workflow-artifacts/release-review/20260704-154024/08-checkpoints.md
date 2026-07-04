@@ -22,3 +22,8 @@
 - S5: principles adherent; cold-start adequate; no new feature gap; disk-usage IPD explicitly not a 1.0.4 blocker.
 - S6: clean patch (1.0.4); schema/compat safe; CI safe; gitleaks-in-CI recommended (CI1, defer). Version bump
   locations identified. Sections 1-6 complete. Commit: pending. Next: implementation-plan.md + Section 7.
+
+## Section 7 checkpoint
+- implementation-plan.md created. Version bumped 1.0.3 -> 1.0.4 (ocman.py, pyproject, ocman_tui fallback,
+  CHANGELOG heading) = commit 8c2aee9. 91 tests pass. Only S1-A1 fixed; S2-M1/S3-R1/S6-CI1/DEP2 deferred with
+  axis. Commit (artifacts): pending.
