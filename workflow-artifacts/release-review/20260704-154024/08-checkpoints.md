@@ -11,3 +11,8 @@
 - Secret scan run (built-in + gitleaks); gitleaks clean across 156 commits; built-in hits all false positives
   (session IDs/hashes/timestamps). S2-S1 recorded. Delta code re-grounded; no new bug/MEM/LIVE. S2-M1 (broad
   RuntimeError catch) deferred on complexity axis. No product code changed this section. Commit: pending.
+
+## Section 3 checkpoint
+- Evidence via verify tool + authoritative PYTHONPATH=. pytest (91 passed). verify's 2 "failures" = local
+  non-editable PyPI ocman shadowing (S3-R1, defer; CI safe). Delta regression coverage adequate (S3-T1).
+  No product code changed. Commit: pending.

@@ -18,7 +18,13 @@
 - MEM/LIVE: delta introduced no new leak/data-integrity surface; the export temp-dir change *improved* resource
   hygiene. No new `LIVE`/High finding.
 
-## Section 3
+## Section 3 (tests/regression)
+- **Testing/regression expert (2):** Delta is well-covered — new recovery/compaction + config-parsing suites,
+  plus regression tests for every prior High/LIVE finding (compaction, worker guard, zip-slip, delete-summary,
+  history cap, legacy import, non-canonical move). 91 passed under the documented invocation.
+- **QA/QC (1):** Caught a real evidence subtlety (S3-R1): bare `pytest` can test an *installed* copy; the
+  documented `PYTHONPATH=. pytest` and CI (editable install) are correct. Not a code defect.
+
 ## Section 4
 ## Section 5
 ## Section 6
