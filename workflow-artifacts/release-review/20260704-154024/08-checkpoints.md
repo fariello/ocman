@@ -27,3 +27,9 @@
 - implementation-plan.md created. Version bumped 1.0.3 -> 1.0.4 (ocman.py, pyproject, ocman_tui fallback,
   CHANGELOG heading) = commit 8c2aee9. 91 tests pass. Only S1-A1 fixed; S2-M1/S3-R1/S6-CI1/DEP2 deferred with
   axis. Commit (artifacts): pending.
+
+## Section 8 checkpoint
+- Final sanity audit: 1.0.4 commit is version-only; no new risk; gitleaks clean. Final validation
+  PYTHONPATH=. pytest 91 passed (authoritative). Eight-persona sign-off all acceptable. Recommendation: GO
+  for 1.0.4. Push: no (no permission). Restart: no (loop guard). 11-push-plan + 12-final-response written.
+  Commit: pending (final artifacts).

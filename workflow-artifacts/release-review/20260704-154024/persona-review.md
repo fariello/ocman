@@ -47,3 +47,13 @@
   single-sourcing means the fallback is belt-and-suspenders. CI is correctly configured (editable + PYTHONPATH).
 
 ## Section 8 (final eight-persona sign-off)
+- **QA/QC (1):** Acceptable. 91 tests pass (authoritative); the delta's fixes are regression-covered.
+- **Testing/regression (2):** Acceptable. Recovery/compaction + config-parsing suites added; S3-R1 is a
+  documented invocation caveat, not a code failure.
+- **UI/UX (3):** Acceptable. TUI compaction now works; worker errors handled cleanly.
+- **Architect (4):** Acceptable. Delta reduced duplication; no new complexity.
+- **Software engineer (5):** Acceptable. Clean 1.0.4 bump; version single-sourced.
+- **Power user (6):** Acceptable. New `history_max_runs` control; no regressions.
+- **Novice (7):** Acceptable. README/help current; install path unchanged.
+- **Stakeholder (8):** Acceptable. Ships the fix for a broken 1.0.3 feature; fit for a patch release. **GO.**
+- No blocking concerns from any persona.
