@@ -176,6 +176,44 @@ def test_db_run_cleanup_age_based(temp_db, monkeypatch, mock_history_path):
     conn.close()
 
 
+def test_db_run_cleanup_fractional_days(temp_db, monkeypatch, mock_history_path):
+    """--days accepts fractions: 0.25 day = 6 hours. A session 12h old is pruned; 3h old kept."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    import time
+    now_ms = int(time.time() * 1000)
+    three_hours_ago = now_ms - int(3 * 3600 * 1000)
+    twelve_hours_ago = now_ms - int(12 * 3600 * 1000)
+    cursor.execute(
+        "INSERT INTO session (id, project_id, title, time_created, time_updated) "
+        "VALUES ('recent_sess', 'proj1', 'Recent', ?, ?)", (three_hours_ago, three_hours_ago))
+    cursor.execute(
+        "INSERT INTO session (id, project_id, title, time_created, time_updated) "
+        "VALUES ('halfday_sess', 'proj1', 'Half day', ?, ?)", (twelve_hours_ago, twelve_hours_ago))
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr('builtins.input', lambda _: 'yes')
+    # 0.25 days == 6 hours retention.
+    db_run_cleanup(days=0.25, project_id=None, project_dir=None, dry_run=False, force=True, clean_orphans=False, verbosity=0)
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    remaining = [row[0] for row in cursor.execute("SELECT id FROM session").fetchall()]
+    assert "recent_sess" in remaining       # 3h < 6h retention -> kept
+    assert "halfday_sess" not in remaining  # 12h > 6h retention -> pruned
+    conn.close()
+
+
+def test_parse_args_days_accepts_float(monkeypatch):
+    """--days parses as float (0.25)."""
+    import sys
+    from ocman import parse_args
+    monkeypatch.setattr(sys, "argv", ["ocman", "--clean", "--days", "0.25"])
+    args = parse_args()
+    assert args.days == 0.25
+
+
 def test_db_show_info(temp_db, capsys):
     # Setup some test data in mock db
     conn = sqlite3.connect(str(temp_db))

@@ -168,7 +168,7 @@ ocman --create-config
 | `-sm` | `--show-models` | List available LLM models from config with compatibility |
 | `-C [MODEL]`| `--compact [MODEL]` | Triggers LLM compaction. Prompted if MODEL is omitted |
 | | `--clean` | Delete database sessions older than the retention window |
-| | `--days N` | Set cleanup retention window in days (default: 5) |
+| | `--days N` | Set cleanup retention window in days; accepts fractions, e.g. `0.25` = 6 hours (default: 5) |
 | | `--clean-orphans` | Remove orphaned records and sidecar diffs |
 | | `--db PATH` | Override standard SQLite database file path |
 | | `--delete` | Recursively delete the session specified by `-s` |

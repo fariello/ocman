@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Changed
+- **`--days` accepts fractions:** the cleanup/backup retention window (`--clean --days`,
+  `--clean-backups --days`, and `default_retention_days`) now accepts floating-point days,
+  e.g. `--days 0.25` = 6 hours.
+
 ### Added
 - **Disk-usage reporting in `ocman info`:** a **Backups (Disk Storage)** section (total size,
   count, oldest/newest) so backup growth is visible without shell tools, plus an optional

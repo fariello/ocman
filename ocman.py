@@ -4171,10 +4171,10 @@ Examples:
 
     parser.add_argument(
         "--days",
-        type=int,
+        type=float,
         default=config["default_retention_days"],
         metavar="N",
-        help="Retention window in days for --clean and --clean-backups (default: %(default)s).",
+        help="Retention window in days for --clean and --clean-backups; accepts fractions, e.g. 0.25 = 6 hours (default: %(default)s).",
     )
 
     parser.add_argument(
@@ -5819,7 +5819,7 @@ def extract_and_import_session(
 
 
 def db_run_cleanup(
-    days: int,
+    days: float,
     project_id: str | None,
     project_dir: str | None,
     dry_run: bool,
@@ -6920,7 +6920,7 @@ def cli_create_config(force: bool = False) -> None:
         prompt("Default Output Directory", "default_out_dir")
         prompt("Default Compaction Model", "default_compaction_model")
         prompt("Default Backup Directory", "default_backup_dir")
-        prompt("Default Retention Days", "default_retention_days", int)
+        prompt("Default Retention Days", "default_retention_days", float)
         prompt("Keep Temporary Files? (yes/no)", "keep_temp", bool)
         prompt("Include Tools in Transcript? (yes/no)", "include_tools", bool)
         prompt("All Roles in Transcript? (yes/no)", "all_roles", bool)
@@ -7221,7 +7221,7 @@ def cli_restore(source: str) -> None:
     print(f"  Sessions restored:  {sessions_restored}")
 
 
-def cli_clean_backups(days: int, dry_run: bool, verbosity: int) -> None:
+def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
     """Remove old backup files and directories in the default backups directory."""
     config = load_ocman_config()
     backup_dir = Path(config["default_backup_dir"]).expanduser()
