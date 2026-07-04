@@ -10,3 +10,9 @@
 | 6 | git diff --stat v1.0.3..HEAD | Delta size | +979/-127 across ocman.py, ocman_tui, tests, docs |
 
 Working dir: /home/gfariello/VC/ocman. No secrets in output.
+
+## Section 2
+| # | Command | Purpose | Result |
+|---|---|---|---|
+| 7 | scan_secrets.py --repo . --format json --out .../secrets-scan.json | Mandatory secret scan (tree+history) | 1582 candidates (all FPs: entropy IDs/hashes/timestamps/test data) |
+| 8 | gitleaks detect --no-banner --redact | Mature scanner cross-check | 156 commits scanned, NO LEAKS FOUND |

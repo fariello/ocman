@@ -6,3 +6,8 @@
 - Primary finding S1-A1: version drift (code 1.0.3 vs Unreleased CHANGELOG) -> 1.0.4 bump owned by S6/S7.
 - No TODO markers; principles = fallback + ARCHITECTURE.md; no parallel lanes (D2); loop-guard noted (D3).
 - Registers initialized (1 finding, 1 action). Artifacts created. Commit: pending (Section 1 boundary).
+
+## Section 2 checkpoint
+- Secret scan run (built-in + gitleaks); gitleaks clean across 156 commits; built-in hits all false positives
+  (session IDs/hashes/timestamps). S2-S1 recorded. Delta code re-grounded; no new bug/MEM/LIVE. S2-M1 (broad
+  RuntimeError catch) deferred on complexity axis. No product code changed this section. Commit: pending.
