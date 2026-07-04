@@ -47,6 +47,8 @@ Architecture changes carry blast radius — Remediation Risk is rated accordingl
 | ARCH-6 | Low | Medium-High (complexity) | architect | Risk of over-generalizing into a "framework" | KISS / scale |
 | ARCH-7 | Medium | Low | architect / QA | Refactor must preserve exact confirm behavior (safety-critical) | ocman.py:4705-4714 etc. |
 | ARCH-8 | Low | Low | stakeholder | Sequence vs the standalone clean-backups IPD (avoid two renderers) | .agents/plans/pending/2026-07-04-...-clean-backups-preview.md |
+| ARCH-9 | **Blocker (if executed as first drafted)** | Low | architect / QA (security) | **`assume_yes` must NOT be wired to `force`.** In every current op, `force` bypasses only the running-`opencode` process-lock — never the typed-`yes` prompt (delete-session prompt is gated by the separate `confirm` param at ocman.py:4705; `db_run_cleanup`/`cli_clean_backups` always prompt, 6074/7288). Mapping `force`→`assume_yes` during migration would silently skip destructive confirmations for `--force` users. | ocman.py:4596 (force=lock only), 4705 (confirm gates prompt), 6074, 7288 |
+| ARCH-10 | Low | Low | software engineer | clean-backups size should reuse the existing `dir_usage()` helper (added by the executed disk-usage feature) rather than re-walking dirs, for consistency | ocman.py:6210 `dir_usage` |
 
 ## Proposed design (the abstraction)
 
@@ -64,23 +66,34 @@ Two small, pure pieces + one thin I/O seam, all in `ocman.py` (no new module/pac
    `DELETE`(red)/`KEEP`(green) word (words carry meaning; color is enhancement). Column widths are computed
    from plain-text content and **plain text is padded before coloring** so alignment holds with color on/off.
    Then totals and a **forceful warning when `keep == []` and `remove != []`** ("this will <verb> ALL
-   <N> <noun> — nothing will remain"). Size column is right-aligned; header labels are provided by the caller
-   (via `noun`/column config) so different ops can label the detail column appropriately. Pure (returns a
-   string) so both CLI and TUI can use it.
+   <N> <noun> — nothing will remain"). Size column is right-aligned. **KISS (ARCH-6):** the column set is
+   FIXED (Item / Size / Detail / Action); the caller supplies only two label strings — the item-column header
+   (from `noun`, e.g. "Backup") and the detail-column header (e.g. "Modified"). No general column-config /
+   pluggable-column mechanism. Pure (returns a string) so both CLI and TUI can use it.
 3. **A confirm seam** `confirm_destructive(preview, *, dry_run, assume_yes, interactive=True) -> bool`:
    prints the rendered preview; if `dry_run` → print "(dry run)" and return False (no action); if
-   `assume_yes`/`not interactive` → return True (bypass, as `--force`/`confirm=False` do today);
-   else prompt `Type 'yes' to confirm <verb>:` and return `input().strip() == "yes"`, treating
-   EOF/KeyboardInterrupt as a cancel. This is the single home for the typed-`yes` logic (ARCH-1/2/5).
+   `assume_yes`/`not interactive` → return True (bypass); else prompt `Type 'yes' to confirm <verb>:` and
+   return `input().strip() == "yes"`, treating EOF/KeyboardInterrupt as a cancel. This is the single home for
+   the typed-`yes` logic (ARCH-1/2/5).
+
+   > **SAFETY — how `assume_yes` maps at each call site (do NOT get this wrong; see ARCH-9).** In the current
+   > code, the per-op `force` flag bypasses ONLY the running-`opencode` **process-lock** check — it does
+   > **not** skip the typed-`yes` prompt. The prompt is skipped only by the delete functions' separate
+   > `confirm=False` parameter (used by the TUI, which runs its own modal). Therefore each migrated call site
+   > MUST pass `assume_yes` derived from its **existing prompt-skip condition** — i.e. `assume_yes = (not
+   > confirm)` for `db_delete_session_recursive`/`db_delete_project_recursive`, and `assume_yes = False`
+   > (always prompt) for `db_run_cleanup` and `cli_clean_backups`. **Never map `force` → `assume_yes`** — doing
+   > so would silently drop the confirmation for `--force` users (a safety regression). `force` continues to
+   > gate only the process-lock, unchanged.
 
 ## Proposed changes (ordered, validatable)
 
 | Step | Source IDs | Change | Files | Rem. Risk | Validation |
 |------|-----------|--------|-------|-----------|------------|
-| 1 | ARCH-7 | **Characterization tests first** for the current confirm behavior of the four ops: typed `yes` proceeds; any other input / EOF / KeyboardInterrupt cancels; `dry_run` never prompts nor deletes; `force`/`confirm=False` bypasses. Green before any refactor. | tests/ | Low | New tests pass against current code |
+| 1 | ARCH-7, ARCH-9 | **Characterization tests first** for the current confirm behavior of the four ops, pinning the exact flag semantics: typed `yes` proceeds; any other input / EOF / KeyboardInterrupt cancels; `dry_run` returns before prompting and deletes nothing; **`force` does NOT skip the typed-`yes` prompt** (it only bypasses the process-lock) — assert `--force` still prompts; and for the delete fns, `confirm=False` skips the prompt (the TUI path). These tests LOCK IN the correct mapping so the migration (steps 3-5) cannot silently drop a confirmation (ARCH-9). Green before any refactor. | tests/ | Low | New tests pass against current code, incl. an explicit "`force=True` still requires typed 'yes'" case |
 | 2 | ARCH-3, ARCH-6 | Add the `PreviewItem`/`DestructivePreview` dataclass + `render_destructive_preview()` (pure) + `confirm_destructive()` (I/O seam) in `ocman.py`. Column **headers** + separator; **Size column right-aligned**; color-independent DELETE/KEEP `Action` column; forceful all-affected warning; pad-before-color. No config-driven rendering; no new dependency. | ocman.py | Low | Unit tests (color forced off): header row present; Size right-aligned (shared right edge); DELETE per remove, KEEP per keep; all-affected warning iff keep==[]; confirm seam returns True only on typed 'yes', respects dry_run/assume_yes |
 | 3 | ARCH-1, ARCH-8 | **First adopter — `cli_clean_backups`:** build a `DestructivePreview` (remove=old backups, keep=retained), call `render_destructive_preview` + `confirm_destructive`. This realizes the clean-backups KEEP/DELETE request through the shared helper (supersedes the bespoke renderer in the clean-backups IPD; cross-reference it). | ocman.py:7224-7331 | Low | Characterization test (step 1) still green; clean-backups shows KEEP/DELETE + all-deleted warning |
-| 4 | ARCH-1, ARCH-2, ARCH-5 | Migrate the other three CLI confirmations to `confirm_destructive` **one at a time**, each behind its own characterization test: delete-session (4705-4714), delete-project (4960-4967), clean-orphans prune (6074-6079). Keep each op owning WHAT to delete; only the confirm/preview I/O moves to the helper. | ocman.py | Low | Per-op characterization tests green before+after each migration |
+| 4 | ARCH-1, ARCH-2, ARCH-5, ARCH-9 | Migrate the other three CLI confirmations to `confirm_destructive` **one at a time**, each behind its own characterization test: delete-session (4705-4714), delete-project (4960-4967), clean-orphans prune (6074-6079). **Map `assume_yes` from the op's existing prompt-skip condition — `assume_yes = (not confirm)` for the delete fns, `assume_yes = False` for cleanup; leave `force` wired to the process-lock only (ARCH-9).** Keep each op owning WHAT to delete; only the confirm/preview I/O moves to the helper. | ocman.py | Low | Per-op characterization tests green before+after each migration, including the "`force` still prompts" assertion |
 | 5 | ARCH-2 | Bring `--clear-history` under the helper: add a `confirm_destructive` gate ("erase all N runs and reset grand totals"), currently unconfirmed. | ocman.py:7607-7624 | Low | Test: non-'yes' cancels; 'yes' clears; dry-run/force respected if applicable |
 | 6 | ARCH-4 | **TUI reuse of the PURE parts only:** have the TUI deletion modals import `render_destructive_preview` for their scope/summary text where useful. Do NOT unify the confirm I/O (sync prompt vs async Textual modal). | ocman_tui/app.py:136, 257 | Low | TUI tests still pass; modal shows the shared summary string |
 | 7 | docs | ARCHITECTURE.md: document the destructive-confirmation seam (data model + renderer + confirm) as the one way to do destructive confirmations. README/CHANGELOG note the standardized prompts + all-affected warning. | ARCHITECTURE.md, README.md, CHANGELOG.md | Low | Docs only |
@@ -126,6 +139,25 @@ Two small, pure pieces + one thin I/O seam, all in `ocman.py` (no new module/pac
    becomes the first adopter here). Should the clean-backups IPD be marked superseded, or kept as the
    detailed spec for the renderer's clean-backups-specific rows? (Assumption: keep it, but note it now builds
    on this helper.)
+
+## Plan-review provenance (2026-07-04)
+
+Hardened by the `plan-review` workflow (run 20260704-190800), reviewed jointly with the clean-backups IPD,
+after re-reading the four confirm sites (ocman.py:4696-4714, 4960-4967, 6066-6081, 7283-7295) and the flag
+semantics. Changes applied:
+
+- **Added ARCH-9 (Blocker-if-executed-as-first-drafted):** verified that `force` bypasses ONLY the
+  process-lock at every call site, never the typed-`yes` prompt (which is gated by the delete fns' separate
+  `confirm` param, and is unconditional for cleanup/clean-backups). The design/steps now forbid mapping
+  `force → assume_yes` and specify the correct per-op mapping; step 1 tests must assert "`--force` still
+  prompts". This closes a silent-confirmation-drop safety trap the first draft's `assume_yes`/`force`
+  conflation invited.
+- **Added ARCH-10:** clean-backups sizing should reuse the existing `dir_usage()` helper (ocman.py:6210,
+  from the executed disk-usage feature) rather than re-walking.
+- **Tightened the renderer (ARCH-6/KISS):** FIXED column set; caller supplies only two header label strings
+  (item + detail), not a general column-config.
+
+Verdict: APPROVE WITH REVISIONS APPLIED.
 
 ## Approval and execution gate
 
