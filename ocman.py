@@ -6260,6 +6260,126 @@ def human_size_local(bytes_size: int) -> str:
         return f"{bytes_size} B"
 
 
+@dataclass
+class PreviewItem:
+    """One row in a destructive-action preview (a file/dir/session about to be kept or removed)."""
+    label: str
+    size_bytes: int | None = None
+    detail: str = ""
+
+
+@dataclass
+class DestructivePreview:
+    """The full before/after of a destructive action, for uniform preview + confirmation.
+
+    `remove` and `keep` are the two partitions of the affected set. `action_verb` is the
+    imperative used in the prompt/warning (e.g. "delete", "prune"). `noun` labels the item
+    column and the counts (e.g. "backups"). `detail_header` labels the detail column
+    (e.g. "Modified"). `irreversible` adds an emphasis line.
+    """
+    remove: list[PreviewItem]
+    keep: list[PreviewItem]
+    action_verb: str = "delete"
+    noun: str = "items"
+    detail_header: str = "Detail"
+    irreversible: bool = True
+
+
+def render_destructive_preview(preview: DestructivePreview) -> str:
+    """Render a color-independent KEEP/DELETE table + summary for a DestructivePreview.
+
+    - Column headers: <noun-title> / Size / <detail_header> / Action, with a rule.
+    - Each row: label (left), size (right-aligned in its column), detail, and the literal
+      word DELETE (red) / KEEP (green) in the Action column. The words carry the meaning;
+      color is enhancement only, so this reads correctly with color off / for color-blind
+      users. Plain text is width-computed and padded BEFORE coloring so alignment holds.
+    - DELETE rows first (as given), then KEEP rows.
+    - A forceful warning when everything is being removed (keep == [] and remove != []).
+
+    Returns the block as a string (pure; no I/O), so both CLI and TUI can use it.
+    """
+    def _size_str(item: PreviewItem) -> str:
+        return human_size_local(item.size_bytes) if item.size_bytes is not None else ""
+
+    rows = [("DELETE", it) for it in preview.remove] + [("KEEP", it) for it in preview.keep]
+
+    item_header = preview.noun[:1].upper() + preview.noun[1:] if preview.noun else "Item"
+    # Column widths from plain text (headers + all cell values).
+    label_w = max([len(item_header)] + [len(it.label) for _, it in rows] or [0])
+    size_w = max([len("Size")] + [len(_size_str(it)) for _, it in rows] or [0])
+    detail_w = max([len(preview.detail_header)] + [len(it.detail) for _, it in rows] or [0])
+    action_w = max(len("Action"), len("DELETE"), len("KEEP"))
+
+    lines: list[str] = []
+    header = (
+        f"{item_header:<{label_w}}  {'Size':>{size_w}}  "
+        f"{preview.detail_header:<{detail_w}}  {'Action':<{action_w}}"
+    )
+    lines.append(color_bold(header))
+    lines.append("-" * len(header))
+
+    for status, it in rows:
+        label_cell = f"{it.label:<{label_w}}"
+        size_cell = f"{_size_str(it):>{size_w}}"        # right-aligned
+        detail_cell = f"{it.detail:<{detail_w}}"
+        action_plain = f"{status:<{action_w}}"          # pad plain, then color
+        action_cell = color_red(action_plain) if status == "DELETE" else color_green(action_plain)
+        lines.append(f"{label_cell}  {size_cell}  {detail_cell}  {action_cell}")
+
+    n_remove = len(preview.remove)
+    n_keep = len(preview.keep)
+    total_remove_bytes = sum(it.size_bytes or 0 for it in preview.remove)
+    lines.append("")
+    if n_keep == 0 and n_remove > 0:
+        lines.append(color_red(color_bold(
+            f"WARNING: this will {preview.action_verb} ALL {n_remove} {preview.noun} — "
+            f"nothing will remain."
+        )))
+    else:
+        lines.append(
+            f"{n_remove} {preview.noun} to {preview.action_verb}, {n_keep} kept."
+        )
+    if total_remove_bytes:
+        lines.append(f"Total size to reclaim: {human_size_local(total_remove_bytes)}")
+    if preview.irreversible:
+        lines.append(color_red("THIS ACTION IS IRREVERSIBLE."))
+    return "\n".join(lines)
+
+
+def confirm_destructive(
+    preview: DestructivePreview,
+    *,
+    dry_run: bool = False,
+    assume_yes: bool = False,
+    interactive: bool = True,
+) -> bool:
+    """Print the preview and confirm a destructive action. Single home for typed-'yes' logic.
+
+    Returns True iff the caller should proceed. Semantics (preserve existing behavior):
+    - `dry_run`: print the preview + a dry-run note, do NOT prompt, return False.
+    - `assume_yes` or not `interactive`: print the preview, skip the prompt, return True.
+      (Callers map this from their EXISTING prompt-skip condition — e.g. the delete
+      functions' `confirm=False` — NOT from `--force`, which only bypasses the process-lock.)
+    - otherwise: prompt `Type 'yes' to confirm <verb>:` and return input().strip() == "yes";
+      EOF/KeyboardInterrupt is treated as a cancel (return False).
+    """
+    print(render_destructive_preview(preview))
+    if dry_run:
+        print(f"{info_prefix()} Dry run complete. No changes were made.")
+        return False
+    if assume_yes or not interactive:
+        return True
+    try:
+        confirmation = input(f"Type 'yes' to confirm {preview.action_verb}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return False
+    if confirmation != "yes":
+        print("Cancelled.")
+        return False
+    return True
+
+
 def _load_history() -> dict:
     """Load the historical metrics JSON sidecar safely."""
     default_history = {
@@ -7233,9 +7353,21 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
     import time
     now = time.time()
     cutoff_time = now - (days * 86400)
-    
-    backups_to_delete = []
-    
+
+    def _backup_size(item: Path) -> int:
+        try:
+            if item.is_file():
+                return item.stat().st_size
+            if item.is_dir():
+                total, _ = dir_usage(item)  # reuse the shared recursive sizer
+                return total
+        except Exception:
+            pass
+        return 0
+
+    backups_to_delete = []  # (item, mtime, size) — older than cutoff
+    backups_to_keep = []    # (item, mtime, size) — retained
+
     for item in backup_dir.iterdir():
         # Match backups created by our tool
         name = item.name
@@ -7246,69 +7378,65 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
         )
         if not is_backup:
             continue
-            
-        # Get modification time
+
         try:
             mtime = item.stat().st_mtime
-            if mtime < cutoff_time:
-                backups_to_delete.append((item, mtime))
         except Exception as e:
             log(f"Warning: could not check stat for {item}: {e}", verbosity)
-            
+            continue
+        size = _backup_size(item)
+        if mtime < cutoff_time:
+            backups_to_delete.append((item, mtime, size))
+        else:
+            backups_to_keep.append((item, mtime, size))
+
+    if not backups_to_delete and not backups_to_keep:
+        print("No backups found.")
+        return
     if not backups_to_delete:
-        print(f"No backups found older than {days} days.")
+        print(f"No backups found older than {days} days. ({len(backups_to_keep)} kept.)")
         return
-        
-    # Print planned deletions
-    print(color_bold(f"Found {len(backups_to_delete)} backups older than {days} days to purge:"))
-    total_size = 0
-    for item, mtime in sorted(backups_to_delete, key=lambda x: x[1]):
-        size = 0
-        try:
-            if item.is_file():
-                size = item.stat().st_size
-            elif item.is_dir():
-                for root, dirs, files in os.walk(str(item)):
-                    for f in files:
-                        size += Path(root, f).stat().st_size
-        except Exception:
-            pass
-        total_size += size
-        mtime_str = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-        print(f"  - {item.name:<45} | Size: {human_size_local(size):<10} | Created: {mtime_str}")
-        
-    print()
-    print(f"Total size to reclaim: {human_size_local(total_size)}")
-    
-    if dry_run:
-        print(f"{info_prefix()} Dry run complete. No backups were deleted.")
+
+    def _to_item(entry) -> PreviewItem:
+        item, mtime, size = entry
+        modified = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+        return PreviewItem(label=item.name, size_bytes=size, detail=modified)
+
+    remove_items = [_to_item(e) for e in sorted(backups_to_delete, key=lambda x: x[1])]
+    keep_sorted = sorted(backups_to_keep, key=lambda x: x[1])
+    # KEEP summarization at scale: show all with -v, else cap the KEEP rows.
+    KEEP_LIMIT = 20
+    if verbosity or len(keep_sorted) <= KEEP_LIMIT:
+        keep_items = [_to_item(e) for e in keep_sorted]
+    else:
+        shown = keep_sorted[:KEEP_LIMIT]
+        keep_items = [_to_item(e) for e in shown]
+        keep_items.append(PreviewItem(
+            label=f"… and {len(keep_sorted) - KEEP_LIMIT} more kept (use -v to list all)",
+            size_bytes=None, detail="",
+        ))
+
+    preview = DestructivePreview(
+        remove=remove_items,
+        keep=keep_items,
+        action_verb="delete",
+        noun="backups",
+        detail_header="Modified",
+        irreversible=True,
+    )
+    if not confirm_destructive(preview, dry_run=dry_run, assume_yes=False, interactive=True):
         return
-        
-    try:
-        confirmation = input(f"Type 'yes' to confirm deletion of these {len(backups_to_delete)} backups: ").strip()
-    except (EOFError, KeyboardInterrupt):
-        print("\nCancelled.")
-        return
-        
-    if confirmation != "yes":
-        print("Cancelled.")
-        return
-        
+
     deleted_count = 0
     reclaimed_space = 0
     import shutil
-    for item, mtime in backups_to_delete:
+    for item, mtime, size in backups_to_delete:
         try:
-            size = 0
             if item.is_file():
-                size = item.stat().st_size
                 item.unlink()
             elif item.is_dir():
-                for root, dirs, files in os.walk(str(item)):
-                    for f in files:
-                        size += Path(root, f).stat().st_size
                 shutil.rmtree(item)
-            reclaimed_space += size
+            reclaimed_space += size  # size was computed during the scan
             deleted_count += 1
             print(f"[-] Deleted backup: {item.name}")
         except Exception as e:

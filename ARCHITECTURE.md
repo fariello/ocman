@@ -59,6 +59,17 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   restore validates ZIP member paths before extraction (Zip-Slip protection). SQL uses
   parameterized values with hardcoded/allowlisted identifiers.
 - **Connections are closed deterministically** via `try/finally` around each DB operation.
+- **Destructive-confirmation seam.** Destructive commands present their outcome and confirm
+  through one shared seam in `ocman.py`: a `DestructivePreview`/`PreviewItem` data model, a
+  pure `render_destructive_preview()` (a color-independent table with headers, a right-aligned
+  Size column, and a `DELETE`/`KEEP` `Action` word per item — color is enhancement only — plus a
+  forceful "this will ... ALL N ..." warning when nothing is kept), and a `confirm_destructive()`
+  I/O function that owns the typed-`yes` prompt and honors `dry_run`/`assume_yes`. New destructive
+  operations should build a `DestructivePreview` and call these rather than hand-rolling a prompt.
+  (`--clean-backups` is the first adopter; other confirmation sites migrate to it incrementally.)
+  Note: a `force` flag bypasses only the running-`opencode` process-lock, never the typed-`yes`
+  prompt — the prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
+  op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).
 
 ## Design principles
 

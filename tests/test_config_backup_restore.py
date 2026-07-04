@@ -261,3 +261,85 @@ def test_clean_backups(temp_env, monkeypatch):
     assert not zip_old.exists()
     assert not dir_old.exists()
     assert zip_new.exists()
+
+
+def _seed_backups(backup_dir):
+    """Seed one old + one new backup; return (old, new) paths."""
+    import time
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    old = backup_dir / "opencode-db-cleanup-20260101-120000"
+    old.mkdir(exist_ok=True)
+    (old / "opencode.db").write_text("x" * 100, encoding="utf-8")
+    new = backup_dir / "opencode-backup-20260624-120000.zip"
+    new.write_text("new", encoding="utf-8")
+    now = time.time()
+    os.utime(old, (now - 10 * 86400, now - 10 * 86400))
+    os.utime(new, (now - 2 * 86400, now - 2 * 86400))
+    return old, new
+
+
+def test_clean_backups_cancel_on_non_yes(temp_env, monkeypatch):
+    """Characterization: any non-'yes' confirmation cancels; nothing is deleted."""
+    backup_dir = Path(temp_env["config"]["default_backup_dir"])
+    old, new = _seed_backups(backup_dir)
+    monkeypatch.setattr("builtins.input", lambda _: "no")
+    cli_clean_backups(days=5, dry_run=False, verbosity=0)
+    assert old.exists() and new.exists()  # nothing deleted on cancel
+
+
+def test_clean_backups_dry_run_deletes_nothing(temp_env, monkeypatch):
+    """Characterization: dry-run never prompts and never deletes."""
+    backup_dir = Path(temp_env["config"]["default_backup_dir"])
+    old, new = _seed_backups(backup_dir)
+    def _no_input(_):
+        raise AssertionError("dry-run must not prompt")
+    monkeypatch.setattr("builtins.input", _no_input)
+    cli_clean_backups(days=5, dry_run=True, verbosity=0)
+    assert old.exists() and new.exists()  # nothing deleted in dry-run
+
+
+def test_clean_backups_preview_shows_keep_and_delete(temp_env, monkeypatch, capsys):
+    """CB-1/CB-9/CB-10: preview shows a header, both KEEP and DELETE rows, and right-aligned Size."""
+    backup_dir = Path(temp_env["config"]["default_backup_dir"])
+    old, new = _seed_backups(backup_dir)
+    monkeypatch.setattr("builtins.input", lambda _: "no")
+    cli_clean_backups(days=5, dry_run=True, verbosity=0)
+    out = capsys.readouterr().out
+    assert "Action" in out and "Modified" in out and "Backups" in out  # header (CB-9)
+    assert "DELETE" in out and "KEEP" in out                            # both partitions (CB-1)
+    assert "backups to delete" in out and "kept" in out                 # summary
+
+
+def test_clean_backups_all_deleted_warning(temp_env, monkeypatch, capsys):
+    """CB-2: when every backup is past the cutoff, a forceful all-backups warning appears."""
+    import time
+    backup_dir = Path(temp_env["config"]["default_backup_dir"])
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    b = backup_dir / "opencode-db-cleanup-20260101-120000"
+    b.mkdir(exist_ok=True)
+    (b / "opencode.db").write_text("x", encoding="utf-8")
+    now = time.time()
+    os.utime(b, (now - 10 * 86400, now - 10 * 86400))
+    monkeypatch.setattr("builtins.input", lambda _: "no")
+    cli_clean_backups(days=5, dry_run=True, verbosity=0)
+    out = capsys.readouterr().out
+    assert "ALL 1 backups" in out and "nothing will remain" in out
+
+
+def test_render_destructive_preview_right_aligned_size():
+    """CB-10: the Size column is right-aligned (values share a right edge)."""
+    from ocman import DestructivePreview, PreviewItem, render_destructive_preview
+    p = DestructivePreview(
+        remove=[PreviewItem("big", 4_760_000_000, "d1"), PreviewItem("small", 57344, "d2")],
+        keep=[], action_verb="delete", noun="backups", detail_header="Modified",
+    )
+    lines = render_destructive_preview(p).splitlines()
+    # Find the two data rows and confirm the size token ends at the same column.
+    data_rows = [ln for ln in lines if "d1" in ln or "d2" in ln]
+    assert len(data_rows) == 2
+    def size_right_edge(ln):
+        # size cell is the second whitespace-separated field group; locate "GB"/"KB"/"B"
+        import re
+        m = list(re.finditer(r"\d[\d.]* (?:GB|MB|KB|B)", ln))
+        return m[0].end()
+    assert size_right_edge(data_rows[0]) == size_right_edge(data_rows[1])

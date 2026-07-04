@@ -243,6 +243,14 @@ The backup operation archives:
 ### Rollback Protection
 Before executing a restoration, `ocman` packages the existing active state into a temporary archive (`~/.local/share/opencode/backups/rollback-before-restore-TIMESTAMP.zip`). If any stage of the restoration (file unpacking, database overwriting, config validation) throws an error, the rollback routine immediately triggers to extract the temporary rollback file, leaving your system state completely safe and unmodified.
 
+### Pruning Backups (`ocman --clean-backups`)
+`ocman --clean-backups --days N` prunes old backups. Before deleting anything it prints a
+table of **all** backups — each tagged **DELETE** (past the retention window) or **KEEP** —
+with a right-aligned Size column and last-modified time, plus a running "N to delete, M kept"
+summary. If the prune would remove **every** backup, it prints a forceful warning that no
+rollback backups will remain. With many retained backups the KEEP rows are summarized; use
+`-v` to list them all. `--days` accepts fractions (e.g. `0.25` = 6 hours).
+
 ---
 
 ## Known Limitations

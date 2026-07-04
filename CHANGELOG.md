@@ -3,6 +3,14 @@
 ## [Unreleased]
 
 ### Changed
+- **`ocman --clean-backups` shows a full KEEP/DELETE preview:** before confirming a prune it
+  now lists **all** backups with column headers (`Backups`/`Size`/`Modified`/`Action`), a
+  right-aligned Size column, and a color-independent `DELETE`/`KEEP` tag per item, plus a
+  "N to delete, M kept" summary. If the prune would remove **every** backup, a forceful
+  warning states that no rollback backups will remain. Retained rows are summarized beyond 20
+  (use `-v` to list all). Built on a new shared destructive-confirmation seam
+  (`DestructivePreview` + `render_destructive_preview` + `confirm_destructive`) that other
+  destructive commands will adopt.
 - **`--days` accepts fractions:** the cleanup/backup retention window (`--clean --days`,
   `--clean-backups --days`, and `default_retention_days`) now accepts floating-point days,
   e.g. `--days 0.25` = 6 hours.
