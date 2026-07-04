@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Fixed
+- **TUI compaction:** The TUI LLM-compaction action was non-functional — it called
+  `render_compact_prompt` and `call_compaction_api` with the wrong arguments and treated
+  the API's string result as a dict, so compaction always failed. Fixed all three call
+  sites (and the "write compaction prompt" export action) and added test coverage.
 - **TUI stability:** Background worker threads (export, delete, compaction, backup,
   restore, cleanup) that outlive the app no longer crash with
   `RuntimeError: App is not running`; late UI callbacks are now safely dropped.

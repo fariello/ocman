@@ -326,6 +326,48 @@ def test_import_session_remap_project(temp_db, tmp_path):
     conn.close()
 
 
+def test_import_session_legacy_db_data_json_roundtrip(temp_db, tmp_path):
+    """TEST-8: positive round-trip for the legacy single-blob db_data.json import format
+    (previously only exercised by the SQLi/traversal rejection tests)."""
+    bundle_file = tmp_path / "legacy.ocbox"
+    meta = {
+        "export_version": "1.0",
+        "exported_at": "2026-06-25T12:00:00",
+        "main_session_id": "legacy1",
+        "all_session_ids": ["legacy1"],
+        "source_project": {"id": "proj-1", "name": "Legacy", "worktree": "/old/path"},
+    }
+    db_data = {
+        "session": [
+            {"id": "legacy1", "project_id": "proj-1", "title": "Legacy Root", "directory": "/old/path/legacy1"}
+        ],
+        "message": [
+            {"id": "lm1", "session_id": "legacy1"}
+        ],
+    }
+    with zipfile.ZipFile(bundle_file, "w") as zipf:
+        zipf.writestr("meta.json", json.dumps(meta))
+        zipf.writestr("db_data.json", json.dumps(db_data))
+
+    # Target project must exist for remap.
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/path', 'Legacy')")
+    conn.commit()
+    conn.close()
+
+    imported_id = extract_and_import_session(bundle_file, target_project_id="proj-1")
+    assert imported_id == "legacy1"
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, project_id, title FROM session WHERE id = 'legacy1'")
+    assert cursor.fetchone() == ("legacy1", "proj-1", "Legacy Root")
+    cursor.execute("SELECT id, session_id FROM message WHERE id = 'lm1'")
+    assert cursor.fetchone() == ("lm1", "legacy1")
+    conn.close()
+
+
 def test_import_session_sql_injection_rejection(temp_db, tmp_path):
     import zipfile
     import json

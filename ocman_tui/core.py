@@ -41,6 +41,7 @@ from ocman import (
     truncate_turns_by_lines,
     Turn,
     ModelInfo,
+    SessionInfo,
     expand_env_vars,
     db_create_rollback_backup,
     db_restore_rollback_backup,

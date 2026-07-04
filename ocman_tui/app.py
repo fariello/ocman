@@ -43,6 +43,7 @@ from .core import (
     render_compact_prompt,
     render_transcript,
     render_restart_context,
+    SessionInfo,
     write_text,
     _load_history,
     _get_sqlite,
@@ -1276,7 +1277,11 @@ class OrsessionApp(App):
 
         elif button_id == "btn-write-prompt":
             path = out_dir / f"opencode-recovery-{self.selected_session_id[:8]}-{timestamp}.compact-prompt.md"
-            content = render_compact_prompt(turns, dummy_sess)
+            content = render_compact_prompt(
+                turns,
+                source_name=f"session_export_{self.selected_session_id[:8]}",
+                session=dummy_sess,
+            )
             write_text(path, content)
             self.app.notify(f"Compaction prompt written to: {path}", severity="information")
 
@@ -1298,9 +1303,20 @@ class OrsessionApp(App):
         status_lbl.update("Estimating context and preparing prompt...")
         self.compaction_running = True
 
-        # Generate the prompt content
-        dummy_sess = type('Dummy', (), {"session_id": self.selected_session_id, "title": self.selected_session_title})()
-        prompt_content = render_compact_prompt(self.current_turns, dummy_sess)
+        # Generate the prompt content. render_compact_prompt requires a real SessionInfo
+        # and a source_name; build a proper SessionInfo rather than a duck-typed stub.
+        session_obj = SessionInfo(
+            session_id=self.selected_session_id,
+            title=self.selected_session_title or "",
+            created="",
+            updated="",
+            raw={},
+        )
+        prompt_content = render_compact_prompt(
+            self.current_turns,
+            source_name=f"session_export_{self.selected_session_id[:8]}",
+            session=session_obj,
+        )
 
         def compaction_worker():
             try:
@@ -1311,9 +1327,9 @@ class OrsessionApp(App):
 
                 self._safe_call_from_thread(status_lbl.update, f"Calling completions API ({model_info.name})...")
                 
-                # Execute API Call
-                result = call_compaction_api(model_info, prompt_content)
-                compacted_text = result["content"]
+                # Execute API Call. call_compaction_api(model, prompt, verbosity) returns
+                # the response content as a str.
+                compacted_text = call_compaction_api(model_info, prompt_content, verbosity=0)
 
                 # Write compacted result file
                 out_dir = Path("opencode-recovery")

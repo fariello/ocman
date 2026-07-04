@@ -1,0 +1,42 @@
+{
+  "info": {
+    "id": "ses_fixture01",
+    "title": "Fixture session for recovery tests"
+  },
+  "messages": [
+    {
+      "info": { "role": "user" },
+      "parts": [
+        { "type": "step-start" },
+        { "type": "text", "text": "Please add a hello function." }
+      ]
+    },
+    {
+      "info": { "role": "assistant" },
+      "parts": [
+        { "type": "text", "text": "Sure, here is a hello function." },
+        {
+          "type": "tool",
+          "tool": "write",
+          "state": {
+            "input": { "path": "hello.py" },
+            "output": "wrote 3 lines to hello.py"
+          }
+        }
+      ]
+    },
+    {
+      "info": { "role": "user" },
+      "parts": [
+        { "type": "text", "text": "Thanks, now run the tests." }
+      ]
+    },
+    {
+      "info": { "role": "assistant" },
+      "parts": [
+        { "type": "step-finish" },
+        { "type": "text", "text": "All tests pass." }
+      ]
+    }
+  ]
+}

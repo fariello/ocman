@@ -252,3 +252,12 @@ PYTHONPATH=. pytest
 > [!IMPORTANT]
 > **Module Resolution**: Always run `pytest` with `PYTHONPATH=.` prefix (or install the package in editable dev mode with `pip install -e .[dev]`). Otherwise, Python might resolve imports from the globally installed PyPI package instead of the local workspace directory, causing `ImportError` or test resolution errors.
 
+### Performance benchmarks (opt-in)
+
+Informational performance benchmarks live in `tests/test_perf.py`. They are skipped by
+default (so they never gate CI) and print timings when explicitly enabled:
+
+```bash
+OCMAN_BENCHMARK=1 PYTHONPATH=. pytest tests/test_perf.py -s
+```
+

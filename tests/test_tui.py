@@ -6,7 +6,7 @@ import ocman
 from ocman_tui.app import OrsessionApp, DeletionSafetyModal, PostExecutionSummaryModal
 from ocman_tui.widgets.sidebar import SidebarWidget
 from ocman_tui.widgets.database import DatabaseAdminWidget
-from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog, Button
+from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog, Button, Select
 
 @pytest.fixture
 def tui_db(tmp_path, monkeypatch):
@@ -258,6 +258,74 @@ async def test_tui_app_deletion_metadata_fetch_fails(tui_db, monkeypatch):
                 break
             await pilot.pause(0.1)
         assert isinstance(app.screen, PostExecutionSummaryModal)
+
+
+@pytest.mark.anyio
+async def test_tui_compaction_end_to_end_network_mocked(tui_db, tmp_path, monkeypatch):
+    """TEST-1 (assess-testing): drive the TUI compaction path with ONLY the network mocked
+    (not the ocman functions), so the real render_compact_prompt/call_compaction_api calls
+    execute. This is red on the pre-fix code (wrong arity + str-treated-as-dict) and green
+    after the fix. Asserts a .compacted.md file is written and success (not failure) notified.
+    """
+    import json as _json
+    import ocman_tui.app as app_mod
+    from ocman import ModelInfo
+
+    # Compaction writes to Path("opencode-recovery") relative to cwd.
+    monkeypatch.chdir(tmp_path)
+
+    # Provide a resolvable model without touching the real opencode config (config/model
+    # resolution is prerequisite plumbing, not the code under test).
+    fake_model = ModelInfo("prov", "m1", "Model 1", "https://api.example.com/v1", "sk-test", 1.0, 2.0, True)
+    monkeypatch.setattr(app_mod, "load_opencode_config", lambda *a, **k: {})
+    monkeypatch.setattr(app_mod, "extract_models_from_config", lambda *a, **k: [fake_model])
+    monkeypatch.setattr(app_mod, "resolve_model", lambda *a, **k: fake_model)
+
+    # Mock ONLY the network: a valid completions payload.
+    class _Resp:
+        def __init__(self, payload):
+            self._d = _json.dumps(payload).encode("utf-8")
+        def read(self):
+            return self._d
+        def __enter__(self):
+            return self
+        def __exit__(self, *a):
+            return False
+
+    import ocman as ocman_mod
+    monkeypatch.setattr(
+        ocman_mod.urllib.request,
+        "urlopen",
+        lambda *a, **k: _Resp({"choices": [{"message": {"content": "COMPACTED OUTPUT"}}], "usage": {}}),
+    )
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        # Set up the state run_llm_compaction requires.
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "Session 1"
+        app.current_turns = [ocman.Turn("user", "hi", 1, "s"), ocman.Turn("assistant", "hello", 2, "s")]
+        # Point the model Select at our fake model spec.
+        sel = app.query_one("#select-compaction-model", Select)
+        sel.set_options([("Model 1", "prov/m1")])
+        sel.value = "prov/m1"
+
+        notes = []
+        monkeypatch.setattr(app, "notify", lambda msg, **k: notes.append(msg))
+
+        app.run_llm_compaction()
+
+        # Wait for the background worker to finish.
+        for _ in range(50):
+            if not app.compaction_running:
+                break
+            await pilot.pause(0.1)
+
+        out_files = list((tmp_path / "opencode-recovery").glob("*.compacted.md"))
+        assert out_files, f"no compacted file written; notes={notes}"
+        assert out_files[0].read_text(encoding="utf-8") == "COMPACTED OUTPUT"
+        assert any("successfully" in n.lower() for n in notes), f"expected success notice, got {notes}"
+        assert not any("failed" in n.lower() for n in notes), f"unexpected failure notice: {notes}"
 
 
 @pytest.mark.anyio
