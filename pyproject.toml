@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "ocman"
-version = "1.0.3"
+version = "1.0.4"
 description = "Interactive TUI for browsing, recovering, and compacting opencode sessions"
 readme = "README.md"
 license = "BSD-3-Clause"

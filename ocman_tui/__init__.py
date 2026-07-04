@@ -7,7 +7,7 @@ ocman_tui — Modern, unified TUI for ocman database administration and session 
 try:
     from ocman import __version__ as __version__
 except Exception:  # pragma: no cover - defensive fallback
-    __version__ = "1.0.3"
+    __version__ = "1.0.4"
 
 __all__ = ["OrsessionApp"]
 

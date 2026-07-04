@@ -1,6 +1,6 @@
 # Changelog
 
-## [Unreleased]
+## [1.0.4] - 2026-07-04
 
 ### Fixed
 - **TUI compaction:** The TUI LLM-compaction action was non-functional — it called
