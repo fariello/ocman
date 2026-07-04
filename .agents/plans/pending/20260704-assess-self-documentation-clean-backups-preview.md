@@ -44,7 +44,7 @@ rollback safety would remain). Distinction must survive without color.
 ## Proposed changes (ordered, validatable)
 
 > **Sequencing (plan-review):** the sibling architecture IPD
-> (`2026-07-04-assess-architecture-destructive-confirm-helper.md`) is the source of truth for the
+> (`20260704-assess-architecture-destructive-confirm-helper.md`) is the source of truth for the
 > **shared renderer** `render_destructive_preview()` (column headers, right-aligned Size, color-independent
 > DELETE/KEEP `Action`, all-affected warning) and the `confirm_destructive()` seam. If that IPD lands first
 > (recommended), this plan's steps 2/4/5 are realized by **building the `DestructivePreview` and calling the

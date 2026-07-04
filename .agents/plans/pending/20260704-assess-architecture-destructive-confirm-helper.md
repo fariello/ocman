@@ -21,7 +21,7 @@ so that improvement (and future ones) is uniform rather than bespoke per command
 - Intent/audience: single-user local opencode admin tool; CLI (`ocman.py`) + Textual TUI.
 - Guiding principles: none dedicated; universal fallback + `ARCHITECTURE.md` (**KISS**, consistency,
   self-documenting, honest docs). The architecture lens warns explicitly against over-engineering.
-- Plan lifecycle: `.agents/plans/pending/` → `.agents/plans/done/` (existing terminal dir).
+- Plan lifecycle: `.agents/plans/pending/` → `.agents/plans/executed/` (terminal dir).
 - Validation: `PYTHONPATH=. pytest`.
 - **Current state (verified):** four near-identical typed-`yes` confirmation blocks exist —
   `db_delete_session_recursive` (ocman.py:4705-4714), `db_delete_project_recursive` (4960-4967),
@@ -46,7 +46,7 @@ Architecture changes carry blast radius — Remediation Risk is rated accordingl
 | ARCH-5 | Low | Low | software engineer | dry_run/force/confirm interpreted per-op | ocman.py:4582, 4596, 5822, 7224 |
 | ARCH-6 | Low | Medium-High (complexity) | architect | Risk of over-generalizing into a "framework" | KISS / scale |
 | ARCH-7 | Medium | Low | architect / QA | Refactor must preserve exact confirm behavior (safety-critical) | ocman.py:4705-4714 etc. |
-| ARCH-8 | Low | Low | stakeholder | Sequence vs the standalone clean-backups IPD (avoid two renderers) | .agents/plans/pending/2026-07-04-...-clean-backups-preview.md |
+| ARCH-8 | Low | Low | stakeholder | Sequence vs the standalone clean-backups IPD (avoid two renderers) | .agents/plans/pending/20260704-assess-self-documentation-clean-backups-preview.md |
 | ARCH-9 | **Blocker (if executed as first drafted)** | Low | architect / QA (security) | **`assume_yes` must NOT be wired to `force`.** In every current op, `force` bypasses only the running-`opencode` process-lock — never the typed-`yes` prompt (delete-session prompt is gated by the separate `confirm` param at ocman.py:4705; `db_run_cleanup`/`cli_clean_backups` always prompt, 6074/7288). Mapping `force`→`assume_yes` during migration would silently skip destructive confirmations for `--force` users. | ocman.py:4596 (force=lock only), 4705 (confirm gates prompt), 6074, 7288 |
 | ARCH-10 | Low | Low | software engineer | clean-backups size should reuse the existing `dir_usage()` helper (added by the executed disk-usage feature) rather than re-walking dirs, for consistency | ocman.py:6210 `dir_usage` |
 
