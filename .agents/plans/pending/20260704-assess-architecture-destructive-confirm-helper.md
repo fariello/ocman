@@ -159,6 +159,32 @@ semantics. Changes applied:
 
 Verdict: APPROVE WITH REVISIONS APPLIED.
 
+## Execution outcome (2026-07-04, PARTIAL — stays pending)
+
+Executed with explicit user approval, scope = **helper + clean-backups first adopter only** (user chose
+incremental sequencing; the other confirm-site migrations + `--clear-history` remain for a follow-up
+execution, so this IPD stays in `pending/`).
+
+Done this run:
+- **Step 1:** characterization tests for `cli_clean_backups` confirm behavior (typed-`yes` proceeds,
+  non-`yes`/dry-run cancel) — `test_clean_backups_cancel_on_non_yes`, `test_clean_backups_dry_run_deletes_nothing`.
+- **Step 2:** added `PreviewItem`/`DestructivePreview` + pure `render_destructive_preview()` (headers,
+  right-aligned Size, color-independent DELETE/KEEP, all-affected warning, pad-before-color) +
+  `confirm_destructive()` (typed-`yes`; dry_run/assume_yes) in `ocman.py`. `assume_yes` is NOT wired to
+  `force` (ARCH-9); mapped from the caller's prompt-skip condition.
+- **Step 3:** converted `cli_clean_backups` to build a `DestructivePreview` (remove=old, keep=retained),
+  reuse `dir_usage()` for dir sizes (ARCH-10), summarize KEEP rows beyond 20 (full under `-v`), and confirm
+  via the seam. Verified live on the real backups dir (22 delete / 5 keep, 7.23 GB, right-aligned).
+- **Docs:** ARCHITECTURE.md "Destructive-confirmation seam"; README `--clean-backups` section; CHANGELOG.
+- Tests added: renderer right-align, KEEP/DELETE preview, all-deleted warning. Validation: `PYTHONPATH=.
+  pytest` → 102 passed, 2 skipped.
+
+Deferred to a follow-up execution (steps 4-6): migrate `db_delete_session_recursive`,
+`db_delete_project_recursive`, `db_run_cleanup`/clean-orphans to `confirm_destructive` (each behind a
+characterization test asserting "`--force` still prompts"); add the `--clear-history` typed-`yes` confirm +
+`--force` bypass; TUI reuse of the pure render string only. **DECISION (user):** `--clear-history` WILL get a
+typed-`yes` confirm + `--force` bypass when that follow-up runs.
+
 ## Approval and execution gate
 
 This IPD is a proposal. It MUST be reviewed and approved by a human before execution, and it is NOT
