@@ -73,4 +73,6 @@ and it is NOT auto-executed. Recommended next steps:
 
 1. Review this IPD (optionally run the `plan-review` workflow to harden it).
 2. On approval, execute the ordered changes, run the validation, and sync specs/docs.
-3. Only then move this IPD out of `pending/` per the project's lifecycle convention.
+3. Only then move this IPD from the pending dir to the terminal dir per the project's
+   lifecycle convention (canonical: `.agents/plans/pending/` -> `.agents/plans/executed/`;
+   a repo already using `done/` keeps `done/`).

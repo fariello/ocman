@@ -2,7 +2,7 @@
 
 This directory contains a modular, executable repository review runbook for use with OpenCode or another modern coding agent.
 
-The framework is installed under `.agents/workflows/release-review/` (alongside the sibling `plan-review/`). The installer (`.agents/workflows/install-workflows.py`) also generates per-tool slash-command shims under `.opencode/commands/` and `.claude/commands/`, and adds a one-line pointer to `AGENTS.md`. See `.agents/workflows/index.md` for the workflow manifest.
+The framework is installed under `.agents/workflows/release-review/` (alongside the sibling `plan-review/`). The installer (`install-workflows.py`, at the agent-workflows repo root) also generates per-tool slash-command shims under `.opencode/commands/` and `.claude/commands/`, and adds a one-line pointer to `AGENTS.md`. See `.agents/workflows/index.md` for the workflow manifest.
 
 ## How to use
 
@@ -42,22 +42,22 @@ just says "read and execute" the workflow body and accepts optional `$ARGUMENTS`
 | `/release-review-plan` | `release-review/README.md` (planning-only) | Audit and consolidated implementation plan, stopping before implementation. |
 | `/plan-review` | `plan-review/plan-review.md` | Pre-execution plan reviewer (reviews and revises a proposed plan before any code is written). |
 
-The sibling `assess/` workflow adds a family of single-concern commands
-(`/assess-performance`, `/assess-security`, `/assess-accessibility`, `/assess-testing`,
-`/assess-guiding-principles`, `/assess-compliance`, and more) that each assess one
-concern deeply and write an IPD into the project's pending-plans directory for human
-approval (they do not auto-execute). See `.agents/workflows/index.md` for the full,
-authoritative command list.
+The sibling `assess/` workflow adds a family of single-concern commands (e.g.
+`/assess-security`, `/assess-performance`) that each assess one concern deeply and write
+an IPD into the project's pending-plans directory for human approval (they do not
+auto-execute). See `.agents/workflows/index.md` for the full, authoritative and current
+command list; it is the source of truth, so this file does not enumerate the assess
+commands.
 
 ## Files
 
 | File | Purpose |
 |---|---|
 | `README.md` | Main orchestrator and single entry point for the full review. |
+| `MANIFEST.md` | This file: what each release-review file is and how to invoke the workflow. |
 | `00-run-protocol.md` | Global operating protocol, safety rules, ID rules, the Fix Bar, artifacts, TodoWrite use, commit and push policy, and final reporting requirements. |
 | `fix-decision-policy.md` | Canonical fix-decision policy: fix by default; defer only when the Remediation Risk of the fix itself is Medium-High or higher. |
 | `reference.md` | On-demand look-up material kept out of the always-read core: ID type codes, ID examples, schema/data-contract types, CI checks, register statuses. |
-| `plan-review.md` | Standalone pre-execution plan/IPD reviewer (plan-time sibling of the release review): reviews and revises a proposed plan before any code is written, using the shared Fix Bar and personas. Invoked on its own via `/plan-review`, not part of the release-review section sequence. |
 | `01-current-state.md` | Repository inventory, current-state assessment, public contract discovery, drift analysis, and early deprecation signals. |
 | `02-quality-security-edge-cases.md` | Bugs, correctness, security, privacy, error handling, resource handling, reliability, and edge-case audit. |
 | `03-tests-regression.md` | Test coverage, regression protection, fixtures, CI test behavior, and missing critical tests. |

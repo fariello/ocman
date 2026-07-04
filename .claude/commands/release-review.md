@@ -1,6 +1,6 @@
 ---
 description: Full pre-release repository review and hardening: deep audit through eight personas, the Fix Bar, fix/validate/report, push and release decisions.
-agent: build
+argument-hint: "[optional target path or flags]"
 ---
 
 Read and execute @.agents/workflows/release-review/README.md.

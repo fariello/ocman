@@ -6,7 +6,7 @@ This runbook is intended for OpenCode or another modern coding agent operating i
 
 ## OpenCode project commands
 
-After installation (see `.agents/workflows/install-workflows.py`, which copies the workflows from the source directory and generates the command shims), OpenCode or Claude Code can invoke the generated command shims:
+After installation (via `install-workflows.py` at the agent-workflows repo root, which copies the workflows from the source directory and generates the command shims), OpenCode or Claude Code can invoke the generated command shims:
 
 ```text
 /release-review

@@ -1,6 +1,6 @@
 ---
 description: Pre-execution plan reviewer: review and improve a proposed implementation plan before any code is written (edits planning documents only).
-agent: build
+argument-hint: "[optional target path or flags]"
 ---
 
 Read and execute @.agents/workflows/plan-review/plan-review.md.

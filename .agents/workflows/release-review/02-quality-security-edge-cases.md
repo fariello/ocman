@@ -74,6 +74,29 @@ Use `B` for bugs, `S` for security/privacy, `E` for edge/error/resource issues, 
 
 **Remediation Risk for every finding (Fix Bar input).** For each finding, record its Remediation Risk (Low / Medium / Medium-High / High) per the Fix Bar in `00-run-protocol.md`: the risk that the fix itself would harm complexity, usability, security, or functionality. Effort/time/cost are explicitly excluded. Under the Fix Bar, Section 7 fixes everything by default and defers only when Remediation Risk is Medium-High or higher, so Medium/Low live-surface and memory findings are fixed in-run by default. Make the basis of the Remediation-Risk rating explicit rather than asserting "low".
 
+## Committed-secrets and sensitive-data scan (mandatory; type `S`)
+
+Do not rely on reading files to catch committed secrets - repos are too large and, more
+importantly, secrets hide in **git history** even after being removed from the working
+tree. Run the deterministic scanner (read-only, redacted output):
+
+```
+python3 .agents/workflows/assess/tools/scan_secrets.py --repo . --format json \
+  --out workflow-artifacts/release-review/<RUN_ID>/secrets-scan.json
+```
+
+(On very large repos, bound history with `--max-commits`/`--since` and record that.)
+Prefer a mature scanner where available: the tool auto-runs `gitleaks`/`trufflehog` if
+installed and otherwise prints install guidance - **recommend installing and running
+one** (and adding it to CI) in the review. Triage the candidates: mark false positives
+(fixtures/examples/public keys), and for any confirmed live secret or committed PII/PHI
+file a **High/Blocker `S` finding**. Never write a raw secret value into findings,
+artifacts, or the report - reference the location and redacted preview only. Proposed
+remediation is **rotate/revoke first** (assume compromised), then purge from history
+(`git filter-repo`/BFG - an operator action that rewrites history), then prevent
+(secret manager, `.gitignore`, pre-commit hook, CI scan). For deep, standalone secret
+work, the `assess-secrets` workflow uses the same tool.
+
 ## In-code TODO/FIXME triage
 
 While reading code, record `TODO`/`FIXME`/`HACK`/`XXX` markers that indicate a known defect, security gap, or unfinished critical path. File them as `TODO`-type findings (cross-referencing `B`/`S`/`MEM` as appropriate) and add them to `todo-reconciliation.md`.
@@ -102,7 +125,8 @@ Do not proceed to Section 3 until all are true (MUST):
 
 - [ ] Quality/security/privacy/edge/reliability findings recorded with severity AND Remediation Risk.
 - [ ] `MEM` and `LIVE` surfaces traced by reading code (not inferred from tests) or marked not applicable; any data-integrity `LIVE`/High finding tagged.
-- [ ] Security-sensitive findings recorded without exposing secrets.
+- [ ] Committed-secrets/sensitive-data scan run (tree + history) via `tools/scan_secrets.py` (or a mature scanner); candidates triaged; any confirmed secret/PII filed as High/Blocker `S` with rotate-first remediation; scan output saved to the run record.
+- [ ] Security-sensitive findings recorded without exposing secrets (locations/redacted previews only).
 - [ ] In-code TODO/FIXME items triaged into `todo-reconciliation.md`.
 - [ ] One observation per lead persona appended to `persona-review.md` (or "no new finding from persona X").
 - [ ] Deprecation candidates updated if relevant.

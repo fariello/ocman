@@ -44,7 +44,7 @@ Derive the concrete commands for each step from the repository: `README`/`CONTRI
 
 ### 1. Finalize, version, and commit
 
-- Confirm version metadata is bumped consistently (package manifest, `__version__`, `CHANGELOG.md`, docs) per the project's convention.
+- Confirm version metadata is bumped consistently (package manifest, `__version__`, `CHANGELOG.md`, docs) per the project's convention. The `release-notes` workflow prepares this step (version bump + changelog/notes drafting); use it here if the notes and bump are not already done, then continue with execution.
 - Confirm `CHANGELOG.md`/release notes describe this release accurately, including any breaking changes flagged in Sections 6 and 8.
 - Confirm the working tree is clean except for intended release changes; commit them as a coherent release commit referencing the relevant action IDs.
 

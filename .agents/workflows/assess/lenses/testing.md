@@ -28,6 +28,16 @@ Testing/regression expert and QA engineer, with the software engineer on testabi
 - **CI execution:** the suite actually runs in CI and gates merges (cross-reference
   CI if assessed).
 
+## Evidence, not self-report
+
+Establish whether the existing suite actually passes with EVIDENCE, not by reading it.
+Use the `verify` workflow (`verify/tools/run_checks.py`) to run the repo's own
+test/lint/type-check commands and capture real exit codes, pass/fail counts, and coverage
+into the run record; cite that evidence in the IPD. If the suite could not be run (no
+setup, needs services/credentials, denied by the safety denylist), record it as UNVERIFIED
+with the reason - do not assume green. A claim that "tests pass" without evidence is a
+finding in itself.
+
 ## IPD emphasis
 
 Propose the highest-value missing tests first (critical paths, data-integrity/LIVE

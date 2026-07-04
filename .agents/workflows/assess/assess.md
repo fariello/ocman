@@ -14,12 +14,32 @@ assess-<concern>  ->  IPD in pending/  ->  plan-review (optional)  ->  human app
 ```
 
 A **lens** file selects the concern (performance, security, accessibility, ...) and
-supplies the concern-specific rubric and lead personas. The invoking command names the
-lens; read it and apply it on top of this shared protocol. If no lens was provided,
-ask the user which concern to assess (or infer it from `$ARGUMENTS`).
+supplies the concern-specific rubric and lead personas. Read it and apply it on top of
+this shared protocol.
 
-`$ARGUMENTS`, if present, narrows the scope (a subdirectory, module, feature, or set
-of files) and/or carries options. Honor it; otherwise assess the whole project.
+## Selecting the concern (which lens)
+
+This workflow is invoked as `/assess <concern> [scope]` (or, in agents without native
+commands, by reading and executing this file with a named concern). Resolve the concern
+to its lens as follows:
+
+1. **The first argument is the concern.** Map it to `lenses/<concern>.md`. Match
+   case-insensitively.
+2. **Aliases / short forms:** accept common ones, e.g. `a11y` or `wcag` ->
+   accessibility, `perf` -> performance, `deps` or `supply` -> supply-chain, `sec` ->
+   security, `docs` -> documentation. If an argument is not an exact lens name, try
+   these, then a closest-match against the available `lenses/*.md`.
+3. **Unknown concern:** if it does not resolve, show the closest-matching concern names
+   and the full list, and ask which to run. Do not guess silently.
+4. **No concern given (bare `/assess`):** list the available concerns (read the
+   `lenses/*.md` filenames) with their one-line focus, and ask the user which to assess.
+   This is the interactive picker.
+5. **Further arguments after the concern** narrow the scope (a subdirectory, module,
+   feature, or set of files) or carry options. Honor them; otherwise assess the whole
+   project.
+
+If this file was invoked with a specific lens already named (an explicit
+`lenses/<concern>.md` reference), just use it.
 
 It shares this framework's policies rather than redefining them (the release-review
 runbook is a sibling under `.agents/workflows/`):
@@ -58,10 +78,14 @@ directory) and a run record (the evidence and report of this assessment, under
    context and to ground the personas.
 2. **Guiding principles** - `GUIDING_PRINCIPLES.md` or equivalent; or the universal
    fallback in `../release-review/00-run-protocol.md`.
-3. **Pending-plans / IPD location and format** - where plans live and any required
-   structure. Discover the project's convention (e.g. `.agents/plans/pending/`,
-   `docs/rfcs/`, an ADR dir). If none exists, create and use
-   `.agents/plans/pending/`. Record which you chose.
+3. **Plan/IPD lifecycle location and format** - where plans live and any required
+   structure. Discover the project's existing convention and USE it (do not impose a
+   different one): a pending dir (e.g. `.agents/plans/pending/`, `docs/rfcs/`, an ADR
+   dir) and a terminal dir for completed plans (accept whatever exists - `executed/`
+   or `done/`). If none exists, create and use `.agents/plans/pending/` for new IPDs
+   and treat `.agents/plans/executed/` as the terminal dir (the canonical default;
+   `done/` is an accepted alias if the repo already uses it). Record which you chose.
+   The `setup-repo` workflow can establish and document this lifecycle for a repo.
 4. **Contributor contract** - `AGENTS.md`/`CONTRIBUTING.md` for plan/spec-sync rules.
 5. **Apply the review scope exclusions** from `../release-review/00-run-protocol.md`:
    do not assess the framework's own directory (`.agents/workflows/`) or
