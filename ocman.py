@@ -4579,6 +4579,154 @@ def run_compaction(
     return compacted_path
 
 
+def _project_for_cwd(cwd: str) -> str:
+    """Best-effort: map a process CWD to a project (name or id) via DB worktree containment.
+
+    Path-aware (resolve + relative_to), not naive prefix. Returns "" when no project matches
+    or the DB is unavailable. Never raises.
+    """
+    if not cwd:
+        return ""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return ""
+    conn = None
+    try:
+        cwd_resolved = Path(cwd).expanduser().resolve()
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cur = conn.cursor()
+        cur.execute("SELECT id, worktree, name FROM project")
+        best = ""
+        best_len = -1
+        for pid, worktree, name in cur.fetchall():
+            if not worktree:
+                continue
+            try:
+                wt = Path(worktree).expanduser().resolve()
+                if cwd_resolved == wt or cwd_resolved.is_relative_to(wt):
+                    # Prefer the most specific (longest) matching worktree.
+                    if len(str(wt)) > best_len:
+                        best_len = len(str(wt))
+                        best = name or pid
+            except (ValueError, OSError):
+                continue
+        return best
+    except Exception:
+        return ""
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def detect_running_opencode(verbosity: int = 0) -> list[dict]:
+    """Enumerate plausibly-running opencode processes (best-effort, fast, fail-open).
+
+    Returns a list of dicts: {pid, tty, elapsed, started, cwd, project, cmdline}. On any
+    failure (no `ps`, parse error, timeout) returns [] so callers FAIL OPEN — a broken
+    detector must never block a destructive op (matches prior behavior).
+
+    Plausibility (SD-9: err toward inclusion for a safety gate): a row is kept when its
+    command line names the program `opencode` and includes a `continue`/session-resume arg.
+    The current process and its ancestors are excluded so ocman never flags itself.
+
+    CWD is read cheaply from /proc/<pid>/cwd on Linux; omitted on other platforms (macOS
+    would need a per-process `lsof`, which is too slow for the ~2s budget).
+    """
+    if sys.platform == "win32":
+        return []
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid,tty,etimes,lstart,args"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3,
+        )
+        if result.returncode != 0 or not result.stdout:
+            return []
+        out = result.stdout
+    except Exception as e:
+        log(f"opencode process detection unavailable ({e}); proceeding.", verbosity)
+        return []
+
+    own_pids = {os.getpid()}
+    try:
+        own_pids.add(os.getppid())
+    except Exception:
+        pass
+
+    procs: list[dict] = []
+    lines = out.splitlines()
+    for line in lines[1:]:  # skip header
+        # Columns: pid, tty, etimes, lstart (a FIXED 5 whitespace tokens like
+        # "Fri Jul  4 12:00:00 2026"), then args (the rest, may contain spaces).
+        tokens = line.split()
+        if len(tokens) < 9:  # 3 + 5 lstart + >=1 arg token
+            continue
+        pid_s, tty, etimes_s = tokens[0], tokens[1], tokens[2]
+        started = " ".join(tokens[3:8])
+        cmdline = " ".join(tokens[8:])
+        # Plausible opencode? Lenient (SD-9: err toward inclusion on a safety gate): the command
+        # names 'opencode' AND carries a continue/resume signal. Broad on purpose so a genuine
+        # running instance is never missed; self/ancestors are excluded above/below.
+        low = cmdline.lower()
+        if "opencode" not in low or "continue" not in low:
+            continue
+        try:
+            pid = int(pid_s)
+        except ValueError:
+            continue
+        if pid in own_pids:
+            continue
+        try:
+            elapsed_s = int(etimes_s)
+            h, m, s = elapsed_s // 3600, (elapsed_s % 3600) // 60, elapsed_s % 60
+            elapsed = f"{h}h{m:02d}m" if h else f"{m}m{s:02d}s"
+        except ValueError:
+            elapsed = etimes_s
+        cwd = ""
+        if sys.platform.startswith("linux"):
+            try:
+                cwd = os.readlink(f"/proc/{pid}/cwd")
+            except OSError:
+                cwd = ""
+        procs.append({
+            "pid": pid, "tty": tty, "elapsed": elapsed, "started": started,
+            "cwd": cwd, "project": _project_for_cwd(cwd) if cwd else "", "cmdline": cmdline,
+        })
+    return procs
+
+
+def _render_running_opencode(procs: list[dict]) -> str:
+    """Human-readable block describing running opencode processes for the lock error."""
+    n = len(procs)
+    lines = [f"{n} opencode process(es) are running:"]
+    for p in procs:
+        tty = p["tty"] if p["tty"] not in ("?", "??", "") else "no tty"
+        row = f"  PID {p['pid']}  tty {tty}  up {p['elapsed']}  started {p['started']}"
+        if p.get("cwd"):
+            row += f"  cwd {p['cwd']}"
+        if p.get("project"):
+            row += f"  → project {p['project']}"
+        lines.append(row)
+    lines.append("")
+    lines.append("Close the processes above, or re-run with --force to bypass this safety check.")
+    return "\n".join(lines)
+
+
+def check_opencode_process_lock(force: bool, verbosity: int = 0) -> None:
+    """Raise RecoveryError with a detailed listing if opencode is running (unless `force`).
+
+    `force` bypasses ONLY this process-lock check (not any typed-`yes` confirmation). Detection
+    fails open: if it cannot enumerate processes, it proceeds silently (prior behavior).
+    """
+    if force or sys.platform == "win32":
+        return
+    procs = detect_running_opencode(verbosity)
+    if procs:
+        raise RecoveryError(_render_running_opencode(procs))
+
+
 def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
     """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
     clean_sid = str(session_id).strip()
@@ -4592,25 +4740,8 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
     if not OPENCODE_DB_PATH.exists():
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
-    # Check for active processes
-    if not force and sys.platform != "win32":
-        import subprocess
-        try:
-            proc_check = subprocess.run(
-                ["pgrep", "-f", "opencode --continue"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            if proc_check.returncode == 0:
-                raise RecoveryError(
-                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
-                    "Use --force to bypass this safety check if you are certain."
-                )
-        except Exception as e:
-            if isinstance(e, RecoveryError):
-                raise
-            pass
+    # Check for running opencode (fail-open; --force bypasses only this lock).
+    check_opencode_process_lock(force, verbosity)
 
     conn = None
     transaction_started = False
@@ -4838,25 +4969,8 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
     if not OPENCODE_DB_PATH.exists():
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
-    # Check for active processes
-    if not force and sys.platform != "win32":
-        import subprocess
-        try:
-            proc_check = subprocess.run(
-                ["pgrep", "-f", "opencode --continue"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            if proc_check.returncode == 0:
-                raise RecoveryError(
-                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
-                    "Use --force to bypass this safety check if you are certain."
-                )
-        except Exception as e:
-            if isinstance(e, RecoveryError):
-                raise
-            pass
+    # Check for running opencode (fail-open; --force bypasses only this lock).
+    check_opencode_process_lock(force, verbosity)
 
     conn = None
     transaction_started = False
@@ -5835,25 +5949,8 @@ def db_run_cleanup(
     if not OPENCODE_DB_PATH.exists():
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
 
-    # Check for active processes if not forced
-    if not force and sys.platform != "win32":
-        import subprocess
-        try:
-            proc_check = subprocess.run(
-                ["pgrep", "-f", "opencode --continue"],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True
-            )
-            if proc_check.returncode == 0:
-                raise RecoveryError(
-                    "Active 'opencode --continue' process detected. Please close OpenCode before running cleanup.\n"
-                    "Use --force to bypass this safety check if you are certain."
-                )
-        except Exception as e:
-            if isinstance(e, RecoveryError):
-                raise
-            pass
+    # Check for running opencode (fail-open; --force bypasses only this lock).
+    check_opencode_process_lock(force, verbosity)
 
     # Compute cutoff time (Unix epoch milliseconds)
     import time

@@ -8,6 +8,14 @@
   typed `yes`; `--force` bypasses the prompt for scripts.
 
 ### Changed
+- **Informative "opencode is running" safety check:** when `--delete`, `--delete-project`, or
+  `--clean`/`--clean-orphans` refuse because opencode is running, the error now lists **each**
+  detected process (PID, TTY, uptime, start time, working directory on Linux, and a best-effort
+  project name) and how many are running — instead of a single generic line. The check errs
+  toward inclusion (a genuine running instance is never missed on a destructive gate), excludes
+  ocman's own process, and fails open if it cannot enumerate processes. `--force` still bypasses
+  only this lock (never a confirmation). One shared `check_opencode_process_lock` helper replaces
+  the three duplicated `pgrep` checks.
 - **Unified destructive-action confirmations:** session delete, project delete, and the age-based
   cleanup/orphan prune now confirm through the shared destructive-confirmation seam (consistent
   typed-`yes` handling). Behavior is unchanged — in particular `--force` still only bypasses the

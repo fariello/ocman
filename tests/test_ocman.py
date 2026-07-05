@@ -434,6 +434,104 @@ def test_db_delete_session_recursive_saves_history(temp_db, mock_history_path):
     assert c["cost_deleted"] == pytest.approx(0.10)
 
 
+def _fake_ps(stdout="", rc=0):
+    """Build a fake subprocess.run replacement returning a canned CompletedProcess."""
+    import subprocess
+    def _run(cmd, *a, **k):
+        return subprocess.CompletedProcess(cmd, rc, stdout=stdout, stderr="")
+    return _run
+
+
+def test_process_lock_refuses_when_opencode_running(temp_db, monkeypatch):
+    """Gate: with a running opencode process detected and not --force, a destructive op refuses."""
+    import subprocess
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1','p1','S1',1,2)")
+    conn.commit(); conn.close()
+    # ps reports one plausible opencode process (pid 4242).
+    ps_out = ("  PID TTY      ELAPSED                     STARTED COMMAND\n"
+              " 4242 pts/3        300  Fri Jul  4 12:00:00 2026 opencode --continue\n")
+    monkeypatch.setattr(ocman.subprocess, "run", _fake_ps(ps_out, rc=0))
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+    with pytest.raises(RecoveryError):
+        db_delete_session_recursive("s1", dry_run=False, force=False, verbosity=0)
+    # session untouched (op refused before deleting)
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_process_lock_force_bypasses(temp_db, monkeypatch):
+    """--force skips the process-lock check entirely (never even runs ps)."""
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1','p1','S1',1,2)")
+    conn.commit(); conn.close()
+    def _boom(*a, **k):
+        raise AssertionError("ps must not run when --force is given")
+    monkeypatch.setattr(ocman.subprocess, "run", _boom)
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+    db_delete_session_recursive("s1", dry_run=False, force=True, verbosity=0)  # no raise
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 0  # deleted
+    conn.close()
+
+
+def test_process_lock_fails_open_on_detector_error(temp_db, monkeypatch):
+    """If the detector errors (e.g. ps missing), the op proceeds (fail-open), matching prior behavior."""
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1','p1','S1',1,2)")
+    conn.commit(); conn.close()
+    def _raise(*a, **k):
+        raise FileNotFoundError("ps not found")
+    monkeypatch.setattr(ocman.subprocess, "run", _raise)
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+    db_delete_session_recursive("s1", dry_run=False, force=False, verbosity=0)  # no raise (fail-open)
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 0  # proceeded
+    conn.close()
+
+
+def test_detect_running_opencode_filter_and_self_exclusion(monkeypatch):
+    """Detector: keeps plausible opencode+continue rows, excludes self and non-matching rows."""
+    import os, subprocess
+    my_pid = os.getpid()
+    ps_out = (
+        "  PID TTY      ELAPSED                     STARTED COMMAND\n"
+        f"{my_pid:>5} pts/1        100  Fri Jul  4 12:00:00 2026 opencode --continue\n"   # self -> excluded
+        " 4242 pts/3        300  Fri Jul  4 12:00:00 2026 opencode --continue\n"          # match
+        " 4243 pts/4         10  Fri Jul  4 12:05:00 2026 vim notes-about-opencode.md\n"  # no 'continue' -> skip
+        " 4244 ?             20  Fri Jul  4 12:06:00 2026 opencode serve\n"               # opencode, no continue -> skip
+    )
+    monkeypatch.setattr(ocman.subprocess, "run",
+                        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, stdout=ps_out, stderr=""))
+    procs = ocman.detect_running_opencode(0)
+    pids = {p["pid"] for p in procs}
+    assert pids == {4242}  # only the genuine opencode --continue, not self, vim, or 'opencode serve'
+
+
+def test_detect_running_opencode_fails_open(monkeypatch):
+    """Detector returns [] (fail-open) when ps is unavailable."""
+    def _raise(*a, **k):
+        raise FileNotFoundError("no ps")
+    monkeypatch.setattr(ocman.subprocess, "run", _raise)
+    assert ocman.detect_running_opencode(0) == []
+
+
+def test_render_running_opencode_lists_each_process():
+    procs = [
+        {"pid": 4242, "tty": "pts/3", "elapsed": "5m00s", "started": "Fri Jul 4 12:00:00 2026",
+         "cwd": "/home/u/proj", "project": "My Project", "cmdline": "opencode --continue"},
+        {"pid": 99, "tty": "?", "elapsed": "1h02m", "started": "Fri Jul 4 11:00:00 2026",
+         "cwd": "", "project": "", "cmdline": "opencode --continue"},
+    ]
+    out = ocman._render_running_opencode(procs)
+    assert "2 opencode process(es) are running" in out
+    assert "PID 4242" in out and "PID 99" in out
+    assert "cwd /home/u/proj" in out and "→ project My Project" in out
+    assert "no tty" in out  # '?' tty normalized
+    assert "--force" in out  # actionable footer
+
+
 def test_delete_session_cancel_on_non_yes(temp_db, monkeypatch):
     """Characterization: delete-session cancels (no deletion) on a non-'yes' confirmation."""
     conn = sqlite3.connect(str(temp_db))
