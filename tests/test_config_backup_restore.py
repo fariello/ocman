@@ -326,6 +326,39 @@ def test_clean_backups_all_deleted_warning(temp_env, monkeypatch, capsys):
     assert "ALL 1 backups" in out and "nothing will remain" in out
 
 
+def test_render_destructive_preview_days_column():
+    """Days column: shown when show_age, header 'Days', values right-aligned to 2 decimals."""
+    from ocman import DestructivePreview, PreviewItem, render_destructive_preview
+    p = DestructivePreview(
+        remove=[PreviewItem("big", 4_760_000_000, "d1", age_days=1.2345),
+                PreviewItem("small", 57344, "d2", age_days=0.07)],
+        keep=[], action_verb="delete", noun="backups", detail_header="Modified",
+        show_age=True, age_header="Days",
+    )
+    out = render_destructive_preview(p)
+    assert "Days" in out.splitlines()[0]          # header present
+    assert "1.23" in out and "0.07" in out         # 2-decimal formatting (rounds 1.2345 -> 1.23)
+    # Right-aligned: the two age tokens end at the same column.
+    import re
+    data_rows = [ln for ln in out.splitlines() if "d1" in ln or "d2" in ln]
+    edges = []
+    for ln in data_rows:
+        m = re.search(r"\b\d+\.\d{2}\b", ln)
+        assert m is not None
+        edges.append(m.end())
+    assert edges[0] == edges[1]
+
+
+def test_render_destructive_preview_no_days_when_disabled():
+    """Days column is absent when show_age is False (other ops)."""
+    from ocman import DestructivePreview, PreviewItem, render_destructive_preview
+    p = DestructivePreview(
+        remove=[PreviewItem("x", 1, "d")], keep=[],
+        action_verb="delete", noun="items", detail_header="Detail",
+    )
+    assert "Days" not in render_destructive_preview(p).splitlines()[0]
+
+
 def test_render_destructive_preview_right_aligned_size():
     """CB-10: the Size column is right-aligned (values share a right edge)."""
     from ocman import DestructivePreview, PreviewItem, render_destructive_preview

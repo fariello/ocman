@@ -6258,6 +6258,7 @@ class PreviewItem:
     label: str
     size_bytes: int | None = None
     detail: str = ""
+    age_days: float | None = None
 
 
 @dataclass
@@ -6275,6 +6276,10 @@ class DestructivePreview:
     noun: str = "items"
     detail_header: str = "Detail"
     irreversible: bool = True
+    # If True, show a right-aligned "Days" column (item.age_days, 2 decimals) between Size
+    # and the detail column. Ops that don't track age leave this False.
+    show_age: bool = False
+    age_header: str = "Days"
     # Emit the forceful "this will <verb> ALL N <noun>" warning when nothing is kept.
     # True for pruning a collection (e.g. backups); False for a targeted delete of a
     # specific session/project, where "keep == []" is normal and not a total wipe.
@@ -6297,6 +6302,9 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
     def _size_str(item: PreviewItem) -> str:
         return human_size_local(item.size_bytes) if item.size_bytes is not None else ""
 
+    def _age_str(item: PreviewItem) -> str:
+        return f"{item.age_days:.2f}" if item.age_days is not None else ""
+
     rows = [("DELETE", it) for it in preview.remove] + [("KEEP", it) for it in preview.keep]
 
     item_header = preview.noun[:1].upper() + preview.noun[1:] if preview.noun else "Item"
@@ -6305,10 +6313,16 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
     size_w = max([len("Size")] + [len(_size_str(it)) for _, it in rows] or [0])
     detail_w = max([len(preview.detail_header)] + [len(it.detail) for _, it in rows] or [0])
     action_w = max(len("Action"), len("DELETE"), len("KEEP"))
+    age_w = max([len(preview.age_header)] + [len(_age_str(it)) for _, it in rows] or [0]) if preview.show_age else 0
+
+    def _age_cell(it: PreviewItem) -> str:
+        # Right-aligned; two extra spaces to separate from the previous column.
+        return f"  {_age_str(it):>{age_w}}" if preview.show_age else ""
 
     lines: list[str] = []
+    age_header_cell = f"  {preview.age_header:>{age_w}}" if preview.show_age else ""
     header = (
-        f"{item_header:<{label_w}}  {'Size':>{size_w}}  "
+        f"{item_header:<{label_w}}  {'Size':>{size_w}}{age_header_cell}  "
         f"{preview.detail_header:<{detail_w}}  {'Action':<{action_w}}"
     )
     lines.append(color_bold(header))
@@ -6320,7 +6334,7 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
         detail_cell = f"{it.detail:<{detail_w}}"
         action_plain = f"{status:<{action_w}}"          # pad plain, then color
         action_cell = color_red(action_plain) if status == "DELETE" else color_green(action_plain)
-        lines.append(f"{label_cell}  {size_cell}  {detail_cell}  {action_cell}")
+        lines.append(f"{label_cell}  {size_cell}{_age_cell(it)}  {detail_cell}  {action_cell}")
 
     n_remove = len(preview.remove)
     n_keep = len(preview.keep)
@@ -7405,7 +7419,8 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
     def _to_item(entry) -> PreviewItem:
         item, mtime, size = entry
         modified = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
-        return PreviewItem(label=item.name, size_bytes=size, detail=modified)
+        age_days = max(0.0, (now - mtime) / 86400.0)
+        return PreviewItem(label=item.name, size_bytes=size, detail=modified, age_days=age_days)
 
     remove_items = [_to_item(e) for e in sorted(backups_to_delete, key=lambda x: x[1])]
     keep_sorted = sorted(backups_to_keep, key=lambda x: x[1])
@@ -7433,6 +7448,8 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
         noun="backups",
         detail_header="Modified",
         irreversible=True,
+        show_age=True,
+        age_header="Days",
     )
     if not confirm_destructive(preview, dry_run=dry_run, assume_yes=False, interactive=True):
         return

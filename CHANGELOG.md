@@ -13,8 +13,9 @@
   typed-`yes` handling). Behavior is unchanged — in particular `--force` still only bypasses the
   running-`opencode` process-lock, never the confirmation prompt.
 - **`ocman --clean-backups` shows a full KEEP/DELETE preview:** before confirming a prune it
-  now lists **all** backups with column headers (`Backups`/`Size`/`Modified`/`Action`), a
-  right-aligned Size column, and a color-independent `DELETE`/`KEEP` tag per item, plus a
+  now lists **all** backups with column headers (`Backups`/`Size`/`Days`/`Modified`/`Action`),
+  a right-aligned Size column and a right-aligned `Days` (age, 2 decimals) column, and a
+  color-independent `DELETE`/`KEEP` tag per item, plus a
   "N to delete, M kept" summary and a header naming the concrete cutoff timestamp. If the prune
   would remove **every** backup, a forceful warning states that no rollback backups will remain.
   Retained rows are summarized beyond 20 (use `-v` to list all). Built on a new shared
