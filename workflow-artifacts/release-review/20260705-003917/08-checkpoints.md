@@ -35,3 +35,10 @@ Section-boundary checkpoints reconciled against the registers.
 - Findings: U2 (Low: stale create-config prompt wording), F1 (deferred: no --yes bypass, safety), M2 (keep
   config key for back-compat). No over-scope in delta.
 - Findings now 16 total; S7 plan adds U2 fix.
+
+## Section 6 checkpoint
+- Delta fully backward-compatible (no removed/renamed flags, export_version 2.0 unchanged, additive config).
+  → semver patch (1.0.5) recommended.
+- P2 (Medium: sdist may ship ~4MB .agents/+workflow-artifacts/ cruft), R2 (High: must bump+finalize CHANGELOG
+  before publish), CI1 (deferred, optional). CI + schema assessments written.
+- Sections 1-6 complete. Findings now 19 total. Ready to build implementation-plan.md.

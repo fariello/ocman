@@ -48,3 +48,10 @@ Per-persona notes appended per section (lead personas own each section).
   pgrep checks into one helper. Configurable-over-hardcoded upheld (new config keys). No over-scope in delta.
 - Stakeholder (8): the delta delivers the maintenance/reclaim value (VACUUM+file delete+visibility) that is
   ocman's reason to exist vs a naive cleaner; U1 (state it in README) is the one gap to the stated outcome.
+
+## Section 6 (compat/packaging/release)
+- Operator/stakeholder (8): install path (pip install ocman) unchanged; first-run --create-config works.
+  Version MUST bump before re-publish (R2). sdist would ship ~4MB of framework/run-record cruft (P2) — a
+  fresh `pip download --no-binary` user gets bloat.
+- Software engineer (5): delta is fully backward-compatible (no removed/renamed flags, export_version 2.0
+  unchanged, additive config keys) → semver patch is correct. CI baseline adequate.
