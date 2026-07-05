@@ -1,1 +1,13 @@
 id,source_ids,section,status,description,remediation_risk,remediation_risk_axis,files_changed,commit,validation,reason_not_done,next_step
+20260705-003917-S7-X1,S4-D1,7,completed,"README default_model -> default_compaction_model (default \"\")",Low,,README.md,4bcc974,"pytest 127; grep confirms",,-
+20260705-003917-S7-X2,S4-D2,7,completed,"README Argument Reference: added ~13 missing flags",Low,,README.md,4bcc974,"cross-checked vs argparse",,-
+20260705-003917-S7-X3,S4-D3,7,completed,"README+ARCHITECTURE document preprocess_argv commands",Low,,README.md/ARCHITECTURE.md,4bcc974,"vs preprocess_argv",,-
+20260705-003917-S7-X4,S4-D4,7,completed,"ARCHITECTURE notes TUI css/ dir",Low,,ARCHITECTURE.md,4bcc974,"ls ocman_tui/css",,-
+20260705-003917-S7-X5,S4-U1,7,completed,"README 'Why ocman?' value prop + named ocgc comparison (author-measured)",Low,,README.md,4bcc974,"verified vs VACUUM+delete paths",,-
+20260705-003917-S7-X6,S5-U2,7,completed,"--create-config prompt 'restart'->'compacted' file",Low,,ocman.py,0f4a087,"pytest 127",,-
+20260705-003917-S7-X7,S3-T1,7,completed,"add test_per_project_disk_usage",Low,,tests/test_ocman.py,0f4a087,"the new test passes",,-
+20260705-003917-S7-X8,S6-P2,7,completed,"sdist exclude .agents/+workflow-artifacts/ (drop stale repository-review/)",Low,,pyproject.toml,0f4a087,"built sdist: 0 .agents/workflow-artifacts entries",,-
+20260705-003917-S7-X9,S6-R2/S1-P1,7,completed,"bump to 1.0.5 + finalize CHANGELOG [1.0.5]",Low,,ocman.py/pyproject.toml/CHANGELOG.md,0f4a087,"ocman --version -> 1.0.5; pytest 127",,"Publish is Section 9 (approval-gated)"
+20260705-003917-S7-DEF1,S2-M1,7,deferred,"do not split ocman.py monolith",Medium-High,complexity/functionality,,,,"Broad refactor; deliberate stated design trade-off","Revisit at a natural seam"
+20260705-003917-S7-DEF2,S5-F1,7,deferred,"do not add --yes destructive bypass",Medium-High,security/usability,,,,"Erodes always-typed-yes safety on irreversible ops","Optional future opt-in flag if user wants scripted destructive automation"
+20260705-003917-S7-DEF3,S6-CI1,7,deferred,"do not add build+secret CI gate",Medium,complexity,,,,"Added CI maintenance surface for single-maintainer tool; tests+local scan already gate","Optional later"

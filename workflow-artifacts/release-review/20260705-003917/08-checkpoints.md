@@ -42,3 +42,10 @@ Section-boundary checkpoints reconciled against the registers.
 - P2 (Medium: sdist may ship ~4MB .agents/+workflow-artifacts/ cruft), R2 (High: must bump+finalize CHANGELOG
   before publish), CI1 (deferred, optional). CI + schema assessments written.
 - Sections 1-6 complete. Findings now 19 total. Ready to build implementation-plan.md.
+
+## Section 7 checkpoint
+- Implemented X1-X9 (all Low risk): D1-D4,U1 docs; U2 prompt; T1 test; P2 sdist; R2 bump to 1.0.5 + CHANGELOG.
+- Deferred DEF1-DEF3 (S2-M1, S5-F1, S6-CI1) with named axes; none silently dropped.
+- Validation: pytest 127 passed / 2 skipped; --version 1.0.5; sdist verified clean.
+- Pending docs IPD now satisfied by this run (X1-X4) -> recommend user close it (S8 WARNING).
+- 2 product commits + artifact commit. Findings 19; actions 12 (9 completed, 3 deferred).
