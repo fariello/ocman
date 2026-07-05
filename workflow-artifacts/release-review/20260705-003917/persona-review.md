@@ -19,3 +19,12 @@ Per-persona notes appended per section (lead personas own each section).
 - Security-minded architect (4): confirm_destructive does NOT consult force (force bypasses only the process
   lock — matches ARCH-9 invariant, verified). Path containment in maybe_copy_compacted_to_project
   (is_relative_to under pending). No new attack surface. Secrets scan clean.
+
+## Section 3 (tests/regression)
+- Testing/regression expert (2): the delta's live surfaces ARE covered — process lock (refuse/force/fail-open/
+  filter/self-exclude, 5 tests), destructive preview (3), cli_clean_backups (cancel/dry-run/keep-delete/all-
+  deleted, 6), compacted-copy (11). Real gaps are only _per_project_disk_usage and focused confirm_destructive/
+  _project_for_cwd tests — all Low.
+- QA/QC (1): the corrected restart→compacted behavior has explicit regression tests (naming, .bu increment,
+  trigger/skip/disabled/backup/fail-soft). The old test file was renamed, not lost. No brittle/misleading tests
+  spotted in the delta.

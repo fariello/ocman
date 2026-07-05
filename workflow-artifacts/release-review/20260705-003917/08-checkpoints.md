@@ -16,3 +16,9 @@ Section-boundary checkpoints reconciled against the registers.
 - S2-M1 (monolith growth) deferred: Medium-High complexity, deliberate design trade-off.
 - Validation: pytest 126 passed / 2 skipped; py_compile/import/--version/--help OK.
 - Reconciled: findings now 4 total (S1-A1, S1-P1, S2-S1, S2-M1); actions 0.
+
+## Section 3 checkpoint
+- Delta test coverage strong: process lock (5), destructive preview (3), cli_clean_backups (6), dir_usage,
+  compacted-copy (11). Gaps all Low: T1 (_per_project_disk_usage), T2 (confirm_destructive/_project_for_cwd).
+- S3-R1 carry-in: mitigated (editable install + CI PYTHONPATH + README doc).
+- pytest 126 passed / 2 skipped. Findings now 7 total; 1 action planned for S7 (T1).
