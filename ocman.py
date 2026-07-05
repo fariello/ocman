@@ -239,6 +239,11 @@ default_retention_days = {default_retention_days}
 # Default: 500
 history_max_runs = {history_max_runs}
 
+# When recovering a session, also copy the generated *.restart.md into the working
+# project's .agents/prompts/pending/ if that project uses the .agents convention
+# (true/false). Override off per-run with --no-project-prompt. Default: true
+copy_restart_to_project_prompts = {copy_restart_to_project_prompts}
+
 # Keep temporary exported JSON files in the output directory (true/false).
 # Default: false
 keep_temp = {keep_temp}
@@ -260,6 +265,7 @@ DEFAULT_CONFIG = {
     "default_backup_dir": str(Path.home() / ".local" / "share" / "opencode" / "backups"),
     "default_retention_days": 5,
     "history_max_runs": 500,
+    "copy_restart_to_project_prompts": True,
     "keep_temp": False,
     "include_tools": False,
     "all_roles": False,
@@ -3338,6 +3344,113 @@ def write_text(path: Path, content: str) -> None:
         raise RecoveryError(f"Could not write file: {path}\n{error}") from error
 
 
+def resolve_project_dir(session: SessionInfo, session_dir: Path | None) -> Path | None:
+    """Resolve "the project being worked on" for the restart-copy feature.
+
+    Precedence: explicit --session-dir (if a real dir) → the session's recorded DB
+    `directory` (if it exists on disk) → the current working directory. Returns None if
+    none resolves. Never raises.
+    """
+    try:
+        if session_dir is not None:
+            p = Path(session_dir).expanduser()
+            if p.is_dir():
+                return p.resolve()
+        # Placeholder sessions have raw={}, so use .get (RSP-11).
+        sess_dir = (session.raw or {}).get("directory")
+        if sess_dir:
+            p = Path(str(sess_dir)).expanduser()
+            if p.is_dir():
+                return p.resolve()
+        cwd = Path.cwd()
+        return cwd.resolve() if cwd.is_dir() else None
+    except (OSError, ValueError):
+        return None
+
+
+def project_prompt_copy_name(session: SessionInfo) -> str:
+    """Filename for the in-project restart copy: `YYYYMMDD-<session_id>.restart.md`.
+
+    YYYYMMDD is the session's last-updated date (local time); if that is unavailable or
+    unparseable (e.g. "unknown"), fall back to the process start date so the name is always
+    valid. The session id is filesystem-safed.
+    """
+    ymd = None
+    updated = getattr(session, "updated", "")
+    if updated and str(updated).strip() and str(updated).strip().lower() != "unknown":
+        try:
+            epoch_s = int(str(updated).strip()) / 1000.0
+            ymd = datetime.fromtimestamp(epoch_s).strftime("%Y%m%d")  # local time
+        except (ValueError, OSError, OverflowError):
+            ymd = None
+    if ymd is None:
+        ymd = get_startup_timestamp_local("%Y%m%d")
+    return f"{ymd}-{safe_filename(session.session_id)}.restart.md"
+
+
+def _backup_restart_bu(path: Path) -> Path | None:
+    """If `path` exists, rename it to `<stem>.restart.bu.NNN.md` (NNN from 001) and return
+    the backup path. Distinct from `_backup_if_exists` (which uses `.NN.bak`). Returns None
+    if `path` does not exist. copy+unlink fallback if rename fails.
+    """
+    if not path.exists():
+        return None
+    # Strip a trailing ".restart.md" to build "<stem>.restart.bu.NNN.md".
+    name = path.name
+    stem = name[: -len(".restart.md")] if name.endswith(".restart.md") else path.stem
+    for n in range(1, 1000):
+        bu = path.parent / f"{stem}.restart.bu.{n:03d}.md"
+        if not bu.exists():
+            try:
+                path.rename(bu)
+            except OSError:
+                import shutil
+                try:
+                    shutil.copy2(path, bu)
+                    path.unlink()
+                except OSError:
+                    return None
+            return bu
+    return None  # 999 backups exhausted; leave the existing file (caller will overwrite)
+
+
+def maybe_copy_restart_to_project(
+    restart_path: Path,
+    session: SessionInfo,
+    project_dir: Path | None,
+    enabled: bool,
+    verbosity: int = 0,
+) -> Path | None:
+    """Copy the generated restart file into a project's `.agents/prompts/pending/` when that
+    project uses the `.agents` convention (has `.agents/plans` or `.agents/prompts`).
+
+    Fail-soft: any error only warns and returns None — it must NEVER break the primary
+    recovery output. Copies ONLY the restart file. Returns the destination path on success.
+    """
+    if not enabled or project_dir is None:
+        return None
+    try:
+        agents = project_dir / ".agents"
+        if not ((agents / "plans").is_dir() or (agents / "prompts").is_dir()):
+            return None  # project does not use the .agents convention
+        pending = (agents / "prompts" / "pending").resolve()
+        dest = (pending / project_prompt_copy_name(session)).resolve()
+        # Path containment: dest must stay under <project>/.agents/prompts/pending.
+        if not (dest == pending or dest.is_relative_to(pending)):
+            log(f"Refusing unsafe restart-copy path: {dest}", verbosity)
+            return None
+        pending.mkdir(parents=True, exist_ok=True)  # only under an existing .agents
+        if dest.exists():
+            _backup_restart_bu(dest)
+        import shutil
+        shutil.copy2(restart_path, dest)
+        print(f"{info_prefix()} Copied restart file to project prompts: {dest}")
+        return dest
+    except Exception as e:
+        print(color_yellow(f"Warning: could not copy restart file into project prompts: {e}"))
+        return None
+
+
 def recover_from_export(
     export_path: Path,
     output_dir: Path,
@@ -3351,6 +3464,8 @@ def recover_from_export(
     output_transcript: Path | None = None,
     output_restart: Path | None = None,
     output_compact: Path | None = None,
+    project_dir: Path | None = None,
+    copy_to_project_prompts: bool = True,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -3480,6 +3595,12 @@ def recover_from_export(
         ),
     )
 
+    # If the working project uses the .agents convention, also drop a copy of the restart
+    # file into <project>/.agents/prompts/pending/ (fail-soft; opt-out via config/flag).
+    project_copy = maybe_copy_restart_to_project(
+        restart_path, session, project_dir, copy_to_project_prompts, verbosity,
+    )
+
     log(f"Writing compact prompt to: {compact_prompt_path}", verbosity)
     write_text(
         compact_prompt_path,
@@ -3499,7 +3620,10 @@ def recover_from_export(
     print(f"\nExtracted turns: {color_bold(str(len(selected_turns)))} Session tail preview:")
     display_turn_preview(selected_turns)
 
-    return [transcript_path, restart_path, compact_prompt_path]
+    generated = [transcript_path, restart_path, compact_prompt_path]
+    if project_copy is not None:
+        generated.append(project_copy)
+    return generated
 
 
 def install_signal_handlers(temp_dir_holder: dict[str, Path | None], verbosity_holder: dict[str, int]) -> None:
@@ -4251,6 +4375,15 @@ Examples:
         "--by-project",
         action="store_true",
         help="With info: add a per-project on-disk session-diff usage breakdown.",
+    )
+
+    parser.add_argument(
+        "--no-project-prompt",
+        action="store_true",
+        help=(
+            "Do not copy the generated restart file into the project's "
+            ".agents/prompts/pending/ (overrides the copy_restart_to_project_prompts config)."
+        ),
     )
 
     parser.add_argument(
@@ -7157,6 +7290,7 @@ def cli_create_config(force: bool = False) -> None:
         prompt("Default Compaction Model", "default_compaction_model")
         prompt("Default Backup Directory", "default_backup_dir")
         prompt("Default Retention Days", "default_retention_days", float)
+        prompt("Copy restart file into project .agents/prompts/pending? (yes/no)", "copy_restart_to_project_prompts", bool)
         prompt("Keep Temporary Files? (yes/no)", "keep_temp", bool)
         prompt("Include Tools in Transcript? (yes/no)", "include_tools", bool)
         prompt("All Roles in Transcript? (yes/no)", "all_roles", bool)
@@ -8351,6 +8485,13 @@ def main() -> None:
         output_dir = args.out
         generated_paths: list[Path] = []
 
+        # Whether to also copy the restart file into a project's .agents/prompts/pending/.
+        # Config default (copy_restart_to_project_prompts, default True), overridden OFF by
+        # the --no-project-prompt flag.
+        _copy_restart_to_prompts = bool(
+            load_ocman_config().get("copy_restart_to_project_prompts", True)
+        ) and not getattr(args, "no_project_prompt", False)
+
         # Load prior context files BEFORE cleaning (in case they're in the output dir).
         prior_context = load_prior_context_files(
             input_compact=args.input_compact,
@@ -8426,6 +8567,8 @@ def main() -> None:
                     output_transcript=args.output_transcript,
                     output_restart=args.output_restart,
                     output_compact=args.output_compact,
+                    project_dir=opencode_cwd,
+                    copy_to_project_prompts=_copy_restart_to_prompts,
                 )
 
                 print()
@@ -8460,6 +8603,8 @@ def main() -> None:
                     output_transcript=args.output_transcript,
                     output_restart=args.output_restart,
                     output_compact=args.output_compact,
+                    project_dir=opencode_cwd,
+                    copy_to_project_prompts=_copy_restart_to_prompts,
                 )
 
                 log("Temporary export cleaned up.", verbosity)

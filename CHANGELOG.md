@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Restart files copied into the project's prompts:** when recovering a session, if the working
+  project uses the `.agents` convention (has `.agents/plans/` or `.agents/prompts/`), ocman also
+  copies the generated `*.restart.md` into `<project>/.agents/prompts/pending/` named
+  `YYYYMMDD-<session_id>.restart.md` (date = session last-updated, local). A pre-existing copy is
+  backed up to `*.restart.bu.NNN.md` (from `001`). The project is resolved as `--session-dir` →
+  the session's recorded directory → the current directory. The copy is fail-soft (never breaks
+  recovery) and can be disabled with `--no-project-prompt` or the
+  `copy_restart_to_project_prompts` config (default true). (CLI recovery path; the TUI "write
+  restart" button is a follow-up.)
 - **`--clear-history` now confirms before wiping:** it previously erased the activity ledger and
   all-time totals with no prompt. It now shows how many run records will be erased and requires a
   typed `yes`; `--force` bypasses the prompt for scripts.
