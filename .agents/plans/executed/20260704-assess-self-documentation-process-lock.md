@@ -4,7 +4,7 @@
 - Concern: self-documentation (learn-as-you-go; "errors that teach")
 - Scope: NARROWED (user request) to the running-opencode detection that blocks
   `--delete` / `--delete-project` / `--clean`, and the message it prints.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (2026-07-04; implemented per the plan-reviewed steps)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -126,6 +126,36 @@ sites (ocman.py:4595-4613, 4843-4861, 5843-5861). Changes applied:
 - **PR-6 (consistency):** render timestamps with the existing `db_show_info` convention.
 
 Verdict: APPROVE WITH REVISIONS APPLIED.
+
+## Execution outcome (2026-07-04)
+
+Executed with explicit user approval (open questions answered: full field set incl. best-effort
+project; lenient filter erring toward inclusion; **omit CWD on macOS** — Linux `/proc` only, no
+`lsof`; one shared helper wired to all 3 sites).
+
+- **Step 1 (helper):** `detect_running_opencode()` runs one `ps -eo pid,tty,etimes,lstart,args`
+  (3s timeout), parses rows, keeps those whose command names `opencode` + `continue` (lenient,
+  SD-9), excludes ocman's own PID + parent, and reads CWD from `/proc/<pid>/cwd` on Linux only.
+  Fails open (returns `[]`) on any error. Plus `_render_running_opencode()` (count header +
+  per-process PID/TTY/uptime/started/CWD/→project + `--force` footer) and
+  `check_opencode_process_lock(force, verbosity)` (raises `RecoveryError(render)` when found;
+  skips on `force`/win32).
+- **Step 3 (best-effort project):** `_project_for_cwd()` maps a CWD to a project via path-aware
+  containment against DB `project.worktree` (resolve + `is_relative_to`, longest match wins).
+  Session id (SD-4) and true last-activity (SD-5) remain **deferred** (not reliably obtainable);
+  start time + elapsed and best-effort project are shown instead.
+- **Step 4 (migration):** all three duplicated `pgrep` blocks (delete-session, delete-project,
+  clean/clean-orphans) replaced with `check_opencode_process_lock(force, verbosity)`. `force`
+  still bypasses ONLY the lock; fail-open preserved.
+- **Docs:** CHANGELOG entry. (ARCHITECTURE already documents the process-lock at a high level.)
+- Tests: gate refuses when detected + !force; `--force` bypasses (ps never runs); detector error
+  → fail-open (op proceeds); detector filter keeps genuine `opencode --continue`, excludes self /
+  `vim ...opencode...` / `opencode serve`; renderer lists each process + footer.
+- Validation: `PYTHONPATH=. pytest` → 115 passed, 2 skipped.
+
+Deferred (unchanged): SD-4 per-process session id (Medium-High / functionality — not reliably
+derivable), SD-5 true last-activity (Medium / functionality). macOS CWD intentionally omitted
+(would require a per-process `lsof`; too slow for the ~2s budget).
 
 ## Approval and execution gate
 
