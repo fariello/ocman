@@ -5,7 +5,7 @@
 - Scope: NARROWED (user request) to: when ocman writes a `*.restart.md`, also drop a copy
   into the working project's `.agents/prompts/pending/` when that project uses an
   `.agents/plans` or `.agents/prompts` convention, with a specific name + backup scheme.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (2026-07-04; CLI recovery path — TUI parity deferred per open Q5)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -134,6 +134,35 @@ path (app.py:1274). Changes applied:
   `generated_paths` var; step 5 corrected and the "list the copied path?" decision routed to open Q5.
 
 Verdict: APPROVE WITH REVISIONS APPLIED.
+
+## Execution outcome (2026-07-04)
+
+Executed with explicit user approval (open questions answered, all defaults):
+Q1 precedence `--session-dir → session directory → CWD`; Q2 create `prompts/pending` under an
+existing `.agents`; Q3 config key + `--no-project-prompt`, default ON; Q4 **local** date;
+Q5 **CLI-only** (TUI parity deferred).
+
+- **Helpers (ocman.py):** `resolve_project_dir()` (precedence; `.get("directory")` for placeholder
+  sessions — RSP-11), `project_prompt_copy_name()` (`YYYYMMDD-<safe id>.restart.md`, local date from
+  `session.updated` epoch-ms, startup-date fallback when "unknown"), `_backup_restart_bu()`
+  (`.restart.bu.NNN.md` from 001, distinct from `_backup_if_exists`), and
+  `maybe_copy_restart_to_project()` (triggers only when `.agents/plans` or `.agents/prompts` exists;
+  writes under `.agents/prompts/pending`; **path-contained** via `is_relative_to`; **fail-soft** —
+  any error only warns; copies ONLY the restart file; backs up an existing dest first).
+- **Threading (RSP-9):** `recover_from_export` gained `project_dir` + `copy_to_project_prompts` params,
+  passed from **both** CLI call sites as `opencode_cwd` and the config/flag; the copy is invoked right
+  after the restart file is written; the copied path is appended to the returned list.
+- **Opt-out:** `copy_restart_to_project_prompts` config (default true, in DEFAULT_CONFIG + template +
+  `--create-config` prompt) and `--no-project-prompt` flag (overrides off).
+- **Docs:** README recovery TIP + argument table + config template; CHANGELOG.
+- Tests: `tests/test_restart_project_prompt.py` (11) — precedence incl. placeholder `raw={}`, name
+  (epoch-ms local + "unknown" fallback), `.bu.NNN` increment, trigger on `.agents/plans`, skip when no
+  convention, disabled, backup-existing, and **fail-soft on copy error**. Verified live end-to-end.
+- Validation: `PYTHONPATH=. pytest` → 126 passed, 2 skipped.
+
+Deferred (Q5 / RSP-10): TUI "write restart" button parity — the TUI writes restart content via a
+separate path (`ocman_tui/app.py`) and does not copy. Scope, functionality axis; a follow-up can wire
+`maybe_copy_restart_to_project` into the TUI restart write.
 
 ## Approval and execution gate
 
