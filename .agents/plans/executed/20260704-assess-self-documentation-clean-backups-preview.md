@@ -3,7 +3,7 @@
 - Date: 2026-07-04
 - Concern: self-documentation ("errors/prompts that teach") + UI/UX
 - Scope: NARROWED (user request) to the `ocman --clean-backups` confirmation output.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (2026-07-04; realized as the first adopter of the shared destructive-confirm seam)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -101,6 +101,23 @@ rollback safety would remain). Distinction must survive without color.
    inline tags? (Assumption: DELETE-first grouping, since DELETE is the actionable set.)
 3. Should the same KEEP/DELETE treatment also apply to the session age-based `--clean` confirmation
    (`db_run_cleanup`)? (Assumption: out of scope for this change; separate follow-up.)
+
+## Execution outcome (2026-07-04)
+
+Executed as the **first adopter** of the shared destructive-confirmation seam (built in
+`20260704-assess-architecture-destructive-confirm-helper.md`). All steps done:
+
+- Step 1 (CB-4): scan collects both `to_delete` and `to_keep`; directory sizes via the existing
+  `dir_usage()` helper. Step 2 (CB-1/5/8/9/10): renders a headered table (`Backups`/`Size`/
+  `Modified`/`Action`) with **right-aligned Size** and color-independent `DELETE`/`KEEP` words.
+  Step 3 (CB-6): KEEP rows summarized beyond 20, full under `-v`. Step 4 (CB-2): forceful
+  "delete ALL N backups" warning when nothing is kept. Step 5 (CB-3): header names the concrete
+  cutoff timestamp; per-row label is `Modified`. Step 6 (CB-7): dry-run shows the same table and
+  deletes nothing; typed-`yes` confirmation preserved via `confirm_destructive`. Step 7: README +
+  CHANGELOG.
+- Tests: characterization (cancel/dry-run) + KEEP/DELETE preview, all-deleted warning, right-align.
+- Verified live on the real backups dir (22 delete / 5 keep, 7.23 GB, right-aligned, cutoff header).
+- Validation: `PYTHONPATH=. pytest` → 107 passed, 2 skipped.
 
 ## Approval and execution gate
 

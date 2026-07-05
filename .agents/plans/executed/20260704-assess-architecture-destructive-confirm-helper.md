@@ -6,7 +6,7 @@
   abstraction** so ocman's destructive CLI ops can uniformly (a) preview the full outcome
   (keep vs remove), (b) warn forcefully on total/irreversible loss, and (c) confirm — instead
   of each op hand-rolling its own prompt.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (approved by user 2026-07-04; implemented across two runs — see Execution outcome)
 - Author: OpenCode / its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Goal
@@ -179,11 +179,29 @@ Done this run:
 - Tests added: renderer right-align, KEEP/DELETE preview, all-deleted warning. Validation: `PYTHONPATH=.
   pytest` → 102 passed, 2 skipped.
 
-Deferred to a follow-up execution (steps 4-6): migrate `db_delete_session_recursive`,
-`db_delete_project_recursive`, `db_run_cleanup`/clean-orphans to `confirm_destructive` (each behind a
-characterization test asserting "`--force` still prompts"); add the `--clear-history` typed-`yes` confirm +
-`--force` bypass; TUI reuse of the pure render string only. **DECISION (user):** `--clear-history` WILL get a
-typed-`yes` confirm + `--force` bypass when that follow-up runs.
+### Follow-up execution (2026-07-04, steps 4-6 — COMPLETES this IPD)
+
+User approved the follow-up batch (all 3 sites + `--clear-history`; `--force` reused as the bypass;
+delete/project use a remove-only preview). Done:
+
+- Added `DestructivePreview.warn_if_all_removed` (True for collection prunes like backups; the delete/prune
+  ops don't render via the seam so it does not apply there) and made `confirm_destructive(preview=None,
+  render=False, action_verb=...)` able to own just the dry-run/irreversible/typed-`yes` tail while the op
+  keeps printing its own detailed row/file listing.
+- **Step 4 (migrations):** `db_delete_session_recursive`, `db_delete_project_recursive`, and
+  `db_run_cleanup`/clean-orphans now confirm via `confirm_destructive(..., render=False)`. Per ARCH-9,
+  `assume_yes` is the existing prompt-skip condition (`not confirm` for the delete fns; `False` for cleanup)
+  — **never `force`**. Characterization tests pin: cancel-on-non-`yes`, `confirm=False` skips (TUI),
+  and **`force=True` still prompts** (`test_delete_session_force_still_prompts`).
+- **Step 5 (`--clear-history`):** now prints how many run records will be erased + "cannot be undone" and
+  requires typed `yes`; `--force` bypasses. Tests: `test_clear_history_requires_confirmation`,
+  `test_clear_history_force_bypasses_prompt`.
+- **Step 6 (TUI):** left the TUI's own async safety modals as-is (they already display their deletion scope);
+  no forced reuse of the render string — kept CLI/TUI I/O separate per the decision. Minimal by design.
+- Docs: ARCHITECTURE.md adopters list; CHANGELOG entries.
+
+Validation across the full follow-up: `PYTHONPATH=. pytest` → 107 passed, 2 skipped. All prior tests
+(delete/cleanup/TUI) stayed green — behavior preserved.
 
 ## Approval and execution gate
 
