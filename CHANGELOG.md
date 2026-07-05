@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Changed
+- **License changed from BSD-3-Clause to Apache-2.0.** The project is now licensed under the
+  Apache License 2.0 (see `LICENSE` and the new `NOTICE`). Apache-2.0 requires that redistributions
+  and derivative works retain the `NOTICE` file and display its attribution reasonably prominently
+  ("Based on the original ocman by Gabriele G. R. Fariello — https://github.com/fariello/ocman"),
+  and it adds an explicit patent grant. Also corrected the copyright holder to the full name
+  (Gabriele G. R. Fariello) in `LICENSE` and `pyproject.toml`.
+  Note: the previously published **1.0.5** artifact on PyPI was released under BSD-3-Clause and
+  remains available under those terms; the Apache-2.0 license applies to this repository state and
+  subsequent releases.
+
+### Added
+- **`NOTICE`** file with the required Apache-2.0 attribution string.
+- **`CITATION.cff`** so the project can be cited (GitHub "Cite this repository"); a Citation section
+  was added to the README.
+
 ## [1.0.5] - 2026-07-05
 
 ### Documentation

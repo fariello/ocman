@@ -1,0 +1,21 @@
+ocman (OpenCode Manager)
+Copyright 2026 Gabriele G. R. Fariello
+
+This product includes software developed by Gabriele G. R. Fariello.
+
+Original project: ocman — https://github.com/fariello/ocman
+
+ATTRIBUTION (required by the Apache License, Version 2.0, Section 4(d)):
+Any distribution of this work or a Derivative Work thereof must retain this NOTICE
+and must display the following attribution reasonably prominently — for example in
+the project README (or equivalent top-level documentation) and, where the software
+presents an "About"/credits screen or --version/--help output, there as well:
+
+    Based on the original ocman by Gabriele G. R. Fariello
+    (https://github.com/fariello/ocman).
+
+If you use this software (or a derivative) in academic or scholarly work, please
+also cite it; see CITATION.cff in the repository for the preferred citation.
+
+This attribution requirement does not create any warranty or liability on the part
+of the author; the software is provided "AS IS" as stated in the LICENSE.

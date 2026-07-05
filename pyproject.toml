@@ -7,10 +7,10 @@ name = "ocman"
 version = "1.0.5"
 description = "Interactive TUI for browsing, recovering, and compacting opencode sessions"
 readme = "README.md"
-license = "BSD-3-Clause"
+license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
-    { name = "Greg Fariello" },
+    { name = "Gabriele G. R. Fariello" },
 ]
 dependencies = [
     "textual>=3.0.0",

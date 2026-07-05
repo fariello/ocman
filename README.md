@@ -329,3 +329,26 @@ default (so they never gate CI) and print timings when explicitly enabled:
 OCMAN_BENCHMARK=1 PYTHONPATH=. pytest tests/test_perf.py -s
 ```
 
+
+---
+
+## License, Attribution & Citation
+
+`ocman` is licensed under the **Apache License 2.0** (see `LICENSE` and `NOTICE`).
+
+**Attribution (required).** Under Apache-2.0 §4(d), any distribution of this software or a
+derivative work must retain the `NOTICE` file and display its attribution reasonably
+prominently. Concretely, derived/redistributed works must include the following, visibly,
+in the project README (or equivalent top-level documentation) and in any "About"/credits
+screen the software presents:
+
+> Based on the original ocman by Gabriele G. R. Fariello (https://github.com/fariello/ocman).
+
+**Citation.** If you use `ocman` in academic or scholarly work, please cite it. GitHub's
+"Cite this repository" button (backed by `CITATION.cff`) provides ready-to-use formats. A
+suggested citation:
+
+> Fariello, Gabriele G. R. *ocman (OpenCode Manager)*. 2026. https://github.com/fariello/ocman
+
+The attribution and citation requests impose no warranty or liability on the author; the
+software is provided "AS IS" per the LICENSE.

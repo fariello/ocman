@@ -1,0 +1,17 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "ocman (OpenCode Manager)"
+abstract: >-
+  A command-line and terminal-UI administration suite for the OpenCode ecosystem:
+  browse, recover, and compact sessions, and manage the local SQLite database,
+  configuration, and on-disk state (cleanup, backup/restore, move, export/import),
+  reclaiming database and filesystem space.
+type: software
+authors:
+  - family-names: "Fariello"
+    given-names: "Gabriele G. R."
+repository-code: "https://github.com/fariello/ocman"
+url: "https://github.com/fariello/ocman"
+license: Apache-2.0
+version: "1.0.5"
+date-released: "2026-07-05"
