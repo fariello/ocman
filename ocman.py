@@ -6345,7 +6345,7 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
 
 
 def confirm_destructive(
-    preview: DestructivePreview,
+    preview: DestructivePreview | None,
     *,
     dry_run: bool = False,
     assume_yes: bool = False,
@@ -7421,6 +7421,11 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
             size_bytes=None, detail="",
         ))
 
+    cutoff_str = datetime.fromtimestamp(cutoff_time).strftime("%Y-%m-%d %H:%M:%S")
+    print(color_bold(
+        f"Backups in {backup_dir} — deleting those modified before {cutoff_str} "
+        f"(older than {days} days):"
+    ))
     preview = DestructivePreview(
         remove=remove_items,
         keep=keep_items,
