@@ -3,7 +3,8 @@
 - Date: 2026-07-05
 - Concern: documentation
 - Scope: whole project's written docs (`README.md`, `ARCHITECTURE.md`, `CHANGELOG.md`, `AGENTS.md`); verified against `ocman.py`, `ocman_tui/`, `pyproject.toml`. Excludes `.agents/workflows/` and `workflow-artifacts/` per review-scope rules.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (2026-07-05, via release-review run 20260705-003917 — findings D1–D4 implemented as
+  S7-X1..X5; U1 added the value-prop positioning). Moved pending → executed.
 - Author: its_direct/pt3-claude-opus-4.8-1m-us (via /assess docs)
 
 ## Goal
