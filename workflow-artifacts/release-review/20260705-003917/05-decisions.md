@@ -31,3 +31,13 @@
   a competitor in shipped docs unless the user confirms. Ask before the S7 README edit.
 - DEC: Do not create a new DECISIONS.md; the project keeps decision rationale in executed IPDs + CHANGELOG
   (existing convention). KD1 is informational.
+
+## Pre-Section-7 user decisions
+- DEC (U1): README WILL name ocgc. User rationale (verified intent): ocgc (OpenCode Garbage Collector, v0.1.0)
+  claims to "reclaim" storage but in the user's own test the DB shrank only 2.9GB -> 2.8GB; ocman's
+  orphan-cleanup dropped the SAME DB 2.9GB -> 1.9GB. ocman was created because ocgc does not deliver its
+  stated function. → Phrase the comparison FACTUALLY as the author's measured result (cite the concrete
+  numbers, attribute as "in my testing"), not as an unqualified absolute claim about ocgc. This keeps it
+  truthful/defensible while making the differentiator clear.
+- DEC (R2): Target version = 1.0.5 (semver patch; fully backward-compatible delta). Section 7 bumps
+  ocman.py __version__ + pyproject version + finalizes CHANGELOG [Unreleased] -> [1.0.5] - 2026-07-05.
