@@ -22,3 +22,9 @@ Section-boundary checkpoints reconciled against the registers.
   compacted-copy (11). Gaps all Low: T1 (_per_project_disk_usage), T2 (confirm_destructive/_project_for_cwd).
 - S3-R1 carry-in: mitigated (editable install + CI PYTHONPATH + README doc).
 - pytest 126 passed / 2 skipped. Findings now 7 total; 1 action planned for S7 (T1).
+
+## Section 4 checkpoint
+- Docs findings: D1 (High: dead default_model key), D2 (Medium: arg table gaps), D3/D4 (Low), U1 (Medium:
+  value prop not stated — reclaim VERIFIED in code), KD1 (Low, informational). All Low remediation risk.
+- Pending docs IPD reconciled → its D1-D4 adopted; closeable after S7.
+- Open Q for user: name ocgc in README or keep neutral (default: neutral). Findings now 13 total.

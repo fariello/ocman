@@ -22,3 +22,12 @@
 
 ## Conflicts
 - None between section files and protocol observed yet.
+
+## Section 4 decisions
+- DEC: The ocman-vs-ocgc reclaim positioning is code-VERIFIED (VACUUM at ocman.py:5031-5047/5269-5284 + on-disk
+  session-diff deletion + reported DB/file savings). U1 will state this benefit truthfully.
+- Q (user): Should the shipped README NAME `ocgc` as the competitor that fails to reclaim ~95%, or state the
+  benefit neutrally without naming a competitor? Default (recommended): state neutrally; do not name/denigrate
+  a competitor in shipped docs unless the user confirms. Ask before the S7 README edit.
+- DEC: Do not create a new DECISIONS.md; the project keeps decision rationale in executed IPDs + CHANGELOG
+  (existing convention). KD1 is informational.

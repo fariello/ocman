@@ -28,3 +28,10 @@ Per-persona notes appended per section (lead personas own each section).
 - QA/QC (1): the corrected restart→compacted behavior has explicit regression tests (naming, .bu increment,
   trigger/skip/disabled/backup/fail-soft). The old test file was renamed, not lost. No brittle/misleading tests
   spotted in the delta.
+
+## Section 4 (docs)
+- Complete novice (7): copying the README config template sets a dead key (default_model) → the single most
+  confusing doc defect (D1). Also, a first-time reader can't tell WHY to pick ocman over doing manual cleanup —
+  the "actually reclaims space" benefit is not stated (U1).
+- UI/UX (3): the Argument Reference table is the CLI's primary reference surface and is missing ~13 real
+  flags (D2), so users must fall back to --help; consistent-terminology otherwise good.
