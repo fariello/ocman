@@ -55,3 +55,17 @@ Per-persona notes appended per section (lead personas own each section).
   fresh `pip download --no-binary` user gets bloat.
 - Software engineer (5): delta is fully backward-compatible (no removed/renamed flags, export_version 2.0
   unchanged, additive config keys) → semver patch is correct. CI baseline adequate.
+
+## Section 8 — eight-persona sign-off (1.0.5)
+1. QA/QC: ACCEPT. Delta code fail-soft/fail-open; 127 tests pass; no open B/E defect.
+2. Testing/regression: ACCEPT. Live/destructive surfaces have targeted tests; +T1 for disk breakdown.
+3. UI/UX: ACCEPT. Accessible destructive previews; arg table now complete (D2); no remaining U blocker.
+4. Architect: ACCEPT. Confirm seam + process-lock helper are earned general-case abstractions; monolith split
+   deferred by design (S2-M1).
+5. Software engineer: ACCEPT. Clean resource handling, parameterized SQL, backward-compatible delta.
+6. Power user: ACCEPT. Fractional --days, disk/--by-project, -v expansion. F1 (--yes bypass) deferred (safety).
+7. Complete novice: ACCEPT. Dead config key fixed (D1); README now states why to use ocman (U1) and full flags.
+8. Stakeholder: ACCEPT. Ships the verified reclaim value prop; version correctly bumped for PyPI. One
+   housekeeping WARNING: move the now-satisfied pending docs IPD out of pending/.
+
+No persona raises a release blocker. Consensus: CONDITIONAL GO (condition = resolve the pending docs IPD).

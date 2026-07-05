@@ -49,3 +49,10 @@ Section-boundary checkpoints reconciled against the registers.
 - Validation: pytest 127 passed / 2 skipped; --version 1.0.5; sdist verified clean.
 - Pending docs IPD now satisfied by this run (X1-X4) -> recommend user close it (S8 WARNING).
 - 2 product commits + artifact commit. Findings 19; actions 12 (9 completed, 3 deferred).
+
+## Section 8 checkpoint
+- Final validation: pytest 127/2, --version 1.0.5, py_compile OK, sdist P2 verified. Clean tree.
+- Eight-persona sign-off: all ACCEPT. final-bug-security-audit clean.
+- Gates: no LIVE/High open; pending-plans gate triggers WARNING (docs IPD unmoved) -> CONDITIONAL GO.
+- Push: none (no permission). Restart: none (loop guard).
+- 12-final-response.md saved. Run complete through Section 8.
