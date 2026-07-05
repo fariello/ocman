@@ -4701,17 +4701,15 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         print()
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
         print()
-        
-        if confirm:
-            try:
-                confirmation = input("Type 'yes' to confirm deletion: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nCancelled.")
-                return
 
-            if confirmation != "yes":
-                print("Cancelled.")
-                return
+        # Confirmation via the shared destructive-confirm seam. The op already printed its
+        # detailed preview above, so render=False (and dry_run already handled above).
+        # assume_yes is the op's existing prompt-skip condition (confirm=False, the TUI path)
+        # — NOT `force` (which only bypasses the process-lock check earlier).
+        if not confirm_destructive(
+            None, assume_yes=not confirm, render=False, action_verb="deletion",
+        ):
+            return
 
         # Create backup directory and backup database file family
         from datetime import datetime
@@ -4957,16 +4955,13 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
         print()
 
-        if confirm:
-            try:
-                confirmation = input("Type 'yes' to confirm project deletion: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print("\nCancelled.")
-                return
-
-            if confirmation != "yes":
-                print("Cancelled.")
-                return
+        # Shared destructive-confirm seam (op already printed its detailed preview; dry_run
+        # handled above). assume_yes = the existing prompt-skip condition (confirm=False, TUI),
+        # never `force`.
+        if not confirm_destructive(
+            None, assume_yes=not confirm, render=False, action_verb="project deletion",
+        ):
+            return
 
         # Create backup directory and backup database file family
         from datetime import datetime
@@ -6068,16 +6063,13 @@ def db_run_cleanup(
             print(f"{info_prefix()} Dry run complete. No database changes were made.")
             return
 
-        # 3. Confirmation
+        # 3. Confirmation via the shared destructive-confirm seam (op already printed its
+        # detailed preview above; dry_run handled above; cleanup always prompts — assume_yes
+        # is never derived from `force`, which only bypasses the process-lock).
         print()
-        try:
-            confirmation = input("Type 'yes' to confirm database prune and vacuum: ").strip()
-        except (EOFError, KeyboardInterrupt):
-            print("\nCancelled.")
-            return
-
-        if confirmation != "yes":
-            print("Cancelled.")
+        if not confirm_destructive(
+            None, assume_yes=False, render=False, action_verb="database prune and vacuum",
+        ):
             return
 
         # 4. Create database backup family
@@ -6283,6 +6275,10 @@ class DestructivePreview:
     noun: str = "items"
     detail_header: str = "Detail"
     irreversible: bool = True
+    # Emit the forceful "this will <verb> ALL N <noun>" warning when nothing is kept.
+    # True for pruning a collection (e.g. backups); False for a targeted delete of a
+    # specific session/project, where "keep == []" is normal and not a total wipe.
+    warn_if_all_removed: bool = True
 
 
 def render_destructive_preview(preview: DestructivePreview) -> str:
@@ -6330,15 +6326,17 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
     n_keep = len(preview.keep)
     total_remove_bytes = sum(it.size_bytes or 0 for it in preview.remove)
     lines.append("")
-    if n_keep == 0 and n_remove > 0:
+    if preview.warn_if_all_removed and n_keep == 0 and n_remove > 0:
         lines.append(color_red(color_bold(
             f"WARNING: this will {preview.action_verb} ALL {n_remove} {preview.noun} — "
             f"nothing will remain."
         )))
-    else:
+    elif n_keep:
         lines.append(
             f"{n_remove} {preview.noun} to {preview.action_verb}, {n_keep} kept."
         )
+    else:
+        lines.append(f"{n_remove} {preview.noun} to {preview.action_verb}.")
     if total_remove_bytes:
         lines.append(f"Total size to reclaim: {human_size_local(total_remove_bytes)}")
     if preview.irreversible:
@@ -6352,25 +6350,32 @@ def confirm_destructive(
     dry_run: bool = False,
     assume_yes: bool = False,
     interactive: bool = True,
+    render: bool = True,
+    action_verb: str | None = None,
 ) -> bool:
-    """Print the preview and confirm a destructive action. Single home for typed-'yes' logic.
+    """Confirm a destructive action. Single home for the typed-'yes' logic.
 
     Returns True iff the caller should proceed. Semantics (preserve existing behavior):
-    - `dry_run`: print the preview + a dry-run note, do NOT prompt, return False.
-    - `assume_yes` or not `interactive`: print the preview, skip the prompt, return True.
-      (Callers map this from their EXISTING prompt-skip condition — e.g. the delete
-      functions' `confirm=False` — NOT from `--force`, which only bypasses the process-lock.)
+    - if `render`, print `render_destructive_preview(preview)` first; ops that already print
+      their own detailed preview can pass `render=False` (then `preview` may be None) so the
+      seam only owns the dry-run/IRREVERSIBLE/prompt tail.
+    - `dry_run`: print a dry-run note, do NOT prompt, return False.
+    - `assume_yes` or not `interactive`: skip the prompt, return True. (Callers map this from
+      their EXISTING prompt-skip condition — e.g. the delete functions' `confirm=False` — NOT
+      from `--force`, which only bypasses the process-lock.)
     - otherwise: prompt `Type 'yes' to confirm <verb>:` and return input().strip() == "yes";
       EOF/KeyboardInterrupt is treated as a cancel (return False).
     """
-    print(render_destructive_preview(preview))
+    verb = action_verb or (preview.action_verb if preview is not None else "this action")
+    if render and preview is not None:
+        print(render_destructive_preview(preview))
     if dry_run:
         print(f"{info_prefix()} Dry run complete. No changes were made.")
         return False
     if assume_yes or not interactive:
         return True
     try:
-        confirmation = input(f"Type 'yes' to confirm {preview.action_verb}: ").strip()
+        confirmation = input(f"Type 'yes' to confirm {verb}: ").strip()
     except (EOFError, KeyboardInterrupt):
         print("\nCancelled.")
         return False
@@ -7747,6 +7752,20 @@ def main() -> None:
             },
             "runs": []
         }
+        # Confirm before wiping the ledger + all-time totals. --force bypasses (scriptable).
+        existing = _load_history()
+        run_count = len(existing.get("runs", []))
+        print(color_red(color_bold(
+            f"This will erase the entire activity ledger ({run_count} run record(s)) and "
+            f"reset ALL all-time totals. This cannot be undone."
+        )))
+        if not confirm_destructive(
+            None,
+            assume_yes=getattr(args, "force", False),
+            render=False,
+            action_verb="clearing the activity history",
+        ):
+            return
         _save_history(default_history)
         print(color_green("Historical metrics and activity log successfully cleared."))
         return

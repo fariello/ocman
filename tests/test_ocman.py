@@ -434,6 +434,86 @@ def test_db_delete_session_recursive_saves_history(temp_db, mock_history_path):
     assert c["cost_deleted"] == pytest.approx(0.10)
 
 
+def test_delete_session_cancel_on_non_yes(temp_db, monkeypatch):
+    """Characterization: delete-session cancels (no deletion) on a non-'yes' confirmation."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1', 'p1', 'S1', 1000, 2000)")
+    conn.commit(); conn.close()
+    monkeypatch.setattr("builtins.input", lambda _: "no")
+    db_delete_session_recursive("s1", dry_run=False, force=True, verbosity=0)
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 1  # not deleted
+    conn.close()
+
+
+def test_delete_session_force_still_prompts(temp_db, monkeypatch):
+    """ARCH-9 characterization: --force does NOT skip the typed-'yes' prompt (it only bypasses
+    the process-lock). With force=True and a non-'yes' answer, nothing is deleted."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1', 'p1', 'S1', 1000, 2000)")
+    conn.commit(); conn.close()
+    prompted = {"n": 0}
+    def _input(_):
+        prompted["n"] += 1
+        return "no"
+    monkeypatch.setattr("builtins.input", _input)
+    db_delete_session_recursive("s1", dry_run=False, force=True, verbosity=0)
+    assert prompted["n"] == 1, "force=True must still prompt for typed 'yes'"
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 1
+    conn.close()
+
+
+def test_delete_session_confirm_false_skips_prompt(temp_db, monkeypatch):
+    """Characterization: confirm=False (the TUI path) skips the prompt and deletes."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1', 'p1', 'S1', 1000, 2000)")
+    conn.commit(); conn.close()
+    def _input(_):
+        raise AssertionError("confirm=False must not prompt")
+    monkeypatch.setattr("builtins.input", _input)
+    db_delete_session_recursive("s1", dry_run=False, force=True, verbosity=0, confirm=False)
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 0  # deleted
+    conn.close()
+
+
+def test_clear_history_requires_confirmation(mock_history_path, monkeypatch):
+    """--clear-history now prompts; a non-'yes' answer preserves the history."""
+    import sys
+    # Seed some history so we can detect whether it was cleared.
+    ocman._save_history({"cumulative": {"sessions_deleted": 7}, "runs": [{"n": 1}, {"n": 2}]})
+    monkeypatch.setattr("builtins.input", lambda _: "no")
+    monkeypatch.setattr(sys, "argv", ["ocman", "--clear-history"])
+    try:
+        ocman.main()
+    except SystemExit:
+        pass
+    hist = ocman._load_history()
+    assert hist["cumulative"]["sessions_deleted"] == 7  # NOT cleared on 'no'
+    assert len(hist["runs"]) == 2
+
+
+def test_clear_history_force_bypasses_prompt(mock_history_path, monkeypatch):
+    """--clear-history --force clears without prompting (scriptable)."""
+    import sys
+    ocman._save_history({"cumulative": {"sessions_deleted": 7}, "runs": [{"n": 1}]})
+    def _no_input(_):
+        raise AssertionError("--force must not prompt")
+    monkeypatch.setattr("builtins.input", _no_input)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--clear-history", "--force"])
+    try:
+        ocman.main()
+    except SystemExit:
+        pass
+    hist = ocman._load_history()
+    assert hist["cumulative"]["sessions_deleted"] == 0  # cleared
+    assert hist["runs"] == []
+
+
 def test_preprocess_argv():
     """Test CLI subcommand translation/preprocessing logic."""
     from ocman import preprocess_argv

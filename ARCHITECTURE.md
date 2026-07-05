@@ -64,9 +64,12 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   pure `render_destructive_preview()` (a color-independent table with headers, a right-aligned
   Size column, and a `DELETE`/`KEEP` `Action` word per item — color is enhancement only — plus a
   forceful "this will ... ALL N ..." warning when nothing is kept), and a `confirm_destructive()`
-  I/O function that owns the typed-`yes` prompt and honors `dry_run`/`assume_yes`. New destructive
+  I/O function that owns the typed-`yes` prompt and honors `dry_run`/`assume_yes`.   New destructive
   operations should build a `DestructivePreview` and call these rather than hand-rolling a prompt.
-  (`--clean-backups` is the first adopter; other confirmation sites migrate to it incrementally.)
+  Adopters: `--clean-backups` (full KEEP/DELETE preview), session/project delete, the age-based
+  cleanup/orphan prune, and `--clear-history` (now confirmed; `--force` bypasses). The delete/prune
+  ops keep printing their own detailed row/file listing and call `confirm_destructive(..., render=False)`
+  so the seam owns only the dry-run/irreversible/typed-`yes` tail.
   Note: a `force` flag bypasses only the running-`opencode` process-lock, never the typed-`yes`
   prompt — the prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
   op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).

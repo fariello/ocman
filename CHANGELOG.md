@@ -2,7 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+- **`--clear-history` now confirms before wiping:** it previously erased the activity ledger and
+  all-time totals with no prompt. It now shows how many run records will be erased and requires a
+  typed `yes`; `--force` bypasses the prompt for scripts.
+
 ### Changed
+- **Unified destructive-action confirmations:** session delete, project delete, and the age-based
+  cleanup/orphan prune now confirm through the shared destructive-confirmation seam (consistent
+  typed-`yes` handling). Behavior is unchanged — in particular `--force` still only bypasses the
+  running-`opencode` process-lock, never the confirmation prompt.
 - **`ocman --clean-backups` shows a full KEEP/DELETE preview:** before confirming a prune it
   now lists **all** backups with column headers (`Backups`/`Size`/`Modified`/`Action`), a
   right-aligned Size column, and a color-independent `DELETE`/`KEEP` tag per item, plus a
