@@ -239,9 +239,10 @@ default_retention_days = {default_retention_days}
 # Default: 500
 history_max_runs = {history_max_runs}
 
-# When recovering a session, also copy the generated *.restart.md into the working
+# When recovering with --compact, also copy the generated *.compacted.md into the working
 # project's .agents/prompts/pending/ if that project uses the .agents convention
-# (true/false). Override off per-run with --no-project-prompt. Default: true
+# (true/false). The compacted file is the document a fresh agent reads. Only applies when
+# compaction runs. Override off per-run with --no-project-prompt. Default: true
 copy_restart_to_project_prompts = {copy_restart_to_project_prompts}
 
 # Keep temporary exported JSON files in the output directory (true/false).
@@ -3369,7 +3370,7 @@ def resolve_project_dir(session: SessionInfo, session_dir: Path | None) -> Path 
 
 
 def project_prompt_copy_name(session: SessionInfo) -> str:
-    """Filename for the in-project restart copy: `YYYYMMDD-<session_id>.restart.md`.
+    """Filename for the in-project compacted copy: `YYYYMMDD-<session_id>.compacted.md`.
 
     YYYYMMDD is the session's last-updated date (local time); if that is unavailable or
     unparseable (e.g. "unknown"), fall back to the process start date so the name is always
@@ -3385,21 +3386,21 @@ def project_prompt_copy_name(session: SessionInfo) -> str:
             ymd = None
     if ymd is None:
         ymd = get_startup_timestamp_local("%Y%m%d")
-    return f"{ymd}-{safe_filename(session.session_id)}.restart.md"
+    return f"{ymd}-{safe_filename(session.session_id)}.compacted.md"
 
 
-def _backup_restart_bu(path: Path) -> Path | None:
-    """If `path` exists, rename it to `<stem>.restart.bu.NNN.md` (NNN from 001) and return
+def _backup_compacted_bu(path: Path) -> Path | None:
+    """If `path` exists, rename it to `<stem>.compacted.bu.NNN.md` (NNN from 001) and return
     the backup path. Distinct from `_backup_if_exists` (which uses `.NN.bak`). Returns None
     if `path` does not exist. copy+unlink fallback if rename fails.
     """
     if not path.exists():
         return None
-    # Strip a trailing ".restart.md" to build "<stem>.restart.bu.NNN.md".
+    # Strip a trailing ".compacted.md" to build "<stem>.compacted.bu.NNN.md".
     name = path.name
-    stem = name[: -len(".restart.md")] if name.endswith(".restart.md") else path.stem
+    stem = name[: -len(".compacted.md")] if name.endswith(".compacted.md") else path.stem
     for n in range(1, 1000):
-        bu = path.parent / f"{stem}.restart.bu.{n:03d}.md"
+        bu = path.parent / f"{stem}.compacted.bu.{n:03d}.md"
         if not bu.exists():
             try:
                 path.rename(bu)
@@ -3414,18 +3415,22 @@ def _backup_restart_bu(path: Path) -> Path | None:
     return None  # 999 backups exhausted; leave the existing file (caller will overwrite)
 
 
-def maybe_copy_restart_to_project(
-    restart_path: Path,
+def maybe_copy_compacted_to_project(
+    compacted_path: Path,
     session: SessionInfo,
     project_dir: Path | None,
     enabled: bool,
     verbosity: int = 0,
 ) -> Path | None:
-    """Copy the generated restart file into a project's `.agents/prompts/pending/` when that
-    project uses the `.agents` convention (has `.agents/plans` or `.agents/prompts`).
+    """Copy the LLM-compacted restart file into a project's `.agents/prompts/pending/` when
+    that project uses the `.agents` convention (has `.agents/plans` or `.agents/prompts`).
+
+    The compacted file (`*.compacted.md`) is the document a fresh opencode agent reads, so it
+    is the one placed in the project. This only runs when compaction produced a compacted
+    file (i.e. `--compact`); a plain recovery copies nothing.
 
     Fail-soft: any error only warns and returns None — it must NEVER break the primary
-    recovery output. Copies ONLY the restart file. Returns the destination path on success.
+    recovery output. Copies ONLY the compacted file. Returns the destination path on success.
     """
     if not enabled or project_dir is None:
         return None
@@ -3437,17 +3442,17 @@ def maybe_copy_restart_to_project(
         dest = (pending / project_prompt_copy_name(session)).resolve()
         # Path containment: dest must stay under <project>/.agents/prompts/pending.
         if not (dest == pending or dest.is_relative_to(pending)):
-            log(f"Refusing unsafe restart-copy path: {dest}", verbosity)
+            log(f"Refusing unsafe compacted-copy path: {dest}", verbosity)
             return None
         pending.mkdir(parents=True, exist_ok=True)  # only under an existing .agents
         if dest.exists():
-            _backup_restart_bu(dest)
+            _backup_compacted_bu(dest)
         import shutil
-        shutil.copy2(restart_path, dest)
-        print(f"{info_prefix()} Copied restart file to project prompts: {dest}")
+        shutil.copy2(compacted_path, dest)
+        print(f"{info_prefix()} Copied compacted file to project prompts: {dest}")
         return dest
     except Exception as e:
-        print(color_yellow(f"Warning: could not copy restart file into project prompts: {e}"))
+        print(color_yellow(f"Warning: could not copy compacted file into project prompts: {e}"))
         return None
 
 
@@ -3464,8 +3469,6 @@ def recover_from_export(
     output_transcript: Path | None = None,
     output_restart: Path | None = None,
     output_compact: Path | None = None,
-    project_dir: Path | None = None,
-    copy_to_project_prompts: bool = True,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -3595,12 +3598,6 @@ def recover_from_export(
         ),
     )
 
-    # If the working project uses the .agents convention, also drop a copy of the restart
-    # file into <project>/.agents/prompts/pending/ (fail-soft; opt-out via config/flag).
-    project_copy = maybe_copy_restart_to_project(
-        restart_path, session, project_dir, copy_to_project_prompts, verbosity,
-    )
-
     log(f"Writing compact prompt to: {compact_prompt_path}", verbosity)
     write_text(
         compact_prompt_path,
@@ -3621,8 +3618,6 @@ def recover_from_export(
     display_turn_preview(selected_turns)
 
     generated = [transcript_path, restart_path, compact_prompt_path]
-    if project_copy is not None:
-        generated.append(project_copy)
     return generated
 
 
@@ -4381,7 +4376,7 @@ Examples:
         "--no-project-prompt",
         action="store_true",
         help=(
-            "Do not copy the generated restart file into the project's "
+            "Do not copy the compacted file (from --compact) into the project's "
             ".agents/prompts/pending/ (overrides the copy_restart_to_project_prompts config)."
         ),
     )
@@ -8485,10 +8480,11 @@ def main() -> None:
         output_dir = args.out
         generated_paths: list[Path] = []
 
-        # Whether to also copy the restart file into a project's .agents/prompts/pending/.
-        # Config default (copy_restart_to_project_prompts, default True), overridden OFF by
-        # the --no-project-prompt flag.
-        _copy_restart_to_prompts = bool(
+        # Whether to also copy the compacted file into a project's .agents/prompts/pending/
+        # (only when --compact produces one). Config default
+        # (copy_restart_to_project_prompts, default True), overridden OFF by the
+        # --no-project-prompt flag.
+        _copy_compacted_to_prompts = bool(
             load_ocman_config().get("copy_restart_to_project_prompts", True)
         ) and not getattr(args, "no_project_prompt", False)
 
@@ -8567,8 +8563,6 @@ def main() -> None:
                     output_transcript=args.output_transcript,
                     output_restart=args.output_restart,
                     output_compact=args.output_compact,
-                    project_dir=opencode_cwd,
-                    copy_to_project_prompts=_copy_restart_to_prompts,
                 )
 
                 print()
@@ -8603,8 +8597,6 @@ def main() -> None:
                     output_transcript=args.output_transcript,
                     output_restart=args.output_restart,
                     output_compact=args.output_compact,
-                    project_dir=opencode_cwd,
-                    copy_to_project_prompts=_copy_restart_to_prompts,
                 )
 
                 log("Temporary export cleaned up.", verbosity)
@@ -8662,6 +8654,15 @@ def main() -> None:
                     )
                 if compacted_path:
                     generated_paths.append(compacted_path)
+                    # If the working project uses the .agents convention, also drop the
+                    # compacted file (the doc a fresh agent reads) into
+                    # <project>/.agents/prompts/pending/ (fail-soft; opt-out via config/flag).
+                    project_copy = maybe_copy_compacted_to_project(
+                        compacted_path, session, opencode_cwd,
+                        _copy_compacted_to_prompts, verbosity,
+                    )
+                    if project_copy is not None:
+                        generated_paths.append(project_copy)
                     print()
                     print(color_bold("Next step:"))
                     print(f"  1. Start a fresh opencode session in the same project directory.")

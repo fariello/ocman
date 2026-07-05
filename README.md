@@ -61,13 +61,14 @@ ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
 ```
 
 > [!TIP]
-> **Restart files land in your project's prompts.** If the project you're recovering for uses the
-> `.agents` convention (has `.agents/plans/` or `.agents/prompts/`), ocman also copies the generated
-> `*.restart.md` into `<project>/.agents/prompts/pending/` as `YYYYMMDD-<session_id>.restart.md`
-> (date = session last-updated). A pre-existing copy is backed up to `*.restart.bu.NNN.md`. The
+> **Compacted files land in your project's prompts.** When you recover with `--compact` and the
+> project you're recovering for uses the `.agents` convention (has `.agents/plans/` or
+> `.agents/prompts/`), ocman also copies the LLM-generated `*.compacted.md` (the document a fresh
+> agent reads) into `<project>/.agents/prompts/pending/` as `YYYYMMDD-<session_id>.compacted.md`
+> (date = session last-updated). A pre-existing copy is backed up to `*.compacted.bu.NNN.md`. The
 > "project" is `--session-dir` if given, else the session's recorded directory, else the current
-> directory. Disable per-run with `--no-project-prompt`, or globally via
-> `copy_restart_to_project_prompts = false`.
+> directory. This only applies when compaction runs (a plain recovery copies nothing). Disable
+> per-run with `--no-project-prompt`, or globally via `copy_restart_to_project_prompts = false`.
 
 ---
 
@@ -186,7 +187,7 @@ ocman --create-config
 | | `--force` | Bypass active process lock checks during delete/cleanup |
 | | `--info` | Show database and storage usage information (incl. backups disk usage) |
 | | `--by-project` | With `info`: add a per-project on-disk session-diff usage breakdown |
-| | `--no-project-prompt` | Do not copy the generated restart file into the project's `.agents/prompts/pending/` |
+| | `--no-project-prompt` | Do not copy the compacted file (from `--compact`) into the project's `.agents/prompts/pending/` |
 | | `--clear-history` | Wipes the historical activity ledger and resets totals (asks for confirmation; `--force` bypasses) |
 | | `--create-config` | Interactively generate the `ocman.toml` file |
 | | `--backup-opencode` | Create a system backup archive ZIP file |
@@ -233,8 +234,9 @@ default_retention_days = 5
 # Cumulative all-time totals are always preserved; only the per-run detail list is capped.
 history_max_runs = 500
 
-# When recovering a session, also copy the generated *.restart.md into the working project's
-# .agents/prompts/pending/ if that project uses the .agents convention (--no-project-prompt overrides).
+# When recovering with --compact, also copy the generated *.compacted.md (the doc a fresh agent
+# reads) into the working project's .agents/prompts/pending/ if that project uses the .agents
+# convention. Only applies when compaction runs (--no-project-prompt overrides).
 copy_restart_to_project_prompts = true
 
 # CLI and recovery behavior settings
