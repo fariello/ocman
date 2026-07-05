@@ -6,6 +6,24 @@ While it retains powerful capabilities for extracting and compacting crashed or 
 
 ---
 
+## Why ocman? (it actually reclaims the space)
+
+OpenCode's SQLite database grows without bound and has no built-in cleanup, and OpenCode also
+writes session-diff files to disk. The whole point of a "garbage collector" for it is to *actually
+give the space back* — both the rows in the database and the bytes on disk.
+
+`ocman` does this by **deleting the orphaned/old rows and their on-disk session-diff files and then
+running `VACUUM`** to physically shrink the SQLite file, and it reports exactly how many bytes were
+reclaimed (see `--clean`, `--clean-orphans`, and `ocman info`/`disk`).
+
+This is why the project exists. In the author's own testing, the alternative
+[`ocgc`](https://pypi.org/project/ocgc/) (OpenCode Garbage Collector, v0.1.0) — which advertises that
+it "reclaims" this storage — shrank a 2.9 GB database only to ~2.8 GB, while `ocman`'s orphan cleanup
+brought the *same* database down to ~1.9 GB. Reclaiming space you asked to be reclaimed is the
+baseline `ocman` is built to actually meet.
+
+---
+
 ## Core Capabilities
 
 *   **Interactive TUI Dashboard (`ocman ui` / `ocman gui`)**: A rich, multi-tab terminal application built with Textual to browse projects, view session details, preview transcripts, run recovery wizards, manage settings, and perform database admin tasks.
@@ -125,6 +143,8 @@ The interactive terminal user interface organizes your workflow across several t
 *   `ocman list sessions` $\rightarrow$ `--list-sessions`
 *   `ocman list sessions in [project] my-project` $\rightarrow$ `--list-sessions --project "my-project"`
 *   `ocman show logs` $\rightarrow$ `--show-logs`
+*   `ocman disk` or `ocman du` $\rightarrow$ `--info --by-project`
+*   `ocman delete project [name]` $\rightarrow$ `--delete-project [--project name]`
 
 ### Database & Storage Status (`ocman info`)
 Prints a breakdown of your current database state on disk, including the SQLite database
@@ -173,10 +193,22 @@ ocman --create-config
 | `-ml N` | `--max-lines N` | Maximum transcript lines to output (truncates older turns) |
 | `-mi N` | `--max-interactions N`| Maximum user-assistant turn pairs to keep |
 | `-ic FILE` | `--input-compact FILE` | Prepend a prior recovery summary as context (repeatable) |
+| `-ir FILE` | `--input-restart FILE` | Prepend a prior restart file as context (repeatable) |
+| `-it FILE` | `--input-transcript FILE` | Prepend a prior transcript as context (repeatable) |
+| `-oc FILE` | `--output-compact FILE`| Output path for the compaction prompt file |
 | `-or FILE` | `--output-restart FILE`| Output path for the restart file |
 | `-ot FILE` | `--output-transcript` | Output path for the clean transcript |
 | `-sm` | `--show-models` | List available LLM models from config with compatibility |
+| | `--show-compaction-prompt` | Print the compaction prompt that would be sent, then exit |
 | `-C [MODEL]`| `--compact [MODEL]` | Triggers LLM compaction. Prompted if MODEL is omitted |
+| `-lp` | `--list-projects` | List all projects in the database |
+| `-ls` | `--list-sessions` | List sessions (optionally for `-P/--project`) |
+| `-P NAME` | `--project NAME` | Filter/select by project (name or ID) |
+| `-A` | `--all-sessions` | Include subagent/child sessions (hidden by default) |
+| `-D` | `--details` | Show detailed session metadata in listings |
+| `-H N` | `--head N` | Show the first N sessions in a listing |
+| `-T N` | `--tail N` | Show the last N sessions in a listing |
+| | `--show-logs` | Show historical activity runs + all-time totals (`ocman show logs`) |
 | | `--clean` | Delete database sessions older than the retention window |
 | | `--days N` | Set cleanup retention window in days; accepts fractions, e.g. `0.25` = 6 hours (default: 5) |
 | | `--clean-orphans` | Remove orphaned records and sidecar diffs |
@@ -203,6 +235,7 @@ ocman --create-config
 | | `--to-project ID` | Remap imported session to an existing project ID |
 | | `--new-project-path PATH`| Remap imported session to a new project worktree path |
 | `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |
+| `-V` | `--version` | Print the ocman version and exit |
 
 ---
 
@@ -224,8 +257,8 @@ default_out_dir = "./opencode-recovery"
 # Default backup destination directory
 default_backup_dir = "~/.local/share/opencode/backups"
 
-# Default LLM model used for compaction
-default_model = "uri/its_direct/pt1-qwen3-32b-us"
+# Default LLM model used for compaction (empty = you are prompted / pick at compaction time)
+default_compaction_model = ""
 
 # Default retention window in days for database cleanups
 default_retention_days = 5

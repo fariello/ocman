@@ -17,10 +17,12 @@ export/import).
   self-contained module. Its `main()` parses arguments (`parse_args`), which first rewrites
   natural-language commands (`preprocess_argv`, e.g. `ocman list projects` → `--list-projects`)
   and then dispatches to the requested operation. The positional command accepts
-  `info`, `help`, `ui`, and `gui`.
+  `info`, `help`, `ui`, and `gui`; `preprocess_argv` additionally rewrites natural-language
+  commands (`disk`/`du`, `delete project`, `list projects`/`list sessions [in …]`, `show logs`)
+  into their equivalent flags.
 - **TUI — `ocman_tui/`** (a Textual application). Launched via `ocman ui` / `ocman gui`.
   `ocman_tui/app.py` holds `OrsessionApp` (the app) and its modal screens; `widgets/`
-  holds tab widgets (database admin, sidebar, models).
+  holds tab widgets (database admin, sidebar, models); `css/` holds the Textual stylesheets.
 
 ### CLI/TUI relationship (important)
 
