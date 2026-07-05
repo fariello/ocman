@@ -906,6 +906,50 @@ def test_cli_version(monkeypatch, capsys):
     assert ocman.__version__ in captured.out
 
 
+def test_per_project_disk_usage(temp_db, tmp_path):
+    """_per_project_disk_usage attributes on-disk session-diff bytes/counts per project (S3-T1)."""
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/w/p1', 'Proj One')")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/w/p2', 'Proj Two')")
+    # p1: two sessions (tokens 10+20=30); p2: one session (tokens 5)
+    cur.execute("INSERT INTO session (id, project_id, tokens_input, tokens_output) VALUES ('s1','p1',6,4)")
+    cur.execute("INSERT INTO session (id, project_id, tokens_input, tokens_output) VALUES ('s2','p1',10,10)")
+    cur.execute("INSERT INTO session (id, project_id, tokens_input, tokens_output) VALUES ('s3','p2',2,3)")
+    # messages: 2 for s1, 1 for s3
+    cur.execute("INSERT INTO message (id, session_id) VALUES ('m1','s1')")
+    cur.execute("INSERT INTO message (id, session_id) VALUES ('m2','s1')")
+    cur.execute("INSERT INTO message (id, session_id) VALUES ('m3','s3')")
+    conn.commit()
+    conn.close()
+
+    # Fake session-diff storage: s1 -> 100 bytes, s2 -> 200 bytes (p1 total 300, 2 files);
+    # p2's s3 has NO diff file on disk (0 bytes, 0 files).
+    storage = tmp_path / "session_diff"
+    storage.mkdir()
+    (storage / "s1.json").write_bytes(b"x" * 100)
+    (storage / "s2.json").write_bytes(b"y" * 200)
+
+    rows = ocman._per_project_disk_usage(sqlite3, temp_db, storage)
+    by_id = {r["id"]: r for r in rows}
+
+    assert by_id["p1"]["name"] == "Proj One"
+    assert by_id["p1"]["sessions"] == 2
+    assert by_id["p1"]["messages"] == 2
+    assert by_id["p1"]["tokens"] == 30
+    assert by_id["p1"]["diff_files"] == 2
+    assert by_id["p1"]["diff_bytes"] == 300
+
+    assert by_id["p2"]["sessions"] == 1
+    assert by_id["p2"]["messages"] == 1
+    assert by_id["p2"]["tokens"] == 5
+    assert by_id["p2"]["diff_files"] == 0
+    assert by_id["p2"]["diff_bytes"] == 0
+
+    # Sorted by diff_bytes descending → p1 first.
+    assert rows[0]["id"] == "p1"
+
+
 def test_startup_timestamps():
     import time
     ts_utc1 = ocman.get_startup_timestamp_utc()

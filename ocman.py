@@ -188,7 +188,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
-__version__: str = "1.0.4"
+__version__: str = "1.0.5"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {
@@ -7285,7 +7285,7 @@ def cli_create_config(force: bool = False) -> None:
         prompt("Default Compaction Model", "default_compaction_model")
         prompt("Default Backup Directory", "default_backup_dir")
         prompt("Default Retention Days", "default_retention_days", float)
-        prompt("Copy restart file into project .agents/prompts/pending? (yes/no)", "copy_restart_to_project_prompts", bool)
+        prompt("Copy compacted file into project .agents/prompts/pending? (yes/no)", "copy_restart_to_project_prompts", bool)
         prompt("Keep Temporary Files? (yes/no)", "keep_temp", bool)
         prompt("Include Tools in Transcript? (yes/no)", "include_tools", bool)
         prompt("All Roles in Transcript? (yes/no)", "all_roles", bool)

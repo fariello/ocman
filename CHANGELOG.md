@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+## [1.0.5] - 2026-07-05
+
+### Documentation
+- **README positioning ("actually reclaims space"):** README now states ocman's core value — it deletes
+  orphaned/old rows and their on-disk session-diff files and runs `VACUUM` to physically shrink the SQLite
+  file, reporting the reclaimed bytes — with the author's measured comparison against `ocgc` v0.1.0
+  (a 2.9 GB DB shrank to ~2.8 GB under ocgc vs ~1.9 GB under ocman's orphan cleanup).
+- **README config template corrected:** documented the real key `default_compaction_model` (default `""`)
+  instead of the nonexistent `default_model`.
+- **README Argument Reference completed:** added the previously-undocumented flags
+  (`-lp/--list-projects`, `-ls/--list-sessions`, `-P/--project`, `-A/--all-sessions`, `-D/--details`,
+  `-H/--head`, `-T/--tail`, `-V/--version`, `-ir/--input-restart`, `-it/--input-transcript`,
+  `-oc/--output-compact`, `--show-compaction-prompt`, `--show-logs`) and the `disk`/`du` + `delete project`
+  natural-language commands; `ARCHITECTURE.md` notes the `preprocess_argv` commands and the TUI `css/` dir.
+- **`--create-config` prompt wording** updated from "restart file" to "compacted file" to match the
+  compacted-copy behavior (the `copy_restart_to_project_prompts` config key is unchanged for compatibility).
+
 ### Added
 - **Compacted files copied into the project's prompts:** when recovering a session with
   `--compact` and the working project uses the `.agents` convention (has `.agents/plans/` or
