@@ -28,3 +28,10 @@ Section-boundary checkpoints reconciled against the registers.
   value prop not stated — reclaim VERIFIED in code), KD1 (Low, informational). All Low remediation risk.
 - Pending docs IPD reconciled → its D1-D4 adopted; closeable after S7.
 - Open Q for user: name ocgc in README or keep neutral (default: neutral). Findings now 13 total.
+
+## Section 5 checkpoint
+- All 8 personas applied. Delta strengthens self-documenting/KISS/configurable principles; honest-doc breach =
+  D1 only (fix S7). Cold-start adequate.
+- Findings: U2 (Low: stale create-config prompt wording), F1 (deferred: no --yes bypass, safety), M2 (keep
+  config key for back-compat). No over-scope in delta.
+- Findings now 16 total; S7 plan adds U2 fix.

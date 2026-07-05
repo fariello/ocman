@@ -35,3 +35,16 @@ Per-persona notes appended per section (lead personas own each section).
   the "actually reclaims space" benefit is not stated (U1).
 - UI/UX (3): the Argument Reference table is the CLI's primary reference surface and is missing ~13 real
   flags (D2), so users must fall back to --help; consistent-terminology otherwise good.
+
+## Section 5 (feature/usability/maintainability — all eight personas)
+- Novice (7): destructive previews (KEEP/DELETE + IRREVERSIBLE), typed-yes, process-lock report, and
+  --create-config make the delta highly learn-as-you-go. Only nit: --create-config prompt says "restart file"
+  (U2).
+- Power user (6): fractional --days, --by-project/disk, -v to expand KEEP rows are good ergonomics. Missing a
+  --yes automation bypass for destructive ops (F1) — but that's a deliberate safety stance.
+- UI/UX (3): color-independent DELETE/KEEP words + right-aligned columns = accessible, consistent. Good.
+- Architect (4): destructive-confirm SEAM (DestructivePreview/render/confirm) is a genuine general-case
+  abstraction adopted by 4 ops — earns its keep, not gold-plating. Process-lock consolidated 3 duplicated
+  pgrep checks into one helper. Configurable-over-hardcoded upheld (new config keys). No over-scope in delta.
+- Stakeholder (8): the delta delivers the maintenance/reclaim value (VACUUM+file delete+visibility) that is
+  ocman's reason to exist vs a naive cleaner; U1 (state it in README) is the one gap to the stated outcome.
