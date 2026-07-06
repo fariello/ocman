@@ -2,10 +2,12 @@
 
 - Date: 2026-07-06
 - Concern: security
-- Scope: the newly added surface only - `cli_filter` / `_safe_destination` in `ocman.py`,
-  the `FILTER_USER_PROMPT_TEMPLATE` egress path, and `scripts/migrate_recovery_names.py`.
-  (Not a whole-project security pass; that is `release-review`'s job.)
-- Status: PENDING (awaiting human approval; not executed)
+- Scope: primarily the newly added surface - `cli_filter` / `_safe_destination` in `ocman.py`,
+  the `FILTER_USER_PROMPT_TEMPLATE` egress path, and `scripts/migrate_recovery_names.py`. The
+  egress guards (size cap + secret scan, Steps 2-3) additionally extend to the already-shipped
+  `run_compaction`/`--compact` egress path by user decision, since it shares the same LLM-send
+  risk. (Not a whole-project security pass; that is `release-review`'s job.)
+- Status: PENDING (awaiting human approval; open questions resolved 2026-07-06; not executed)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 
 ## Goal
@@ -78,10 +80,11 @@ This IPD was hardened by `plan-review` before approval. Changes made to the plan
 | Step | Source finding IDs | Change | Files | Remediation Risk | Validation |
 |------|--------------------|--------|-------|------------------|------------|
 | 1 | SEC-1, SEC-2 | Make containment real by splitting the two **mutually exclusive** cases explicitly (the prior wording conflated them - PR-1): **(a) default output (no `-oc`):** the file is written beside the source with a generated name; base = `os.path.realpath(input_path.parent)` and the realpath'd destination parent MUST equal/stay inside that base - reject `..`-laden generated names and any symlinked **ancestor** that would escape. **(b) explicit `-oc`:** this IS the user's deliberately chosen destination, so containment is NOT enforced against the source dir (there is no default-name path in this case); instead only (i) refuse to clobber/write **through** an existing symlink at the destination, and (ii) print the resolved destination so the write location is never a surprise. Use `os.path.realpath` on the parent (not just the final component) so an intermediate symlink cannot silently redirect the write. | ocman.py:4838-4853, 4939-4944 | Low | New tests in `tests/test_file_tools.py`: (a) symlinked **ancestor** dir escape rejected, `../escape` generated name rejected, normal beside-source allowed; (b) explicit `-oc` outside source dir honored but destination printed and symlink-at-dest refused |
-| 2 | SEC-3 | Add a **configurable input size cap** as a config key `filter_max_bytes` in `ocman.toml` (consistent with `default_retention_days` etc. per configurable-over-hardcoded; PR-4), with a CLI override; check `input_path.stat().st_size` before reading, and over the cap refuse with a clear message naming the size and the override. **Non-interactive egress (PR-2/PR-3 - resolve before implementing):** `run_compaction` already sends the full transcript to the API non-interactively with no confirm flag (ocman.py confirm block), so making `filter` require a confirm flag would create **two divergent egress postures**. Decide via Open Question 1 whether to (x) keep `filter` consistent with compaction (proceed non-interactively, rely on the size cap as the guard), or (y) tighten **both** `filter` and `run_compaction` to require an explicit egress-confirm. Do NOT invent a new confirmation idiom: reuse the existing `--force` semantics or add one clearly-named flag - specify which in the fix, do not leave it as "`--yes`-style". | ocman.py:4876, 4917-4923; run_compaction confirm block; load_ocman_config | Low | Test: oversized file refused (cap from config) unless override; whichever egress decision (x/y) is chosen is covered by a test and applied consistently to both paths if (y) |
-| 3 | SEC-4 | Catch `UnicodeDecodeError` (and decode errors generally) in the `read_text` block and raise a clean `RecoveryError("Input is not a UTF-8 text file: ...")`. | ocman.py:4875-4878 | Low | Test: binary input raises `RecoveryError`, not `UnicodeDecodeError` |
-| 4 | SEC-6 | Drop the redundant `_backup_compacted_bu(dest)` OR switch `filter` to a write path that does not double-back-up; keep exactly one backup mechanism so a pre-existing target is backed up once, predictably. | ocman.py:4946-4947 | Low | Test: one backup file produced on collision (already covered; assert exactly one) |
-| 5 | SEC-5 | Note the TOCTOU in code comments and, where cheap, tighten the migration rename to re-verify `not src.is_symlink()` immediately before `os.rename`. Do not over-engineer file-descriptor locking for a local tool (KISS). | scripts/migrate_recovery_names.py:88-99 | Low | Test: a symlink introduced between plan and apply is not renamed |
+| 2 | SEC-3 | **Input size cap.** Add config key `filter_max_bytes` in `ocman.toml` (configurable-over-hardcoded; PR-4), **default 5 MB**, CLI-overridable via `--force`. Check `input_path.stat().st_size` (for `filter`) / assembled-prompt length (for `--compact`) before sending; over the cap, refuse with a clear message naming the size, the cap, and that `--force` overrides. Applies to **both** `filter` and `run_compaction` (Q2b). Non-interactive egress is **left as-is** (both paths still proceed without a `[Y/n]`; PR-2 decision (x)) - the accidental-egress guard is the size cap plus the secret scan in Step 3, not a blanket confirm gate. | ocman.py:4876, 4917-4923; run_compaction; load_ocman_config | Low | Test: oversized `filter` input and oversized compaction prompt both refused unless `--force`; cap value read from config |
+| 3 | SEC-3 | **Pre-egress secret/PII scan (NEW, decided interactively).** Before any API send, scan the outbound text (the `filter` document; the `--compact` assembled prompt) with a curated **high-signal** heuristic: private-key blocks (`-----BEGIN ... PRIVATE KEY-----`), API-key shapes (AWS `AKIA[0-9A-Z]{16}`, GitHub `ghp_`/`gho_`/`ghu_`/`ghs_`, generic `Bearer <token>` / JWT `eyJ...`), `KEY=VALUE` assignments where KEY matches `password|secret|api[_-]?key|token` **and** VALUE is token-like (non-trivial length/entropy, not a bare English word), and US SSN (`\b\d{3}-\d{2}-\d{4}\b`). Applies to **both** paths, in **interactive and non-interactive** mode (Q1b). On a hit: **error** listing the matched detector types and line numbers **redacted** (never echo the secret), and require the new **`--allow-secrets`** flag to proceed (a plain `[Y/n]` does NOT bypass it; Q4). **Conservative by default** (only high-confidence/structured matches; a bare word "password" in prose must NOT trip it - avoids alarm fatigue on recovery docs that discuss auth). Add config key `filter_secret_scan = "conservative" | "aggressive"` (default `conservative`); `aggressive` additionally flags bare keywords for sensitive environments (Q1d). Implement as a small pure function `scan_for_secrets(text, mode) -> list[SecretHit]` (type + line, no value) so it is unit-testable in isolation. | new `scan_for_secrets` in ocman.py; call sites in `cli_filter` (before `call_compaction_api`) and `run_compaction`; load_ocman_config | Low | Tests: each detector matches a positive sample; conservative mode does NOT flag prose "password"; aggressive mode does; a hit raises `RecoveryError` unless `--allow-secrets`; error output contains type+line but NOT the secret value |
+| 4 | SEC-4 | Catch `UnicodeDecodeError` (and decode errors generally) in the `read_text` block and raise a clean `RecoveryError("Input is not a UTF-8 text file: ...")`. | ocman.py:4875-4878 | Low | Test: binary input raises `RecoveryError`, not `UnicodeDecodeError` |
+| 5 | SEC-6 | Drop the redundant `_backup_compacted_bu(dest)` OR switch `filter` to a write path that does not double-back-up; keep exactly one backup mechanism so a pre-existing target is backed up once, predictably. | ocman.py:4946-4947 | Low | Test: one backup file produced on collision (already covered; assert exactly one) |
+| 6 | SEC-5 | Note the TOCTOU in code comments and, where cheap, tighten the migration rename to re-verify `not src.is_symlink()` immediately before `os.rename`. Do not over-engineer file-descriptor locking for a local tool (KISS). | scripts/migrate_recovery_names.py:88-99 | Low | Test: a symlink introduced between plan and apply is not renamed |
 
 ## Deferred / out of scope (with reason)
 
@@ -96,45 +99,64 @@ This IPD was hardened by `plan-review` before approval. Changes made to the plan
   expand the security fix. Do NOT add a virus scanner, an egress allow-list DB, or FD-locking -
   all disproportionate for a local single-user CLI (Complexity axis).
 - Under-scope (added above): a real (not no-op) containment check (SEC-1/2), an egress size cap
-  (SEC-3), and clean decode-error handling (SEC-4). **Consistency scope (PR-2):** the egress
-  posture must be decided for `filter` AND `run_compaction` together, not for `filter` alone.
+  (SEC-3, Step 2), a **pre-egress secret/PII scan** (SEC-3, Step 3 - added per the interactive
+  decision), and clean decode-error handling (SEC-4). **Consistency (PR-2):** the size cap and the
+  secret scan are applied to `filter` AND `run_compaction` together; non-interactive egress is
+  intentionally left proceeding (guarded by the cap + scan, not a blanket confirm).
+- Newly in scope by user decision: the secret scan touches the already-shipped `--compact` path.
+  This is deliberate (close the leak everywhere) and is a documented behavior change (see
+  CHANGELOG note). It is NOT over-scope: it is the chosen remediation for SEC-3's egress risk.
 
 ## Required tests / validation
 
 - Extend `tests/test_file_tools.py`: (a) default-output containment - symlinked **ancestor** dir
   escape rejected (not just final-component symlink; PR-5), `..`-name rejected, normal
   beside-source allowed; (b) explicit `-oc` outside source honored + destination printed +
-  symlink-at-destination refused; oversized-input refusal (cap from config); binary-input clean
-  `RecoveryError`; exactly-one-backup-on-collision.
-- If the egress decision is (y), add a `run_compaction` non-interactive egress test too so both
-  paths stay consistent.
+  symlink-at-destination refused; oversized-input refusal (cap from config, `--force` overrides);
+  binary-input clean `RecoveryError`; exactly-one-backup-on-collision.
+- Secret-scan tests (new `test_secret_scan.py` or in `test_file_tools.py`): each detector matches a
+  positive sample; **conservative** mode does not flag prose "password"; **aggressive** mode does;
+  a hit raises `RecoveryError` unless `--allow-secrets`; the error names detector type + line but
+  never the secret value (redaction assertion). Cover both `cli_filter` and `run_compaction` call
+  sites (monkeypatch `call_compaction_api`, assert it is NOT called when a secret is detected
+  without `--allow-secrets`).
+- Size cap: oversized `filter` input AND oversized compaction prompt both refused unless `--force`.
 - Extend `tests/test_migrate_recovery_names.py`: symlink-introduced-between-plan-and-apply not renamed.
 - Full suite green: `PYTHONPATH=. pytest` (currently 150 passed, 2 skipped).
 
 ## Spec / documentation sync
 
-- README/`--help`: document `filter_max_bytes` (config key + CLI override) and the egress posture
-  chosen in Open Question 1, and clarify that `filter` (and, if touched, `--compact`) sends file
-  contents to the configured API endpoint (honest-docs principle). State `-oc` behavior plainly
-  (explicit path honored, destination printed). If the egress decision changes `run_compaction`,
-  add a CHANGELOG note for that behavior change.
+- README/`--help`: document `filter_max_bytes` (config key, default 5 MB, `--force` override),
+  `filter_secret_scan` (conservative|aggressive, default conservative), and `--allow-secrets`.
+  Clarify that both `filter` and `--compact` send content to the configured API endpoint and are
+  scanned for secrets/PII first (honest-docs). State `-oc` behavior plainly (explicit path honored,
+  resolved destination printed, symlink-at-dest refused).
+- **CHANGELOG:** the secret scan + size cap now also gate the already-shipped `--compact` path -
+  this is a (safety-adding) behavior change to existing functionality, so note it explicitly. A
+  previously-passing non-interactive `--compact` on a secret-bearing transcript will now stop and
+  require `--allow-secrets`.
 
 ## Open questions
 
-1. **Egress in non-interactive mode (decide for BOTH `filter` and `run_compaction`; PR-2):**
-   (x) keep both consistent by proceeding non-interactively and relying on the size cap as the
-   guard, or (y) tighten both to require an explicit egress-confirm flag. Whichever is chosen must
-   be applied consistently across the two API-egress paths; do not silently leave compaction on a
-   different posture than filter. This is a human security-vs-usability decision.
-2. **Default `filter_max_bytes` value:** the config-key decision is settled (it WILL be a config
-   key with a CLI override, per configurable-over-hardcoded; PR-4); only the default **value** is
-   open (proposed a few MB).
-3. **`-oc` outside the source dir:** confirmed approach - honor (user's explicit path) + print the
-   resolved destination + refuse a symlink at the destination. Flag if you want a stronger gate
-   (warn/confirm) instead.
-4. **Confirmation idiom (PR-3):** if Open Question 1 chooses (y), which flag - reuse `--force`
-   (note its current bypass-polarity) or add one new clearly-named flag? Pick one; do not
-   introduce a third confirmation style.
+*Resolved interactively 2026-07-06 (recorded here for the executing agent):*
+
+1. **Non-interactive egress (PR-2):** RESOLVED = keep both `filter` and `--compact` proceeding
+   non-interactively as today (no blanket confirm gate). The accidental-egress guards are the
+   **size cap (Step 2)** and the **secret/PII scan (Step 3)**, both applied to both paths.
+2. **Secret scan (Q1b/Q1c/Q1d):** RESOLVED = scan **both** paths, **always** (interactive and
+   non-interactive); curated **high-signal** detectors; bypass with **`--allow-secrets`**;
+   **conservative by default** with a `filter_secret_scan = "aggressive"` config opt-in for
+   sensitive environments.
+3. **`filter_max_bytes` (Q2):** RESOLVED = config key, **default 5 MB**, `--force` override,
+   applied to **both** paths.
+4. **`-oc` output (Q3):** RESOLVED = honor the explicit path (no source-dir containment) + print
+   the resolved destination + refuse a symlink at the destination.
+5. **Bypass flags (Q4):** RESOLVED = new **`--allow-secrets`** for the secret-scan bypass; reuse
+   existing **`--force`** for the size-cap override. Do not add a third confirmation idiom.
+
+*Remaining for the executing agent:* none blocking. The `aggressive`-mode keyword list and the
+exact token-likeness threshold for `KEY=VALUE` detection are implementation details to tune with
+the tests (keep conservative-mode false positives at zero on the existing recovery-doc fixtures).
 
 ## Approval and execution gate
 
