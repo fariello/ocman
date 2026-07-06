@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.0.6] - 2026-07-05
+
 ### Changed
 - **License changed from BSD-3-Clause to Apache-2.0.** The project is now licensed under the
   Apache License 2.0 (see `LICENSE` and the new `NOTICE`). Apache-2.0 requires that redistributions
