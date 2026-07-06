@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-07-06
+
 ### Added
 - **`ocman filter <input>` command:** re-scopes an existing recovery/compacted document to a
   single project/scope via the LLM, dropping out-of-scope content. Scope is given with
