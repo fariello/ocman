@@ -82,8 +82,8 @@ ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
 > **Compacted files land in your project's prompts.** When you recover with `--compact` and the
 > project you're recovering for uses the `.agents` convention (has `.agents/plans/` or
 > `.agents/prompts/`), ocman also copies the LLM-generated `*.compacted.md` (the document a fresh
-> agent reads) into `<project>/.agents/prompts/pending/` as `YYYYMMDD-<session_id>.compacted.md`
-> (date = session last-updated). A pre-existing copy is backed up to `*.compacted.bu.NNN.md`. The
+> agent reads) into `<project>/.agents/prompts/pending/` as `YYYYMMDD-HHMM-<session_id>.compacted.md`
+> (timestamp = session last-updated, local time). A pre-existing copy is backed up to `*.compacted.bu.NNN.md`. The
 > "project" is `--session-dir` if given, else the session's recorded directory, else the current
 > directory. This only applies when compaction runs (a plain recovery copies nothing). Disable
 > per-run with `--no-project-prompt`, or globally via `copy_restart_to_project_prompts = false`.
@@ -234,6 +234,8 @@ ocman --create-config
 | | `--import-session PATH`| Import a session from a portable `.ocbox` bundle |
 | | `--to-project ID` | Remap imported session to an existing project ID |
 | | `--new-project-path PATH`| Remap imported session to a new project worktree path |
+| | `filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM (command). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output |
+| | `--scope "TEXT"` | With `filter`: free-text scope of content to keep (e.g. `"ocman only"`) |
 | `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |
 | `-V` | `--version` | Print the ocman version and exit |
 

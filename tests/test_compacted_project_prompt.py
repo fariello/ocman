@@ -47,15 +47,18 @@ def test_copy_name_from_epoch_ms_local():
     import time
     from datetime import datetime
     epoch_ms = int(time.time() * 1000)
-    expected = datetime.fromtimestamp(epoch_ms / 1000.0).strftime("%Y%m%d")
+    # Date and HHMM both derive from the same (session-updated) source, in local time.
+    expected = datetime.fromtimestamp(epoch_ms / 1000.0).strftime("%Y%m%d-%H%M")
     name = project_prompt_copy_name(_session(sid="ses_x", updated=str(epoch_ms)))
     assert name == f"{expected}-ses_x.compacted.md"
 
 
-def test_copy_name_unknown_falls_back_to_startup_date():
+def test_copy_name_unknown_falls_back_to_startup_time():
     name = project_prompt_copy_name(_session(sid="ses_y", updated="unknown"))
     assert name.endswith("-ses_y.compacted.md")
-    assert len(name.split("-")[0]) == 8  # YYYYMMDD
+    # Canonical prefix is YYYYMMDD-HHMM
+    parts = name.split("-")
+    assert len(parts[0]) == 8 and len(parts[1]) == 4
 
 
 # _backup_compacted_bu ------------------------------------------------------------------

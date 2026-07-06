@@ -17,9 +17,15 @@ export/import).
   self-contained module. Its `main()` parses arguments (`parse_args`), which first rewrites
   natural-language commands (`preprocess_argv`, e.g. `ocman list projects` → `--list-projects`)
   and then dispatches to the requested operation. The positional command accepts
-  `info`, `help`, `ui`, and `gui`; `preprocess_argv` additionally rewrites natural-language
-  commands (`disk`/`du`, `delete project`, `list projects`/`list sessions [in …]`, `show logs`)
-  into their equivalent flags.
+  `info`, `help`, `ui`, `gui`, and `filter` (`ocman filter <input.md>` re-scopes a recovery
+  document to one project/scope via the LLM); `preprocess_argv` additionally rewrites
+  natural-language commands (`disk`/`du`, `delete project`, `list projects`/`list sessions
+  [in …]`, `show logs`) into their equivalent flags.
+
+  Recovery artifacts share a canonical local-time name `YYYYMMDD-HHMM-<session_id>.<kind>.md`
+  (`kind` = transcript/restart/prompt/compacted); `canonical_recovery_name`/`parse_recovery_name`
+  are the single source of truth, and `scripts/migrate_recovery_names.py` normalizes files
+  written by older versions.
 - **TUI — `ocman_tui/`** (a Textual application). Launched via `ocman ui` / `ocman gui`.
   `ocman_tui/app.py` holds `OrsessionApp` (the app) and its modal screens; `widgets/`
   holds tab widgets (database admin, sidebar, models); `css/` holds the Textual stylesheets.
