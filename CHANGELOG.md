@@ -2,6 +2,33 @@
 
 ## [Unreleased]
 
+### Added
+- **`ocman filter <input>` command:** re-scopes an existing recovery/compacted document to a
+  single project/scope via the LLM, dropping out-of-scope content. Scope is given with
+  `--project <name|id|path>` (resolved against the database) and/or `--scope "free text"`
+  (e.g. `"ocman only"`); at least one is required. It reuses the compaction model selection
+  (`-C/--compact [MODEL]`), the token/cost estimate, and the confirmation flow, and reuses the
+  compaction system prompt (which treats the document as untrusted evidence, not instructions)
+  with a dedicated filter user prompt. The result is written next to the source (or to `-oc`) as
+  `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`; a pre-existing target is backed up to
+  `*.compacted.bu.NNN.md`. The output path is path-contained and symlink-safe, and the input file
+  is never modified.
+- **`scripts/migrate_recovery_names.py`:** a one-shot migration to normalize recovery filenames
+  written by older ocman versions to the new canonical scheme. Operates on the given directory
+  (top-level only, no recursion), skips symlinks, skips already-canonical files, refuses to
+  overwrite an existing target unless `--force`, and never deletes a source on a failed rename.
+  Supports `--dry-run` (preview) and `--yes` (skip the confirmation prompt).
+
+### Changed
+- **Canonical recovery-artifact filenames:** all recovery outputs now use one scheme,
+  `YYYYMMDD-HHMM-<session_id>.<kind>.md` in **local time**, where `<kind>` is one of
+  `transcript`, `restart`, `prompt`, or `compacted`, and all artifacts for a session share the
+  `YYYYMMDD-HHMM-<session_id>` stem. This reconciles a prior inconsistency where the deterministic
+  writer used a UTC, seconds-precision `opencode-...` prefix while the in-project compacted copy
+  used a local, date-only name. The in-project copy (into `.agents/prompts/pending/`) is now
+  `YYYYMMDD-HHMM-<session_id>.compacted.md` (timestamp = session last-updated, local). Existing
+  files can be normalized with `scripts/migrate_recovery_names.py`.
+
 ## [1.0.6] - 2026-07-05
 
 ### Changed
