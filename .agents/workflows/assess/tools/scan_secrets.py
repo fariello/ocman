@@ -95,7 +95,13 @@ SKIP_DIR_NAMES = {
     ".git", "node_modules", "vendor", "dist", "build", "target", ".venv", "venv",
     "__pycache__", ".mypy_cache", ".pytest_cache", ".tox", ".gradle", ".idea",
     ".terraform", "site-packages", ".next", ".cache",
+    # Agent-workflow run records are generated deliverables (they may even contain a prior
+    # scan's own redacted output); scanning them just re-flags noise, not committed secrets.
+    "workflow-artifacts",
 }
+# Generated lockfiles are high-entropy hash soup, not human-authored secrets.
+SKIP_FILENAME_SUFFIXES = ("-lock.json", ".lock.json", "package-lock.json", "yarn.lock",
+                          "pnpm-lock.yaml", "poetry.lock", "Cargo.lock", "composer.lock")
 # Binary/asset extensions we do not scan as text.
 SKIP_EXTS = {
     ".png", ".jpg", ".jpeg", ".gif", ".webp", ".ico", ".bmp", ".tiff", ".svg",
@@ -201,24 +207,40 @@ def scan_text(text: str, where: str, location: str, use_entropy: bool, use_pii: 
     if use_entropy:
         for i, line in enumerate(lines, 1):
             for tok in HIGH_ENTROPY_TOKEN.findall(line):
-                if len(tok) >= 24 and shannon_entropy(tok) >= 4.0:
-                    # skip obvious hex hashes shorter than key-length? keep as low-conf
+                if len(tok) < 24:
+                    continue
+                ent = shannon_entropy(tok)
+                if ent >= 4.0:
                     findings.append(Finding(
                         rule="high-entropy-string", category="secret", severity="low",
                         where=where, location=f"{location}:{i}", preview=redact(tok),
-                        commit=commit, extra={"entropy": round(shannon_entropy(tok), 2)},
+                        commit=commit, extra={"entropy": round(ent, 2)},
                     ))
     return findings
 
 
 # ---- Working-tree scan -----------------------------------------------------
 
+def is_skipped_path(rel_posix: str) -> bool:
+    """True if a repo-relative POSIX path is skipped noise (generated dir or lockfile).
+
+    Shared by the working-tree and history scans so both exclude the same paths.
+    Does NOT cover SKIP_EXTS (binary) - that is handled separately in the tree scan.
+    """
+
+    parts = set(rel_posix.split("/"))
+    if parts & SKIP_DIR_NAMES:
+        return True
+    name = rel_posix.rsplit("/", 1)[-1]
+    return name.endswith(SKIP_FILENAME_SUFFIXES)
+
+
 def iter_tree_files(root: Path, max_bytes: int):
     for path in root.rglob("*"):
         if path.is_dir():
             continue
-        parts = set(path.relative_to(root).parts)
-        if parts & SKIP_DIR_NAMES:
+        rel = path.relative_to(root).as_posix()
+        if is_skipped_path(rel):
             continue
         if path.suffix.lower() in SKIP_EXTS:
             # still flag sensitive-named binary-ish files
@@ -296,6 +318,8 @@ def scan_history(root: Path, max_commits: int | None, since: str | None,
             line_no = 0
             continue
         if raw.startswith("@@"):
+            continue
+        if cur_file and is_skipped_path(cur_file):
             continue
         if raw.startswith("+") and not raw.startswith("+++"):
             added = raw[1:]

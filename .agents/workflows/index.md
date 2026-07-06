@@ -1,7 +1,7 @@
 # Agent Workflows
 
-<!-- WORKFLOWS-VERSION: 20260704-03 -->
-Version: `20260704-03` (source of truth: `.agents/workflows/VERSION`). Scheme:
+<!-- WORKFLOWS-VERSION: 20260704-06 -->
+Version: `20260704-06` (source of truth: `.agents/workflows/VERSION`). Scheme:
 `YYYYMMDD-NN` (calendar date plus a same-day sequence). The installer stamps this into
 each target so `/list-workflows` and `setup-repo` can report the installed version.
 
@@ -33,6 +33,7 @@ focusing on different concerns; leave it `-` when not used.
 | incident | .agents/workflows/incident/incident.md | - | Blameless post-mortem for a production incident: timeline, impact, systemic contributing factors, what went right/wrong, and follow-up actions emitted as IPDs into pending/. Reactive complement to the reliability/logging-audit/intrusion-detection lenses. Repo-scoped and honest about it (operator holds the real monitoring/on-call data). |
 | release-notes | .agents/workflows/release-notes/release-notes.md | - | Release discipline: decide the version bump from the actual changes, draft the changelog and human release notes (prose-style guide; breaking changes prominent), and update CHANGELOG/version files with confirmation. Never publishes, tags, pushes, or deploys. Distinct from release-review Section 9 (which executes a release). |
 | migrate | .agents/workflows/migrate/migrate.md | - | Assess-and-plan a high-risk migration (framework/DB/dependency-major/layout): inventory the blast radius, name the invariants that must survive, and propose a staged, reversible plan with characterization tests first and per-stage rollback + verify checks. Emits an IPD; does not execute. |
+| benchmark | .agents/workflows/benchmark/benchmark.md | - | Guided performance benchmarking (informational, not a regression gate): author an ISOLATED benchmarks/ suite in the target repo (inert when unused), deeply capture and diagnose the machine/environment (`bench_env.py`: CPU/RAM/GPU/load/filesystem, flags NFS working sets, powersave governor, swapping, busy/login-node with suggested remedies), run with warm-up and >=2 iterations, detect HPC schedulers and (on explicit per-submission consent) generate + submit a job script, and produce a shareable, anonymizable results bundle. Read-only on system state; never publishes. |
 | setup-repo | .agents/workflows/setup-repo/setup-repo.md | - | Guided, idempotent, drift-aware repo setup AND conformance check: detect state, classify each area (conformant/partial/missing/outdated), then ask-before-each-change to install tools and add secret-scanning, the plan/IPD lifecycle (dirs + documented contract), .gitignore/CI/pre-commit/hygiene files. Safe to re-run after updates; stages changes. |
 | scaffold | .agents/workflows/scaffold/scaffold.md | - | Guided, wizard-style creation of a new assess-* lens, standalone workflow, or command: generate from the existing patterns, wire the manifest, and regenerate shims. Authoring/meta workflow. |
 | assess | .agents/workflows/assess/assess.md | - | Assess ONE concern deeply and propose an IPD. `/assess <concern> [scope]` (e.g. `/assess security`, `/assess prose src/`); bare `/assess` lists concerns and asks. The `assess-<concern>` rows below are the concern catalog (they define the lenses), not separate commands. |
@@ -40,7 +41,7 @@ focusing on different concerns; leave it `-` when not used.
 | assess-performance | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/performance.md | Assess runtime/resource performance and propose an IPD. |
 | assess-security | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/security.md | Assess security posture and propose an IPD. |
 | assess-privacy | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/privacy.md | Assess privacy/data-protection handling and propose an IPD. |
-| assess-accessibility | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/accessibility.md | Assess accessibility (WCAG 2.1 AA) and propose an IPD. |
+| assess-accessibility | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/accessibility.md | Assess accessibility and propose an IPD: WCAG 2.1 AA for graphical UIs, plus a WCAG-inspired rubric for terminal/CLI/TUI output (color never the sole signal, no load-bearing dim/blink, honor NO_COLOR/FORCE_COLOR/TERM/non-TTY, screen-reader-friendly plain mode). Preserves polish via graceful degradation + an opt-out toggle rather than stripping color/spinners; consults interactively before proposing look/feel changes. |
 | assess-ui-ux | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/ui-ux.md | Assess UI/UX usability and intuitiveness and propose an IPD. |
 | assess-self-documentation | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/self-documentation.md | Assess in-product learn-as-you-go clarity and propose an IPD. |
 | assess-documentation | .agents/workflows/assess/assess.md | .agents/workflows/assess/lenses/documentation.md | Assess repository documentation and propose an IPD. |

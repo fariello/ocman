@@ -35,6 +35,23 @@ import platform
 import shutil
 import subprocess
 import sys
+from pathlib import Path
+
+
+def _framework_version() -> str:
+    """Return the agent-workflows framework version this tool ships with.
+
+    The VERSION file lives at the framework root (.agents/workflows/VERSION); this script
+    is at .agents/workflows/setup-repo/tools/setup_tools.py, so it is three directories up.
+    Returns "unknown" if the file is absent (e.g. run standalone outside the framework).
+    """
+
+    version_path = Path(__file__).resolve().parent.parent.parent / "VERSION"
+    try:
+        value = version_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "unknown"
+    return value or "unknown"
 
 
 def which(name: str) -> str | None:
@@ -162,9 +179,15 @@ def report_text(status: dict[str, dict], managers: list[str]) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="Detect/install developer tools for repo setup.")
+    ap.add_argument("--version", action="store_true",
+                    help="Print the agent-workflows framework version and exit.")
     ap.add_argument("--format", choices=["text", "json"], default="text")
     ap.add_argument("--install", default="", help="Comma-separated tool names to install.")
     args = ap.parse_args()
+
+    if args.version:
+        print(_framework_version())
+        return 0
 
     managers = detect_package_managers()
 

@@ -53,6 +53,7 @@ Ask what they are trying to do, and route (offer to run the chosen workflow, wit
 - "Review a plan before I build it" -> `plan-review`
 - "Do a broad review and fix issues before shipping" -> `release-review`
 - "Prove the checks actually pass" -> `verify`
+- "Measure or understand performance (with environment context)" -> `benchmark`
 - "Turn a fuzzy idea into a spec" -> `spec`; then `advise spec-editor` to harden it
 - "Get expert questions on my design/plan" -> `advise <persona>`
 - "Plan a risky migration" -> `migrate`
