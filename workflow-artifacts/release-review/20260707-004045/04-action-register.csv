@@ -1,1 +1,2 @@
 id,source_finding_ids,section,status,description,remediation_risk,files_changed,commit,validation,reason_not_done,recommended_next_step
+20260707-004045-S2-A1,20260707-004045-S2-E1,2,planned,Add an st_size pre-check in cli_filter before read_text so an oversized file is rejected without being fully read (respect --force),Low,,,pytest,,S7
