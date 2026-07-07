@@ -71,3 +71,32 @@ def test_no_recursion(tmp_path):
     (sub / "opencode-20260101-235959-ses_deep.restart.md").write_text("x", encoding="utf-8")
     renames = mig.plan_migration(tmp_path)
     assert renames == []  # nested files are not touched
+
+
+def test_in_plan_duplicate_targets_surfaced(tmp_path):
+    # Two legacy files differing only in seconds -> same minute-precision target.
+    (tmp_path / "opencode-20260101-120000-ses_x.restart.md").write_text("A", encoding="utf-8")
+    (tmp_path / "opencode-20260101-120059-ses_x.restart.md").write_text("B", encoding="utf-8")
+    # Dry-run must report the collision, not two plain renames.
+    dry = mig.migrate_dir(tmp_path, apply=False, force=False, log=lambda *a, **k: None)
+    assert dry["skipped_collision"] == 1 and dry["planned"] == 2
+    # Apply: exactly one renamed, the other skipped, BOTH sources still present.
+    res = mig.migrate_dir(tmp_path, apply=True, force=False, log=lambda *a, **k: None)
+    assert res["renamed"] == 1 and res["skipped_collision"] == 1
+    names = {p.name for p in tmp_path.iterdir()}
+    assert "20260101-1200-ses_x.restart.md" in names
+    assert "opencode-20260101-120059-ses_x.restart.md" in names  # loser preserved
+
+
+def test_symlink_introduced_before_apply_not_renamed(tmp_path):
+    # A legacy file that plan_migration accepts, then becomes a symlink before apply.
+    src = tmp_path / "opencode-20260101-120000-ses_z.restart.md"
+    src.write_text("A", encoding="utf-8")
+    # Simulate: plan first, then replace with a symlink, then apply the stale plan.
+    # migrate_dir re-checks is_symlink() just before os.rename.
+    import os as _os
+    real = tmp_path / "target.txt"; real.write_text("x", encoding="utf-8")
+    src.unlink(); _os.symlink(real, src)
+    res = mig.migrate_dir(tmp_path, apply=True, force=False, log=lambda *a, **k: None)
+    # The symlink is skipped by plan_migration (is_symlink) so nothing renamed.
+    assert res["renamed"] == 0

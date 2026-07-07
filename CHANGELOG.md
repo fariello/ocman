@@ -19,17 +19,41 @@
   written by older ocman versions to the new canonical scheme. Operates on the given directory
   (top-level only, no recursion), skips symlinks, skips already-canonical files, refuses to
   overwrite an existing target unless `--force`, and never deletes a source on a failed rename.
-  Supports `--dry-run` (preview) and `--yes` (skip the confirmation prompt).
+  Detects in-plan duplicate targets (two files that collide on the minute-precision name) and
+  reports them in both dry-run and apply, preserving both sources. Supports `--dry-run` (preview)
+  and `--yes` (skip the confirmation prompt).
+- **Pre-egress guards for `filter` and `--compact`:** before sending content to the LLM API, ocman
+  now enforces a configurable input size cap (`filter_max_bytes`, default 5 MB; override with
+  `--force`) and a secret/PII scan (`filter_secret_scan`, `conservative` by default or `aggressive`
+  for sensitive environments) that stops the send if a likely private key, API token, JWT, bearer
+  token, credential assignment, or SSN is detected. Bypass the scan with the new `--allow-secrets`.
+  Detections are reported by type and line number only; the secret value is never echoed.
+- **TUI recovery/compaction parity with the CLI:** the TUI now writes recovery artifacts using the
+  canonical `YYYYMMDD-HHMM-<session_id>.<kind>.md` scheme (full session id, `.prompt.md`), honors
+  the configured `default_out_dir` instead of a hardcoded path, and (like the CLI) copies the
+  compacted file into a project's `.agents/prompts/pending/` when enabled.
 
 ### Changed
-- **Canonical recovery-artifact filenames:** all recovery outputs now use one scheme,
-  `YYYYMMDD-HHMM-<session_id>.<kind>.md` in **local time**, where `<kind>` is one of
+- **Canonical recovery-artifact filenames:** all recovery outputs (CLI **and TUI**) now use one
+  scheme, `YYYYMMDD-HHMM-<session_id>.<kind>.md` in **local time**, where `<kind>` is one of
   `transcript`, `restart`, `prompt`, or `compacted`, and all artifacts for a session share the
   `YYYYMMDD-HHMM-<session_id>` stem. This reconciles a prior inconsistency where the deterministic
   writer used a UTC, seconds-precision `opencode-...` prefix while the in-project compacted copy
   used a local, date-only name. The in-project copy (into `.agents/prompts/pending/`) is now
-  `YYYYMMDD-HHMM-<session_id>.compacted.md` (timestamp = session last-updated, local). Existing
-  files can be normalized with `scripts/migrate_recovery_names.py`.
+  `YYYYMMDD-HHMM-<session_id>.compacted.md` (timestamp = session last-updated, local). The TUI's
+  compaction-prompt file is now `.prompt.md` (was `.compact-prompt.md`). Existing files can be
+  normalized with `scripts/migrate_recovery_names.py`.
+- **`--compact` egress behavior change:** the already-existing `--compact` path is now also subject
+  to the size cap and secret/PII scan above. A non-interactive `--compact` on a transcript that
+  contains a detected secret will now stop and require `--allow-secrets` to proceed.
+- **Overwrite-collision handling** (shared by `filter`, `--compact`, and the migration script):
+  before overwriting an existing recovery file, ocman checks whether opencode/ocman is running; if
+  so it refuses (the CLI errors and exits, the TUI declines) so a live session's files are never
+  clobbered. When safe, it backs up the existing file (`*.bu.NNN.md`) by default and can delete it
+  interactively; non-interactive runs always back up and never delete. (The running-instance check
+  is best-effort and POSIX-only; on Windows the backup default is the safety net.)
+- **New config keys** `filter_max_bytes` and `filter_secret_scan` are added with safe defaults;
+  existing `ocman.toml` files continue to work unchanged.
 
 ## [1.0.6] - 2026-07-05
 

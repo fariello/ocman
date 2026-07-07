@@ -5,7 +5,7 @@
 - Scope: the 1.1.0 surface and what it interoperates with - `canonical_recovery_name`/
   `parse_recovery_name`, `cli_filter`, `scripts/migrate_recovery_names.py`, the CLI recovery
   writer, the **TUI** recovery writer (`ocman_tui/app.py`), and the supported platform matrix.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED 2026-07-06 (combined pass with the security + edge-cases IPDs)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 
 ## Goal

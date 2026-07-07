@@ -234,8 +234,9 @@ ocman --create-config
 | | `--import-session PATH`| Import a session from a portable `.ocbox` bundle |
 | | `--to-project ID` | Remap imported session to an existing project ID |
 | | `--new-project-path PATH`| Remap imported session to a new project worktree path |
-| | `filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM (command). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output |
+| | `filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM (command). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
 | | `--scope "TEXT"` | With `filter`: free-text scope of content to keep (e.g. `"ocman only"`) |
+| | `--allow-secrets` | Bypass the pre-egress secret/PII scan for `filter` and `--compact` (send content even if a likely secret is detected). |
 | `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |
 | `-V` | `--version` | Print the ocman version and exit |
 
@@ -278,6 +279,14 @@ copy_restart_to_project_prompts = true
 keep_temp = false
 include_tools = false
 all_roles = false
+
+# Egress guards for `filter` and `--compact` (content sent to the LLM API).
+# Max input bytes before refusing (override per-run with --force). Default: 5242880 (5 MB).
+filter_max_bytes = 5242880
+# Secret/PII pre-egress scan: "conservative" (high-signal patterns) or "aggressive"
+# (also bare keywords, for sensitive environments). A hit stops the send unless
+# --allow-secrets is passed. Default: conservative.
+filter_secret_scan = conservative
 ```
 
 ---

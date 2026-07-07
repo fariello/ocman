@@ -80,9 +80,28 @@ def migrate_dir(
     summary = {"renamed": 0, "skipped_collision": 0, "errors": 0, "planned": 0}
     renames = plan_migration(directory)
     summary["planned"] = len(renames)
+
+    # Detect IN-PLAN duplicate targets: two sources that canonicalize to the same name (e.g.
+    # legacy files differing only in seconds, since canonical names are minute-precision). Without
+    # this, a dry-run would print two identical "WOULD RENAME" lines and only the first would
+    # apply. Group by target; for any target claimed by >1 source, keep the first deterministically
+    # (sorted order) and treat the rest as collisions.
+    from collections import defaultdict
+    by_target: dict[Path, list[Path]] = defaultdict(list)
     for src, dst in renames:
-        if dst.exists() and not force:
-            log(f"  SKIP (target exists): {src.name} -> {dst.name}")
+        by_target[dst].append(src)
+
+    for src, dst in renames:
+        contenders = by_target[dst]
+        in_plan_dup = len(contenders) > 1 and src != contenders[0]
+        preexisting = dst.exists()
+        if (in_plan_dup or preexisting) and not force:
+            why = "minute-precision collision with another source" if in_plan_dup else "target exists"
+            log(
+                f"  SKIP ({why}): {src.name} -> {dst.name}\n"
+                f"       (canonical names are minute-precision; back up/rename manually or re-run "
+                f"with --force to overwrite. Source preserved.)"
+            )
             summary["skipped_collision"] += 1
             continue
         # Containment guard: dst must stay inside the directory.
@@ -93,6 +112,10 @@ def migrate_dir(
         log(f"  {'RENAME' if apply else 'WOULD RENAME'}: {src.name} -> {dst.name}")
         if apply:
             try:
+                if src.is_symlink():  # re-check just before the rename (TOCTOU)
+                    log(f"  SKIP (symlink): {src.name}")
+                    summary["errors"] += 1
+                    continue
                 os.rename(src, dst)  # atomic within one filesystem; never unlinks source on failure
                 summary["renamed"] += 1
             except OSError as e:

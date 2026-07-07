@@ -7,7 +7,7 @@
   egress guards (size cap + secret scan, Steps 2-3) additionally extend to the already-shipped
   `run_compaction`/`--compact` egress path by user decision, since it shares the same LLM-send
   risk. (Not a whole-project security pass; that is `release-review`'s job.)
-- Status: PENDING (awaiting human approval; open questions resolved 2026-07-06; not executed)
+- Status: EXECUTED 2026-07-06 (combined pass with the edge-cases + compatibility IPDs)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 
 ## Goal

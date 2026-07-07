@@ -87,3 +87,39 @@ def test_run_compaction_uses_local_canonical(tmp_path, monkeypatch):
     assert not out.name.startswith("opencode-")
     sid, dt, kind = parse_recovery_name(out)
     assert sid == "ses_x" and kind == "compacted" and dt is not None
+
+
+# EC-4: kind validation -----------------------------------------------------------------
+
+def test_canonical_rejects_bad_kind():
+    with pytest.raises(ValueError):
+        canonical_recovery_name("ses_x", datetime(2026, 1, 1), "bogus")
+
+
+@pytest.mark.parametrize("kind", RECOVERY_KINDS)
+def test_canonical_accepts_all_real_kinds(kind):
+    assert canonical_recovery_name("ses_x", datetime(2026, 1, 1, 2, 3), kind).endswith(f".{kind}.md")
+
+
+# EC-5 / COMP-3: case-insensitive suffix, case-preserving sid ----------------------------
+
+def test_parse_case_insensitive_suffix():
+    sid, dt, kind = parse_recovery_name(Path("X.RESTART.MD"))
+    assert kind == "restart" and sid == "X"
+
+
+def test_parse_preserves_mixed_case_sid():
+    sid, dt, kind = parse_recovery_name(Path("20260101-1200-Ses_AbC.restart.md"))
+    assert sid == "Ses_AbC" and kind == "restart"
+    assert dt == datetime(2026, 1, 1, 12, 0)
+
+
+# EC-7: invalid embedded date -> dt None (safe mtime fallback downstream) -----------------
+
+@pytest.mark.parametrize("name", [
+    "20269901-1432-ses_x.restart.md",          # month 99 (canonical form)
+    "opencode-20260101-250000-ses_x.restart.md",  # hour 25 (legacy form)
+])
+def test_parse_invalid_date_yields_none(name):
+    sid, dt, kind = parse_recovery_name(Path(name))
+    assert kind == "restart" and dt is None and sid == "ses_x"

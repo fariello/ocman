@@ -27,6 +27,9 @@ def mock_llm(monkeypatch):
     monkeypatch.setattr(ocman, "extract_models_from_config", lambda c: [_Model()])
     monkeypatch.setattr(ocman, "resolve_model", lambda models, spec: _Model())
     monkeypatch.setattr(ocman, "estimate_cost", lambda *a, **k: 0.01)
+    # Neutralize the running-instance safety check so collision tests are deterministic
+    # regardless of whether a real opencode process happens to be running on the dev machine.
+    monkeypatch.setattr(ocman, "detect_running_opencode", lambda *a, **k: [])
     return captured
 
 
@@ -89,10 +92,88 @@ def test_filter_collision_backs_up(tmp_path, mock_llm):
 
 def test_filter_rejects_symlink_output(tmp_path, mock_llm):
     src = _src(tmp_path)
-    # Point -oc at a symlink; _safe_destination must refuse to write through it.
+    # Point -oc at a symlink; must refuse to write through it.
     real = tmp_path / "real.compacted.md"
     real.write_text("x", encoding="utf-8")
     link = tmp_path / "link.compacted.md"
     link.symlink_to(real)
     with pytest.raises(ocman.RecoveryError, match="symlink"):
         cli_filter(src, project=None, scope="ocman", model_spec="", out_path=link, verbosity=0)
+
+
+# --- input validation (EC-2/EC-3, SEC-4) -----------------------------------------------
+
+def test_filter_empty_input_refused(tmp_path, mock_llm):
+    src = _src(tmp_path, text="   \n\t  ")  # whitespace-only
+    with pytest.raises(ocman.RecoveryError, match="empty"):
+        cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0)
+    assert "prompt" not in mock_llm  # API never called
+
+
+def test_filter_whitespace_scope_refused(tmp_path, mock_llm):
+    src = _src(tmp_path)
+    with pytest.raises(ocman.RecoveryError, match="at least one"):
+        cli_filter(src, project=None, scope="   ", model_spec="", out_path=None, verbosity=0)
+
+
+def test_filter_binary_input_clean_error(tmp_path, mock_llm):
+    b = tmp_path / "bin.restart.md"
+    b.write_bytes(b"\xff\xfe\x00\x01 not utf8")
+    with pytest.raises(ocman.RecoveryError, match="UTF-8 text"):
+        cli_filter(b, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0)
+
+
+# --- egress guards (SEC-3, secret scan) -------------------------------------------------
+
+def test_filter_size_cap_refused(tmp_path, mock_llm, monkeypatch):
+    monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 50, "filter_secret_scan": "conservative"})
+    src = _src(tmp_path, text="x" * 5000)
+    with pytest.raises(ocman.RecoveryError, match="filter_max_bytes"):
+        cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0)
+    assert "prompt" not in mock_llm  # not sent
+
+
+def test_filter_size_cap_force_bypass(tmp_path, mock_llm, monkeypatch):
+    monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 50, "filter_secret_scan": "conservative"})
+    src = _src(tmp_path, text="x" * 5000)
+    out = cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0, force=True)
+    assert out is not None and "prompt" in mock_llm
+
+
+def test_filter_secret_scan_blocks(tmp_path, mock_llm, monkeypatch):
+    monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 0, "filter_secret_scan": "conservative"})
+    src = _src(tmp_path, text="notes\napi_key = deadbeefcafe1234567890\nmore")
+    with pytest.raises(ocman.RecoveryError) as ei:
+        cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0)
+    assert "deadbeefcafe" not in str(ei.value)  # value redacted
+    assert "prompt" not in mock_llm  # not sent
+
+
+def test_filter_secret_scan_allow_bypass(tmp_path, mock_llm, monkeypatch):
+    monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 0, "filter_secret_scan": "conservative"})
+    src = _src(tmp_path, text="notes\napi_key = deadbeefcafe1234567890\nmore")
+    out = cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0, allow_secrets=True)
+    assert out is not None and "prompt" in mock_llm
+
+
+# --- collision handling (EC-1) ----------------------------------------------------------
+
+def test_filter_collision_running_instance_refused(tmp_path, mock_llm, monkeypatch):
+    # An existing output + a detected running instance -> refuse (RecoveryError), no overwrite.
+    src = _src(tmp_path)
+    out1 = cli_filter(src, project=None, scope="ocman only", model_spec="", out_path=None, verbosity=0)
+    assert out1 is not None
+    def _raise(*a, **k):
+        raise ocman.RecoveryError("opencode is running")
+    monkeypatch.setattr(ocman, "check_opencode_process_lock", _raise)
+    with pytest.raises(ocman.RecoveryError, match="running"):
+        cli_filter(src, project=None, scope="ocman only", model_spec="", out_path=None, verbosity=0)
+
+
+def test_filter_oc_outside_source_honored(tmp_path, mock_llm):
+    # Explicit -oc outside the source dir is honored (user's deliberate choice).
+    src = _src(tmp_path)
+    other = tmp_path / "elsewhere"; other.mkdir()
+    oc = other / "custom.compacted.md"
+    out = cli_filter(src, project=None, scope="ocman", model_spec="", out_path=oc, verbosity=0)
+    assert out == oc and oc.exists()

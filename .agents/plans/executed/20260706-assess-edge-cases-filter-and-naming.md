@@ -4,7 +4,7 @@
 - Concern: edge-cases
 - Scope: the new surface added in 1.1.0 - `canonical_recovery_name` / `parse_recovery_name`,
   `cli_filter`, and `scripts/migrate_recovery_names.py`. Not a whole-project pass.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED 2026-07-06 (combined pass with the security + compatibility IPDs)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 
 ## Goal

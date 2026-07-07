@@ -1243,40 +1243,39 @@ class OrsessionApp(App):
             turns = filter_conversation_turns(turns)
         turns = consolidate_turns(turns)
 
-        # Establish paths
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-        safe_title = self.selected_session_title.lower().replace(" ", "-")
-        # clean title for filename
-        import re
-        safe_title = re.sub(r"[^a-z0-9_-]", "", safe_title)[:30]
-        
-        out_dir = Path("opencode-recovery")
+        # Establish paths. Use the CLI's canonical naming scheme and the configured output
+        # directory so CLI and TUI produce identical, migratable artifact names.
+        from ocman import canonical_recovery_name
+        now = datetime.now()  # a datetime object (canonical_recovery_name needs the object)
+
+        out_dir = Path(load_ocman_config().get("default_out_dir", "opencode-recovery"))
         out_dir.mkdir(parents=True, exist_ok=True)
 
         session_info = self.current_export.info if self.current_export else {}
-        from dataclasses import dataclass
+        from dataclasses import dataclass, field
         @dataclass
         class DummySession:
             session_id: str
             title: str
             created: str
             updated: str
+            raw: dict = field(default_factory=dict)
         dummy_sess = DummySession(self.selected_session_id, self.selected_session_title, "", "")
 
         if button_id == "btn-write-transcript":
-            path = out_dir / f"opencode-recovery-{self.selected_session_id[:8]}-{timestamp}.transcript.md"
+            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "transcript")
             content = render_transcript(turns, self.selected_session_title)
             write_text(path, content)
             self.app.notify(f"Transcript written to: {path}", severity="information")
 
         elif button_id == "btn-write-restart":
-            path = out_dir / f"opencode-recovery-{self.selected_session_id[:8]}-{timestamp}.restart.md"
+            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "restart")
             content = render_restart_context(turns, f"session_export_{self.selected_session_id[:8]}", dummy_sess)
             write_text(path, content)
             self.app.notify(f"Restart file written to: {path}", severity="information")
 
         elif button_id == "btn-write-prompt":
-            path = out_dir / f"opencode-recovery-{self.selected_session_id[:8]}-{timestamp}.compact-prompt.md"
+            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "prompt")
             content = render_compact_prompt(
                 turns,
                 source_name=f"session_export_{self.selected_session_id[:8]}",
@@ -1331,13 +1330,36 @@ class OrsessionApp(App):
                 # the response content as a str.
                 compacted_text = call_compaction_api(model_info, prompt_content, verbosity=0)
 
-                # Write compacted result file
-                out_dir = Path("opencode-recovery")
+                # Write compacted result file, using the CLI's canonical naming + configured
+                # output dir so CLI and TUI produce identical, migratable names.
+                from ocman import (
+                    canonical_recovery_name,
+                    resolve_recovery_collision,
+                    maybe_copy_compacted_to_project,
+                    resolve_project_dir,
+                )
+                ocman_cfg = load_ocman_config()
+                out_dir = Path(ocman_cfg.get("default_out_dir", "opencode-recovery"))
                 out_dir.mkdir(parents=True, exist_ok=True)
-                timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-                dest_path = out_dir / f"opencode-{timestamp}-{self.selected_session_id[:8]}.compacted.md"
-                
+                dest_path = out_dir / canonical_recovery_name(
+                    self.selected_session_id, datetime.now(), "compacted"
+                )
+                # Collision handling shared with the CLI (safety-check then backup/delete).
+                # In the TUI, stdin is not a TTY, so this defaults to safe backup; if an
+                # instance is running it raises and the worker's except-clause reports it.
+                resolve_recovery_collision(dest_path, force=False, verbosity=0)
                 write_text(dest_path, compacted_text)
+
+                # Compacted-copy parity with the CLI: drop the compacted file into the
+                # project's .agents/prompts/pending/ when enabled (fail-soft).
+                try:
+                    project_dir = resolve_project_dir(session_obj, None)
+                    maybe_copy_compacted_to_project(
+                        dest_path, session_obj, project_dir,
+                        bool(ocman_cfg.get("copy_restart_to_project_prompts", True)), 0,
+                    )
+                except Exception:
+                    pass  # fail-soft: never break the TUI compaction on the optional copy
 
                 # Log compaction run to history sidecar
                 self.log_compaction_to_history(model_spec, dest_path)

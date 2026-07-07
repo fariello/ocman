@@ -80,3 +80,20 @@ def test_expand_env_vars_missing_file_ref_left_untouched():
 def test_expand_env_vars_non_string_or_empty_passthrough():
     assert expand_env_vars("") == ""
     assert expand_env_vars("plain string") == "plain string"
+
+
+# Config back-compat: new keys default safely (COMP-5) -----------------------------------
+
+def test_load_ocman_config_defaults_new_keys(tmp_path):
+    """An old/minimal ocman.toml without the new keys loads and yields their defaults."""
+    cfg_file = tmp_path / "ocman.toml"
+    cfg_file.write_text("default_retention_days = 7\n", encoding="utf-8")  # no filter_* keys
+    cfg = ocman.load_ocman_config(cfg_file)
+    assert cfg["default_retention_days"] == 7               # user value honored
+    assert cfg["filter_max_bytes"] == ocman.DEFAULT_CONFIG["filter_max_bytes"]
+    assert cfg["filter_secret_scan"] == "conservative"      # default applied, no error
+
+
+def test_load_ocman_config_missing_file_has_new_keys():
+    cfg = ocman.load_ocman_config(ocman.Path("/nonexistent/ocman.toml"))
+    assert "filter_max_bytes" in cfg and "filter_secret_scan" in cfg

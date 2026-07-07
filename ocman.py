@@ -260,6 +260,17 @@ include_tools = {include_tools}
 # Include all extracted roles instead of only user and assistant (true/false).
 # Default: false
 all_roles = {all_roles}
+
+# Maximum input size (bytes) sent to the LLM by `filter` and `--compact` before refusing.
+# Guards against accidentally sending a huge/binary file off-box. Override per-run with --force.
+# Default: 5242880 (5 MB)
+filter_max_bytes = {filter_max_bytes}
+
+# Pre-egress secret/PII scan aggressiveness for `filter` and `--compact`:
+# "conservative" (high-signal patterns only) or "aggressive" (also bare keywords, for
+# sensitive environments). A detection stops the send unless --allow-secrets is given.
+# Default: conservative
+filter_secret_scan = {filter_secret_scan}
 """
 
 DEFAULT_CONFIG = {
@@ -274,6 +285,8 @@ DEFAULT_CONFIG = {
     "keep_temp": False,
     "include_tools": False,
     "all_roles": False,
+    "filter_max_bytes": 5 * 1024 * 1024,
+    "filter_secret_scan": "conservative",
 }
 
 PATH_KEYS = {"db_path", "history_path", "default_out_dir", "default_backup_dir"}
@@ -3409,8 +3422,14 @@ def canonical_recovery_name(session_id: str, dt: datetime, kind: str) -> str:
     """Canonical recovery-artifact filename: ``YYYYMMDD-HHMM-<session_id>.<kind>.md``.
 
     ``dt`` is rendered as-is (callers pass a local-time datetime). The session id is
-    filesystem-safed. ``kind`` is one of :data:`RECOVERY_KINDS`.
+    filesystem-safed. ``kind`` must be one of :data:`RECOVERY_KINDS`.
+
+    Raises:
+        ValueError: if ``kind`` is not a recognized recovery kind (fail loudly rather than
+            writing an unparseable name).
     """
+    if kind not in RECOVERY_KINDS:
+        raise ValueError(f"Unknown recovery kind {kind!r}; expected one of {RECOVERY_KINDS}.")
     return f"{dt:%Y%m%d-%H%M}-{safe_filename(session_id)}.{kind}.md"
 
 
@@ -3429,15 +3448,18 @@ def parse_recovery_name(path: Path) -> tuple[str, datetime | None, str]:
     Round-trips with :func:`canonical_recovery_name`.
     """
     name = path.name
-    # Determine kind by suffix (longest-first is irrelevant; kinds are disjoint).
+    # Determine kind by suffix, case-insensitively (so odd-cased legacy files like
+    # ``*.RESTART.MD`` are recognized on any filesystem, incl. macOS). Detection lowercases,
+    # but the stem is sliced from the ORIGINAL name so the session-id case is preserved.
+    name_lower = name.lower()
     kind = ""
     for k in RECOVERY_KINDS:
-        if name.endswith(f".{k}.md"):
+        if name_lower.endswith(f".{k}.md"):
             kind = k
             break
     if not kind:
         return ("", None, "")
-    stem = name[: -len(f".{kind}.md")]  # everything before ".<kind>.md"
+    stem = name[: -len(f".{kind}.md")]  # everything before ".<kind>.md" (same length either case)
 
     # A `filter` output looks like `<canonical-stem>.<scope>` for compacted. Drop a trailing
     # ".<scope>" segment only if what precedes it still parses as a timestamped stem; otherwise
@@ -4592,6 +4614,15 @@ Examples:
     )
 
     parser.add_argument(
+        "--allow-secrets",
+        action="store_true",
+        help=(
+            "Bypass the pre-egress secret/PII scan for 'filter' and --compact "
+            "(send content even if a likely secret/PII is detected)."
+        ),
+    )
+
+    parser.add_argument(
         "command",
         nargs="?",
         choices=["info", "help", "ui", "gui", "filter"],
@@ -4740,6 +4771,8 @@ def run_compaction(
     session: SessionInfo,
     model_spec: str,
     verbosity: int,
+    force: bool = False,
+    allow_secrets: bool = False,
 ) -> Path | None:
     """
     Run LLM-based compaction on the recovery transcript.
@@ -4749,7 +4782,7 @@ def run_compaction(
 
     Args:
         compact_prompt_path:
-            Path to the .compact-prompt.md file.
+            Path to the .prompt.md compaction-prompt file.
 
         output_dir:
             Directory for output files.
@@ -4779,6 +4812,15 @@ def run_compaction(
         prompt_content = compact_prompt_path.read_text(encoding="utf-8")
     except OSError as error:
         raise RecoveryError(f"Could not read compact prompt: {compact_prompt_path}\n{error}") from error
+
+    # Egress guards: size cap + secret/PII scan (shared with `filter`).
+    check_egress_guards(
+        prompt_content,
+        source_desc="Compaction prompt",
+        config=load_ocman_config(),
+        force=force,
+        allow_secrets=allow_secrets,
+    )
 
     # Estimate tokens and cost (includes system message + full user prompt).
     input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
@@ -4815,6 +4857,8 @@ def run_compaction(
         session.session_id, _STARTUP_TIME_LOCAL, "compacted"
     )
 
+    # Collision handling shared with filter/migration (safety-check then backup/delete).
+    resolve_recovery_collision(compacted_path, force=force, verbosity=verbosity)
     write_text(compacted_path, response_text)
 
     print()
@@ -4835,22 +4879,152 @@ def run_compaction(
     return compacted_path
 
 
-def _safe_destination(dest: Path, base_dir: Path) -> Path:
-    """Resolve ``dest`` and ensure it stays within ``base_dir`` (path-containment).
+import dataclasses
 
-    Rejects a destination that escapes ``base_dir`` (e.g. via ``..``) or that resolves through a
-    symlink out of it. Raises RecoveryError on violation. Returns the resolved path.
+
+@dataclasses.dataclass(frozen=True)
+class SecretHit:
+    """A redacted secret/PII detection: the detector kind and the 1-based line number."""
+    kind: str
+    line: int
+
+
+# High-signal secret/PII patterns (conservative set). Each maps a detector name to a compiled
+# regex. Matches are reported by type + line only; the matched text is NEVER echoed.
+_SECRET_PATTERNS: list[tuple[str, "re.Pattern[str]"]] = [
+    ("private-key-block", re.compile(r"-----BEGIN [A-Z ]*PRIVATE KEY-----")),
+    ("aws-access-key-id", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
+    ("github-token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b")),
+    ("jwt", re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b")),
+    ("bearer-token", re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/-]{16,}=*")),
+    # KEY=VALUE (or KEY: VALUE) where the value looks token-like (>=12 non-space chars, not a
+    # bare English word). Conservative: requires a token-like value, so prose "password" alone
+    # does not trip it.
+    (
+        "credential-assignment",
+        re.compile(
+            r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|token|client[_-]?secret)\b"
+            r"\s*[:=]\s*[\"']?[A-Za-z0-9._+/~-]{12,}[\"']?"
+        ),
+    ),
+    ("us-ssn", re.compile(r"\b\d{3}-\d{2}-\d{4}\b")),
+]
+
+# Aggressive mode additionally flags bare sensitive keywords anywhere (for sensitive envs).
+_SECRET_KEYWORDS_AGGRESSIVE = re.compile(
+    r"(?i)\b(?:password|passwd|secret|api[_-]?key|access[_-]?token|client[_-]?secret|private[_-]?key)\b"
+)
+
+
+def scan_for_secrets(text: str, mode: str = "conservative") -> list[SecretHit]:
+    """Scan ``text`` for likely secrets/PII. Returns redacted hits (type + line, never the value).
+
+    ``mode`` = "conservative" (high-signal patterns only; default) or "aggressive" (also flags
+    bare sensitive keywords). Pure function - no I/O - so it is unit-testable in isolation.
     """
-    base = base_dir.resolve()
-    resolved = dest.resolve()
-    if resolved != base and not resolved.is_relative_to(base):
+    hits: list[SecretHit] = []
+    patterns = list(_SECRET_PATTERNS)
+    for lineno, line in enumerate(text.splitlines(), start=1):
+        for kind, pat in patterns:
+            if pat.search(line):
+                hits.append(SecretHit(kind=kind, line=lineno))
+        if mode == "aggressive" and _SECRET_KEYWORDS_AGGRESSIVE.search(line):
+            hits.append(SecretHit(kind="keyword", line=lineno))
+    return hits
+
+
+def check_egress_guards(
+    text: str,
+    *,
+    source_desc: str,
+    config: dict,
+    force: bool,
+    allow_secrets: bool,
+) -> None:
+    """Guard an outbound LLM payload: size cap + secret/PII scan. Raises RecoveryError to stop.
+
+    - Size cap: refuse if ``len(text.encode())`` exceeds ``filter_max_bytes`` unless ``force``.
+    - Secret scan: refuse if :func:`scan_for_secrets` finds anything unless ``allow_secrets``;
+      the error lists detector types + line numbers, never the secret values.
+
+    Applies identically to ``filter`` and ``--compact`` so both egress paths share one posture.
+    """
+    max_bytes = int(config.get("filter_max_bytes", 5 * 1024 * 1024))
+    size = len(text.encode("utf-8", errors="ignore"))
+    if max_bytes > 0 and size > max_bytes and not force:
         raise RecoveryError(
-            f"Refusing to write outside the target directory:\n  target dir: {base}\n  resolved:   {resolved}"
+            f"{source_desc} is {size:,} bytes, over the filter_max_bytes cap ({max_bytes:,}). "
+            f"Pass --force to send it anyway, or raise filter_max_bytes in ocman.toml."
         )
-    # Reject writing onto / through an existing symlink (do not clobber link targets).
-    if dest.is_symlink() or resolved.is_symlink():
+    mode = str(config.get("filter_secret_scan", "conservative")).lower()
+    hits = scan_for_secrets(text, mode=mode)
+    if hits and not allow_secrets:
+        # Redacted summary: type + line only, deduped and sorted.
+        summary = ", ".join(sorted({f"{h.kind}@L{h.line}" for h in hits}))
+        raise RecoveryError(
+            "Refusing to send: possible secret/PII detected in the content that would be "
+            f"transmitted to the API endpoint.\n  Detections (redacted): {summary}\n"
+            "  Review the content; pass --allow-secrets to send anyway."
+        )
+
+
+def resolve_recovery_collision(
+    dest: Path,
+    *,
+    force: bool,
+    verbosity: int = 0,
+    interactive: bool | None = None,
+) -> None:
+    """Resolve a would-overwrite collision at ``dest`` safely (shared by migration + live writes).
+
+    Behavior (per the 2026-07-06 decisions):
+      1. Safety check: if opencode/ocman is running, treat as unsafe. In that case raise
+         RecoveryError (CLI prints it and exits; TUI catches it and refuses). ``force`` bypasses
+         the running-check (same semantics as elsewhere).
+      2. If safe: interactive (TTY) -> ask to back up (`.bu.NNN`) or delete; non-interactive ->
+         default to backing up (never delete).
+
+    Does nothing if ``dest`` does not exist. Uses the existing running-instance detection and the
+    existing `.bu.NNN` backup convention (no new mechanisms).
+    """
+    if not dest.exists():
+        return
+    # 1) Safety: refuse while an instance is running (best-effort; no-op on Windows / if
+    #    detection is unavailable, in which case we fall through to the safe backup default).
+    check_opencode_process_lock(force=force, verbosity=verbosity)
+    # 2) Resolve.
+    if interactive is None:
+        interactive = bool(hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+    if interactive:
+        answer = input(
+            f"  A file already exists at {dest.name}. [b]ack up (default) or [d]elete it? [B/d]: "
+        ).strip().lower()
+        if answer in {"d", "delete"}:
+            dest.unlink()
+            return
+    # Non-interactive, or interactive default: back up (never delete).
+    _backup_compacted_bu(dest)
+
+
+def _safe_destination(dest: Path, base_dir: Path) -> Path:
+    """Resolve ``dest`` and ensure its PARENT stays within ``base_dir`` (real path-containment).
+
+    Resolves the parent with ``os.path.realpath`` (following symlinked ancestors) and requires it
+    to equal, or be inside, the realpath'd ``base_dir``. This is meaningful only when the caller
+    passes a ``base_dir`` that is the intended containment root and is NOT merely ``dest.parent``
+    (which would make the check vacuous). Also refuses to write through an existing symlink at the
+    destination. Raises RecoveryError on violation; returns the resolved path.
+    """
+    base_real = Path(os.path.realpath(base_dir))
+    parent_real = Path(os.path.realpath(dest.parent))
+    if parent_real != base_real and not parent_real.is_relative_to(base_real):
+        raise RecoveryError(
+            "Refusing to write outside the target directory:\n"
+            f"  target dir: {base_real}\n  resolved parent: {parent_real}"
+        )
+    if dest.is_symlink():
         raise RecoveryError(f"Refusing to write through a symlink: {dest}")
-    return resolved
+    return parent_real / dest.name
 
 
 def cli_filter(
@@ -4860,6 +5034,8 @@ def cli_filter(
     model_spec: str,
     out_path: Path | None,
     verbosity: int,
+    force: bool = False,
+    allow_secrets: bool = False,
 ) -> Path | None:
     """Re-scope an existing recovery/text document to a single project/scope via the LLM.
 
@@ -4867,6 +5043,9 @@ def cli_filter(
     shared (untrusted-content) system prompt, and writes a new, smaller ``.compacted.md`` next to
     the source (or into ``out_path``'s directory). The source is never modified. Returns the
     output path, or None if the user cancelled.
+
+    Egress is guarded by a size cap (``filter_max_bytes``, override with ``force``) and a secret/
+    PII scan (bypass with ``allow_secrets``).
     """
     print(color_bold("Scoped Filter"))
 
@@ -4874,10 +5053,16 @@ def cli_filter(
         raise RecoveryError(f"Input file not found: {input_path}")
     try:
         source_text = input_path.read_text(encoding="utf-8")
-    except OSError as error:
-        raise RecoveryError(f"Could not read input file: {input_path}\n{error}") from error
+    except (OSError, UnicodeDecodeError) as error:
+        raise RecoveryError(
+            f"Could not read input as a UTF-8 text file: {input_path}\n{error}"
+        ) from error
+
+    if not source_text.strip():
+        raise RecoveryError(f"Input file is empty: {input_path}")
 
     # Resolve the effective scope from --project (DB-resolved) and/or --scope free text.
+    scope = scope.strip() if scope else None  # whitespace-only scope counts as absent
     scope_parts: list[str] = []
     project_slug = ""
     if project:
@@ -4897,10 +5082,20 @@ def cli_filter(
 
     # Resolve model and reuse the compaction cost-estimate + confirmation flow.
     config = load_opencode_config(verbosity=verbosity)
+    ocman_config = load_ocman_config()
     models = extract_models_from_config(config)
     model = resolve_model(models, model_spec)
 
     user_prompt = FILTER_USER_PROMPT_TEMPLATE.format(scope=scope_text, content=source_text)
+
+    # Egress guards: size cap + secret/PII scan (shared with --compact).
+    check_egress_guards(
+        user_prompt,
+        source_desc=f"Input {input_path.name}",
+        config=ocman_config,
+        force=force,
+        allow_secrets=allow_secrets,
+    )
 
     input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(user_prompt)
     output_tokens_est = max(500, input_tokens // 5)
@@ -4936,14 +5131,23 @@ def cli_filter(
         except OSError:
             dt = _STARTUP_TIME_LOCAL
 
-    out_dir = (out_path.parent if out_path is not None else input_path.parent)
+    # Default output = beside the source (containment enforced against the source dir).
+    # Explicit -oc = the user's deliberate destination (honored; only symlink-at-dest refused).
     scope_slug = safe_filename(project_slug or scope or "scope")
     stem = canonical_recovery_name(session_id, dt, "compacted")[: -len(".compacted.md")]
-    out_name = out_path.name if out_path is not None else f"{stem}.{scope_slug}.compacted.md"
+    if out_path is not None:
+        dest = out_path
+        if dest.is_symlink():
+            raise RecoveryError(f"Refusing to write through a symlink: {dest}")
+        print(f"  Output:   {color_cyan(str(dest.resolve()))} (explicit --output-compact)")
+    else:
+        base_dir = input_path.resolve().parent
+        out_name = f"{stem}.{scope_slug}.compacted.md"
+        dest = _safe_destination(base_dir / out_name, base_dir)
 
-    dest = _safe_destination(out_dir / out_name, out_dir)
     dest.parent.mkdir(parents=True, exist_ok=True)
-    _backup_compacted_bu(dest)
+    # Collision handling shared with --compact/migration: safety-check then backup/delete.
+    resolve_recovery_collision(dest, force=force, verbosity=verbosity)
     write_text(dest, response_text)
 
     print()
@@ -8003,6 +8207,8 @@ def main() -> None:
                 model_spec=(args.compact if isinstance(args.compact, str) else "") or "",
                 out_path=args.output_compact,
                 verbosity=verbosity,
+                force=getattr(args, "force", False),
+                allow_secrets=getattr(args, "allow_secrets", False),
             )
         except Exception as e:
             die(str(e))
@@ -8904,7 +9110,7 @@ def main() -> None:
 
                 if model_spec:
                     compact_prompt_file = next(
-                        (p for p in generated_paths if p.name.endswith(".compact-prompt.md")),
+                        (p for p in generated_paths if p.name.endswith(".prompt.md")),
                         generated_paths[-1],
                     )
                     compacted_path = run_compaction(
@@ -8913,6 +9119,8 @@ def main() -> None:
                         session=session,
                         model_spec=model_spec,
                         verbosity=verbosity,
+                        force=getattr(args, "force", False),
+                        allow_secrets=getattr(args, "allow_secrets", False),
                     )
                 if compacted_path:
                     generated_paths.append(compacted_path)
