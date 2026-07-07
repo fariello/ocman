@@ -20,3 +20,6 @@
 
 ## Section 6 (compat/packaging/release) — checkpoint
 - Version 1.1.0 consistent; twine check PASSED; back-compat confirmed. Finding S6-C1 (Medium/RR-Low): migration script not in wheel; fix in S7. CI advisory (gitleaks) recorded. Committed.
+
+## Section 7 (implementation) — checkpoint
+- All 5 findings fixed (S6-C1,S2-E1,S5-U1,S4-D1,S3-T1); all Low RR. 174 passed/2 skipped; wheel ships migration script; twine PASSED. Product commit 3e24c76. Committed artifacts.
