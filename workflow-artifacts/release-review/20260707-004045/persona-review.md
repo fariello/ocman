@@ -48,3 +48,16 @@ Lead-persona notes appended per section (S2-S6); full eight-persona sign-off in 
   for pip users.
 - Software engineer: sdist excludes .agents/+workflow-artifacts (correct); wheel force-includes
   ocman.py + ocman_tui but not scripts/ (root of C1).
+
+## Section 8: eight-persona sign-off (1.1.0)
+1. QA/QC: PASS. 174 tests green; delta paths (filter/egress/collision/naming/migration/TUI) covered.
+2. Testing/regression: PASS. S3-T1 (TUI parity) now pinned; regression cover for the delta is real.
+3. UI/UX: PASS. filter errors actionable; --force help now complete; collision prompt clear.
+4. Architect: PASS. Shared helpers, no duplication, KISS held; no speculative abstraction.
+5. Software engineer: PASS. Reuses existing primitives; no leaks; LSP noise is cosmetic.
+6. Power user: PASS. --allow-secrets/--force/config knobs give scriptable escape hatches.
+7. Novice: PASS. --help + README + migration NOTE cover the upgrade path (D1 fixed).
+8. Stakeholder: PASS. Delta serves the goal + adds a genuine secret-egress safety net; packaging
+   now delivers the documented migration tool (C1 fixed). Old PyPI versions already yanked.
+
+No persona blocks the release.

@@ -23,3 +23,6 @@
 
 ## Section 7 (implementation) — checkpoint
 - All 5 findings fixed (S6-C1,S2-E1,S5-U1,S4-D1,S3-T1); all Low RR. 174 passed/2 skipped; wheel ships migration script; twine PASSED. Product commit 3e24c76. Committed artifacts.
+
+## Section 8 (final ship review) — checkpoint
+- Verdict GO for 1.1.0. 174/2 tests; 0 secrets; wheel ships migration script; twine PASSED; all principles held; no pending plans; 8-persona sign-off all PASS. No restart. Section 9 not run (needs approval).
