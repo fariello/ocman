@@ -100,11 +100,14 @@ the edited text.
 
 ## Open questions
 
-1. DOC-3: use the actual release date `2026-07-07` for the 1.1.0 changelog heading, or
-   intentionally keep the authoring date `2026-07-06`? (Assumption: align to the tag
-   date for consistency; low stakes either way.)
-2. Should DOC-1's `date-released` be the git-tag date (`2026-07-07`) or the PyPI upload
-   date (not yet performed at time of writing)? (Assumption: use the tag/release date.)
+Resolved with the user on 2026-07-07 (interactive):
+
+1. DOC-3: **Yes, align the CHANGELOG 1.1.0 heading date** to the chosen release date.
+2. Release date for DOC-1 and DOC-3: **use the git-tag / GitHub release date
+   `2026-07-07`** (not the PyPI upload date). So `CITATION.cff` `date-released` becomes
+   `2026-07-07` and the CHANGELOG heading becomes `## [1.1.0] - 2026-07-07`.
+
+No open questions remain.
 
 ## Approval and execution gate
 

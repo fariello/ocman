@@ -46,9 +46,11 @@
   PyPI, so `pip install ocman` currently yields 1.0.6, but that is a transient release-
   pipeline state, not a documentation defect.
 
-## Open questions for the user
+## Open questions for the user - RESOLVED (2026-07-07, interactive)
 
-1. DOC-3/DOC-1 dates: use the git-tag/GitHub-release date (2026-07-07) or the (not-yet-
-   performed) PyPI upload date? Assumption: tag/release date.
-2. DOC-3: correct the CHANGELOG 1.1.0 date to 2026-07-07, or intentionally keep the
-   authoring date 2026-07-06? Low stakes; author's call.
+1. DOC-3/DOC-1 dates: **use the git-tag/GitHub-release date 2026-07-07** (not the
+   pending PyPI upload date). Confirmed by user.
+2. DOC-3: **yes, correct the CHANGELOG 1.1.0 heading to 2026-07-07** to match the tag.
+   Confirmed by user.
+
+No open questions remain; the IPD's proposed changes are ready for execution on approval.
