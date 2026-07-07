@@ -40,3 +40,11 @@ Lead-persona notes appended per section (S2-S6); full eight-persona sign-off in 
 - Stakeholder (8): the delta serves the stated goal (safe recovery/compaction management) and adds
   a genuine safety net (secret scan) without breaking the local-tool simplicity.
 - QA (1) / Testing (2): covered in S2/S3; residual = S3-T1 (TUI test), S2-E1, S4-D1, U1 (all Low).
+
+## Section 6 (compatibility/packaging/release)
+- Operator/stakeholder: version 1.1.0 consistent; twine check PASSED; CI matrix mirrors validation.
+  Compatibility: parse_recovery_name reads legacy forms (old files still work); config back-compat
+  confirmed. Gap: the migration script isn't in the wheel (C1) - documented upgrade tool missing
+  for pip users.
+- Software engineer: sdist excludes .agents/+workflow-artifacts (correct); wheel force-includes
+  ocman.py + ocman_tui but not scripts/ (root of C1).

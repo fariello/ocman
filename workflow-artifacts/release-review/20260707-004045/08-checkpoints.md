@@ -17,3 +17,6 @@
 
 ## Section 5 (feature/usability/maint + principles + TODO) — checkpoint
 - All 4 principles HELD. TODO: ocman spend = out-of-scope. All 8 personas exercised. Finding S5-U1 (Low): --force help incomplete; fix in S7. Committed.
+
+## Section 6 (compat/packaging/release) — checkpoint
+- Version 1.1.0 consistent; twine check PASSED; back-compat confirmed. Finding S6-C1 (Medium/RR-Low): migration script not in wheel; fix in S7. CI advisory (gitleaks) recorded. Committed.
