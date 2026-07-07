@@ -7,3 +7,8 @@ GUIDING_PRINCIPLES.md). Per-principle verdict finalized in Section 5/8; seeded h
 - Configurable over hardcoded: (assess in S5)
 - KISS: (assess in S5)
 - Honest documentation: (assess in S4)
+
+## Update (S4)
+- Honest documentation: HELD. README config keys == DEFAULT_CONFIG (0 undocumented); --help matches
+  the shipped filter/--allow-secrets surface; CHANGELOG honestly flags the --compact behavior change.
+- Intuitive/self-documenting (docs side): HELD, minus D1 (migration-script discoverability, Low).

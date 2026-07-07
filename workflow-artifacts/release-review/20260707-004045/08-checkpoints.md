@@ -11,3 +11,6 @@
 
 ## Section 3 (tests) — checkpoint
 - 172 passed / 2 skipped. CLI delta well covered (66). Gap S3-T1 (Medium/RR-Low): TUI parity specifics unpinned; fix in S7. Committed.
+
+## Section 4 (docs) — checkpoint
+- --help + README config == shipped surface; CHANGELOG honest. Finding S4-D1 (Low): migration script not in README; fix in S7. Committed.

@@ -20,3 +20,10 @@ Lead-persona notes appended per section (S2-S6); full eight-persona sign-off in 
   compaction test proves a .compacted.md is still written+success, but not the new name/out_dir/copy.
 - QA/QC: 172 passed, 2 skipped; no flaky/failing paths. The collision-safety test correctly mocks
   the running-instance check for determinism.
+
+## Section 4 (docs/specs/examples)
+- Complete novice: --help shows filter/--scope/--allow-secrets with examples; README Argument
+  Reference lists filter + the new config keys. Gap: the migration script isn't discoverable from
+  README (D1, Low) - only ARCHITECTURE/CHANGELOG mention it.
+- UI/UX: config template in README documents filter_max_bytes + filter_secret_scan with defaults;
+  honest-docs held (CHANGELOG flags the --compact egress behavior change explicitly).
