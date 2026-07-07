@@ -14,3 +14,6 @@
 
 ## Section 4 (docs) — checkpoint
 - --help + README config == shipped surface; CHANGELOG honest. Finding S4-D1 (Low): migration script not in README; fix in S7. Committed.
+
+## Section 5 (feature/usability/maint + principles + TODO) — checkpoint
+- All 4 principles HELD. TODO: ocman spend = out-of-scope. All 8 personas exercised. Finding S5-U1 (Low): --force help incomplete; fix in S7. Committed.
