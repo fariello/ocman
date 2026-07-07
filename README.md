@@ -231,6 +231,7 @@ ocman --create-config
 | | `--create-config` | Interactively generate the `ocman.toml` file |
 | | `--backup-opencode` | Create a system backup archive ZIP file |
 | | `--restore PATH` | Restore configuration, database, and diffs from backup |
+| | `--clean-backups` | Prune old backups (pair with `--days N`); previews a KEEP/DELETE table before deleting (see Pruning Backups) |
 | | `--move-project PATH`| Relocate a project (re-assign worktree path in DB and disk) |
 | | `--move-session ID` | Relocate a single session |
 | | `--to PATH` | Destination path for moves, rebasing, and session exports |
@@ -241,7 +242,7 @@ ocman --create-config
 | | `--import-session PATH`| Import a session from a portable `.ocbox` bundle |
 | | `--to-project ID` | Remap imported session to an existing project ID |
 | | `--new-project-path PATH`| Remap imported session to a new project worktree path |
-| | `filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM (command). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
+| | `filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM (command). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
 | | `--scope "TEXT"` | With `filter`: free-text scope of content to keep (e.g. `"ocman only"`) |
 | | `--allow-secrets` | Bypass the pre-egress secret/PII scan for `filter` and `--compact` (send content even if a likely secret is detected). |
 | `-v` | `--verbose` | Increase log verbosity (`-v` or `-vv`) |

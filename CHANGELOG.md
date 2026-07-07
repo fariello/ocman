@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-07-06
+## [1.1.0] - 2026-07-07
 
 ### Added
 - **`ocman filter <input>` command:** re-scopes an existing recovery/compacted document to a
