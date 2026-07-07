@@ -10,15 +10,15 @@ While it retains powerful capabilities for extracting and compacting crashed or 
 
 OpenCode's SQLite database grows without bound and has no built-in cleanup, and OpenCode also
 writes session-diff files to disk. The whole point of a "garbage collector" for it is to *actually
-give the space back* — both the rows in the database and the bytes on disk.
+give the space back*: both the rows in the database and the bytes on disk.
 
 `ocman` does this by **deleting the orphaned/old rows and their on-disk session-diff files and then
 running `VACUUM`** to physically shrink the SQLite file, and it reports exactly how many bytes were
 reclaimed (see `--clean`, `--clean-orphans`, and `ocman info`/`disk`).
 
 This is why the project exists. In the author's own testing, the alternative
-[`ocgc`](https://pypi.org/project/ocgc/) (OpenCode Garbage Collector, v0.1.0) — which advertises that
-it "reclaims" this storage — shrank a 2.9 GB database only to ~2.8 GB, while `ocman`'s orphan cleanup
+[`ocgc`](https://pypi.org/project/ocgc/) (OpenCode Garbage Collector, v0.1.0), which advertises that
+it "reclaims" this storage, shrank a 2.9 GB database only to ~2.8 GB, while `ocman`'s orphan cleanup
 brought the *same* database down to ~1.9 GB. Reclaiming space you asked to be reclaimed is the
 baseline `ocman` is built to actually meet.
 
@@ -93,7 +93,7 @@ ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
 ## Installation
 
 ### Prerequisite Dependencies
-*   **CLI tool (`ocman` / `ocman.py`)**: Zero external dependencies—requires only Python 3.10+ and the `opencode` CLI on your `PATH`.
+*   **CLI tool (`ocman` / `ocman.py`)**: Zero external dependencies; requires only Python 3.10+ and the `opencode` CLI on your `PATH`.
 *   **TUI app (`ocman ui` / `ocman gui`)**: Requires the Python packages `textual` and `rich`.
 
 ### Installation Methods
@@ -305,7 +305,7 @@ Before executing a restoration, `ocman` packages the existing active state into 
 
 ### Pruning Backups (`ocman --clean-backups`)
 `ocman --clean-backups --days N` prunes old backups. Before deleting anything it prints a
-table of **all** backups — each tagged **DELETE** (past the retention window) or **KEEP** —
+table of **all** backups, each tagged **DELETE** (past the retention window) or **KEEP**,
 with a right-aligned Size column and last-modified time, plus a running "N to delete, M kept"
 summary. If the prune would remove **every** backup, it prints a forceful warning that no
 rollback backups will remain. With many retained backups the KEEP rows are summarized; use

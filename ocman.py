@@ -524,10 +524,10 @@ def expand_env_vars(value: str) -> str:
     Expand environment variable and file references in a config string value.
 
     Supports four formats:
-      - {file:PATH}     — opencode's format for reading secrets from files
-      - {env:VAR_NAME}  — opencode's preferred format for env vars
-      - ${VAR_NAME}     — shell-style with braces
-      - $VAR_NAME       — shell-style without braces (only when the entire value is a reference)
+      - {file:PATH}     : opencode's format for reading secrets from files
+      - {env:VAR_NAME}  : opencode's preferred format for env vars
+      - ${VAR_NAME}     : shell-style with braces
+      - $VAR_NAME       : shell-style without braces (only when the entire value is a reference)
 
     Args:
         value:
@@ -545,7 +545,7 @@ def expand_env_vars(value: str) -> str:
     if not isinstance(value, str) or not value:
         return value
 
-    # opencode's {file:PATH} format — can appear anywhere in the string.
+    # opencode's {file:PATH} format: can appear anywhere in the string.
     if "{file:" in value:
         def replace_file(match: re.Match[str]) -> str:
             file_path = match.group(1)
@@ -553,18 +553,18 @@ def expand_env_vars(value: str) -> str:
             return content if content else match.group(0)
         return _FILE_REF_PATTERN.sub(replace_file, value)
 
-    # opencode's {env:VAR_NAME} format — can appear anywhere in the string.
+    # opencode's {env:VAR_NAME} format: can appear anywhere in the string.
     if "{env:" in value:
         def replace_env(match: re.Match[str]) -> str:
             var_name = match.group(1)
             return os.environ.get(var_name, match.group(0))
         return _ENV_VAR_PATTERN.sub(replace_env, value)
 
-    # Shell-style ${VAR_NAME} — entire value is a reference.
+    # Shell-style ${VAR_NAME}: entire value is a reference.
     if value.startswith("${") and value.endswith("}"):
         return os.environ.get(value[2:-1], "")
 
-    # Shell-style $VAR_NAME — entire value is a reference.
+    # Shell-style $VAR_NAME: entire value is a reference.
     if value.startswith("$") and value[1:].isidentifier():
         return os.environ.get(value[1:], "")
 
@@ -907,7 +907,7 @@ def call_compaction_api(
     if usage:
         actual_input = usage.get("prompt_tokens", 0)
         actual_output = usage.get("completion_tokens", 0)
-        print(f"  Actual tokens — input: {actual_input:,}, output: {actual_output:,}")
+        print(f"  Actual tokens: input {actual_input:,}, output {actual_output:,}")
         if model.cost_input is not None and model.cost_output is not None:
             actual_cost = estimate_cost(actual_input, actual_output, model)
             if actual_cost is not None:
@@ -3359,7 +3359,7 @@ def _backup_if_exists(path: Path) -> Path | None:
                     return None
             return backup_path
 
-    # 99 backups exhausted — overwrite without backup.
+    # 99 backups exhausted; overwrite without backup.
     return None
 
 
@@ -3559,7 +3559,7 @@ def maybe_copy_compacted_to_project(
     is the one placed in the project. This only runs when compaction produced a compacted
     file (i.e. `--compact`); a plain recovery copies nothing.
 
-    Fail-soft: any error only warns and returns None — it must NEVER break the primary
+    Fail-soft: any error only warns and returns None; it must NEVER break the primary
     recovery output. Copies ONLY the compacted file. Returns the destination path on success.
     """
     if not enabled or project_dir is None:
@@ -5202,7 +5202,7 @@ def detect_running_opencode(verbosity: int = 0) -> list[dict]:
     """Enumerate plausibly-running opencode processes (best-effort, fast, fail-open).
 
     Returns a list of dicts: {pid, tty, elapsed, started, cwd, project, cmdline}. On any
-    failure (no `ps`, parse error, timeout) returns [] so callers FAIL OPEN — a broken
+    failure (no `ps`, parse error, timeout) returns [] so callers FAIL OPEN: a broken
     detector must never block a destructive op (matches prior behavior).
 
     Plausibility (SD-9: err toward inclusion for a safety gate): a row is kept when its
@@ -5412,8 +5412,8 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
 
         # Confirmation via the shared destructive-confirm seam. The op already printed its
         # detailed preview above, so render=False (and dry_run already handled above).
-        # assume_yes is the op's existing prompt-skip condition (confirm=False, the TUI path)
-        # — NOT `force` (which only bypasses the process-lock check earlier).
+        # assume_yes is the op's existing prompt-skip condition (confirm=False, the TUI path),
+        # NOT `force` (which only bypasses the process-lock check earlier).
         if not confirm_destructive(
             None, assume_yes=not confirm, render=False, action_verb="deletion",
         ):
@@ -6738,7 +6738,7 @@ def db_run_cleanup(
             return
 
         # 3. Confirmation via the shared destructive-confirm seam (op already printed its
-        # detailed preview above; dry_run handled above; cleanup always prompts — assume_yes
+        # detailed preview above; dry_run handled above; cleanup always prompts, so assume_yes
         # is never derived from `force`, which only bypasses the process-lock).
         print()
         if not confirm_destructive(
@@ -7016,7 +7016,7 @@ def render_destructive_preview(preview: DestructivePreview) -> str:
     lines.append("")
     if preview.warn_if_all_removed and n_keep == 0 and n_remove > 0:
         lines.append(color_red(color_bold(
-            f"WARNING: this will {preview.action_verb} ALL {n_remove} {preview.noun} — "
+            f"WARNING: this will {preview.action_verb} ALL {n_remove} {preview.noun}; "
             f"nothing will remain."
         )))
     elif n_keep:
@@ -7049,8 +7049,8 @@ def confirm_destructive(
       seam only owns the dry-run/IRREVERSIBLE/prompt tail.
     - `dry_run`: print a dry-run note, do NOT prompt, return False.
     - `assume_yes` or not `interactive`: skip the prompt, return True. (Callers map this from
-      their EXISTING prompt-skip condition — e.g. the delete functions' `confirm=False` — NOT
-      from `--force`, which only bypasses the process-lock.)
+       their EXISTING prompt-skip condition, e.g. the delete functions' `confirm=False`, NOT
+       from `--force`, which only bypasses the process-lock.)
     - otherwise: prompt `Type 'yes' to confirm <verb>:` and return input().strip() == "yes";
       EOF/KeyboardInterrupt is treated as a cancel (return False).
     """
@@ -8059,8 +8059,8 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
             pass
         return 0
 
-    backups_to_delete = []  # (item, mtime, size) — older than cutoff
-    backups_to_keep = []    # (item, mtime, size) — retained
+    backups_to_delete = []  # (item, mtime, size), older than cutoff
+    backups_to_keep = []    # (item, mtime, size), retained
 
     for item in backup_dir.iterdir():
         # Match backups created by our tool
@@ -8113,7 +8113,7 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
 
     cutoff_str = datetime.fromtimestamp(cutoff_time).strftime("%Y-%m-%d %H:%M:%S")
     print(color_bold(
-        f"Backups in {backup_dir} — deleting those modified before {cutoff_str} "
+        f"Backups in {backup_dir}, deleting those modified before {cutoff_str} "
         f"(older than {days} days):"
     ))
     preview = DestructivePreview(
@@ -8440,7 +8440,7 @@ def main() -> None:
     if args.compact is not None:
         if args.compact:  # --compact MODEL
             args.use_model = args.compact
-        else:  # --compact (no model specified — interactive selection)
+        else:  # --compact (no model specified, interactive selection)
             args.use_model = "__interactive__"
     elif not hasattr(args, 'use_model') or args.use_model is None:
         args.use_model = None
@@ -9139,7 +9139,7 @@ def main() -> None:
                     print(f"  2. Tell the agent: read and execute {color_cyan(str(compacted_path))}")
                     print()
                 else:
-                    # User cancelled compaction — fall through to non-compacted instructions.
+                    # User cancelled compaction; fall through to non-compacted instructions.
                     pass
 
             # Show non-compacted instructions if no compaction was produced.

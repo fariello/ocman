@@ -6,7 +6,8 @@
   comments/docstrings/strings in `ocman.py` and `ocman_tui/app.py`, `scripts/`, and the
   authored IPDs in `.agents/plans/`. Excludes `.agents/workflows/` and `workflow-artifacts/`
   (framework + run records, out of review scope).
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED 2026-07-07 (em dashes normalized across project prose; NOTICE + display
+  glyphs excluded; advisory note added to AGENTS.md)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 - Mode: assess (default). Interactive line-editing not requested.
 

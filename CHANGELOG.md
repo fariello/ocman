@@ -76,9 +76,9 @@
 ## [1.0.5] - 2026-07-05
 
 ### Documentation
-- **README positioning ("actually reclaims space"):** README now states ocman's core value — it deletes
+- **README positioning ("actually reclaims space"):** README now states ocman's core value: it deletes
   orphaned/old rows and their on-disk session-diff files and runs `VACUUM` to physically shrink the SQLite
-  file, reporting the reclaimed bytes — with the author's measured comparison against `ocgc` v0.1.0
+  file, reporting the reclaimed bytes, with the author's measured comparison against `ocgc` v0.1.0
   (a 2.9 GB DB shrank to ~2.8 GB under ocgc vs ~1.9 GB under ocman's orphan cleanup).
 - **README config template corrected:** documented the real key `default_compaction_model` (default `""`)
   instead of the nonexistent `default_model`.
@@ -109,14 +109,14 @@
 - **Informative "opencode is running" safety check:** when `--delete`, `--delete-project`, or
   `--clean`/`--clean-orphans` refuse because opencode is running, the error now lists **each**
   detected process (PID, TTY, uptime, start time, working directory on Linux, and a best-effort
-  project name) and how many are running — instead of a single generic line. The check errs
+  project name) and how many are running, instead of a single generic line. The check errs
   toward inclusion (a genuine running instance is never missed on a destructive gate), excludes
   ocman's own process, and fails open if it cannot enumerate processes. `--force` still bypasses
   only this lock (never a confirmation). One shared `check_opencode_process_lock` helper replaces
   the three duplicated `pgrep` checks.
 - **Unified destructive-action confirmations:** session delete, project delete, and the age-based
   cleanup/orphan prune now confirm through the shared destructive-confirmation seam (consistent
-  typed-`yes` handling). Behavior is unchanged — in particular `--force` still only bypasses the
+  typed-`yes` handling). Behavior is unchanged; in particular `--force` still only bypasses the
   running-`opencode` process-lock, never the confirmation prompt.
 - **`ocman --clean-backups` shows a full KEEP/DELETE preview:** before confirming a prune it
   now lists **all** backups with column headers (`Backups`/`Size`/`Days`/`Modified`/`Action`),
@@ -137,12 +137,12 @@
   count, oldest/newest) so backup growth is visible without shell tools, plus an optional
   per-project breakdown via `ocman info --by-project` (or the `ocman disk` alias) showing
   exact session-diff bytes and session/message/token counts per project. Per-project DB
-  bytes are intentionally not reported — the SQLite database is a single shared file.
+  bytes are intentionally not reported, because the SQLite database is a single shared file.
 
 ## [1.0.4] - 2026-07-04
 
 ### Fixed
-- **TUI compaction:** The TUI LLM-compaction action was non-functional — it called
+- **TUI compaction:** The TUI LLM-compaction action was non-functional; it called
   `render_compact_prompt` and `call_compaction_api` with the wrong arguments and treated
   the API's string result as a dict, so compaction always failed. Fixed all three call
   sites (and the "write compaction prompt" export action) and added test coverage.
@@ -157,13 +157,13 @@
   keys are added.
 
 ### Changed
-- **Performance — session import:** Collision-time id remapping is a single structural
+- **Performance, session import:** Collision-time id remapping is a single structural
   pass instead of an O(diffs × ids) per-id whole-string replace (~26× faster per diff on
   a 300-session subtree in local measurement).
-- **Performance — move/rebase:** `db_move_project_metadata`, `db_move_session_metadata`,
+- **Performance, move/rebase:** `db_move_project_metadata`, `db_move_session_metadata`,
   and `db_rebase_paths` share one directory-rebasing helper (resolves prefixes once);
   behavior is unchanged.
-- **Performance — export:** Table JSONL is staged in a per-run temp directory (unique
+- **Performance, export:** Table JSONL is staged in a per-run temp directory (unique
   name, single-shot cleanup) instead of fixed-named files in the shared temp dir.
 
 ### Added
@@ -251,10 +251,10 @@
 - **CLI**: `--delete` to delete a session with confirmation.
 - **CLI**: `--all-sessions` to show subagent/child sessions (hidden by default).
 - **CLI**: CWD auto-detects project (including from subdirectories).
-- **TUI**: Project switching (`g` key) — browse all projects from database.
+- **TUI**: Project switching (`g` key): browse all projects from database.
 - **TUI**: Session deletion (`d` key, then `y` to confirm).
-- **TUI**: Subagent session toggle (`a` key) — hidden by default, shown with ⤷.
-- **TUI**: Session Detail redesign — fixed header, scrollable exchanges,
+- **TUI**: Subagent session toggle (`a` key): hidden by default, shown with ⤷.
+- **TUI**: Session Detail redesign: fixed header, scrollable exchanges,
   `f`/`l` scroll to top/bottom, `/` search with bold red highlights.
 - **TUI**: Screen titles in header bar for all screens.
 - **TUI**: Sessions loaded from SQLite database (shows all sessions, not
@@ -275,11 +275,11 @@
 
 ### Fixed
 
-- **Critical**: TUI deadlock on WSL — uses plain threads + polling instead of
+- **Critical**: TUI deadlock on WSL: uses plain threads + polling instead of
   textual's worker API (which deadlocks on WSL due to futex contention).
-- **Critical**: TUI freeze on detail view — never calls `Static.update()`;
+- **Critical**: TUI freeze on detail view: never calls `Static.update()`;
   uses screen replacement pattern instead.
-- **Critical**: Terminal corruption on kill — signal handlers + atexit restore
+- **Critical**: Terminal corruption on kill: signal handlers + atexit restore
   terminal state (mouse tracking, cursor visibility).
 - Rich markup escaping for all user content (session titles, turn text).
 - Search key passthrough (typing during `/` search no longer triggers bindings).
@@ -302,7 +302,7 @@
 
 - **F-01**: Removed dead `base_url` assignment in `extract_models_from_config`
   (CLI script line 386). The value was immediately overwritten on the next line.
-- **F-06**: Fixed license mismatch — `pyproject.toml` now correctly declares
+- **F-06**: Fixed license mismatch: `pyproject.toml` now correctly declares
   `BSD-3-Clause` to match the actual LICENSE file (was incorrectly set to MIT).
 - **F-07**: Synced `COMPACTION_USER_PROMPT_TEMPLATE` in `orsession/core.py`
   with the full version from the CLI tool. The core version was missing detailed

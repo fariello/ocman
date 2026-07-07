@@ -13,7 +13,7 @@ export/import).
 
 ## Entry points
 
-- **CLI — `ocman.py`** (console script `ocman`, defined in `pyproject.toml`). A single,
+- **CLI (`ocman.py`)** (console script `ocman`, defined in `pyproject.toml`). A single,
   self-contained module. Its `main()` parses arguments (`parse_args`), which first rewrites
   natural-language commands (`preprocess_argv`, e.g. `ocman list projects` → `--list-projects`)
   and then dispatches to the requested operation. The positional command accepts
@@ -26,7 +26,7 @@ export/import).
   (`kind` = transcript/restart/prompt/compacted); `canonical_recovery_name`/`parse_recovery_name`
   are the single source of truth, and `scripts/migrate_recovery_names.py` normalizes files
   written by older versions.
-- **TUI — `ocman_tui/`** (a Textual application). Launched via `ocman ui` / `ocman gui`.
+- **TUI (`ocman_tui/`)** (a Textual application). Launched via `ocman ui` / `ocman gui`.
   `ocman_tui/app.py` holds `OrsessionApp` (the app) and its modal screens; `widgets/`
   holds tab widgets (database admin, sidebar, models); `css/` holds the Textual stylesheets.
 
@@ -70,7 +70,7 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 - **Destructive-confirmation seam.** Destructive commands present their outcome and confirm
   through one shared seam in `ocman.py`: a `DestructivePreview`/`PreviewItem` data model, a
   pure `render_destructive_preview()` (a color-independent table with headers, a right-aligned
-  Size column, and a `DELETE`/`KEEP` `Action` word per item — color is enhancement only — plus a
+  Size column, and a `DELETE`/`KEEP` `Action` word per item (color is enhancement only), plus a
   forceful "this will ... ALL N ..." warning when nothing is kept), and a `confirm_destructive()`
   I/O function that owns the typed-`yes` prompt and honors `dry_run`/`assume_yes`.   New destructive
   operations should build a `DestructivePreview` and call these rather than hand-rolling a prompt.
@@ -79,7 +79,7 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   ops keep printing their own detailed row/file listing and call `confirm_destructive(..., render=False)`
   so the seam owns only the dry-run/irreversible/typed-`yes` tail.
   Note: a `force` flag bypasses only the running-`opencode` process-lock, never the typed-`yes`
-  prompt — the prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
+  prompt. The prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
   op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).
 
 ## Design principles
