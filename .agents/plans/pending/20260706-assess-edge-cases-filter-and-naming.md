@@ -110,6 +110,27 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. All repr
 - **Verified safe:** EC-4's `ValueError` cannot break an existing path (all in-code callers pass
   literal kinds; the migration filters kind first).
 
+### Targeted plan-review of the EC-1 collision helper (2026-07-06)
+
+Verified the new collision/safety design against source; refinements for the executor:
+
+- **TPR-1 (Medium, functionality):** the "**file being modified**" half of the safety check is
+  NEW code with no existing implementation. Descope it to the **running-instance check only**
+  (recommended, KISS) - that is the meaningful signal - OR, if kept, implement it as a simple
+  best-effort mtime-stability check (read mtime twice with a short sleep; treat any change or any
+  error as "unsafe"). Do NOT build file-locking. The "file changing" clause as originally worded is
+  underspecified.
+- **TPR-2 (Medium, compatibility):** the running-instance helper `check_opencode_process_lock`
+  (ocman.py:5090) is a **no-op on Windows** (`sys.platform == "win32"` early-return, line 5096) and
+  **fails open** if it cannot enumerate processes. So on Windows the "unsafe -> error/exit" branch
+  never fires; the collision falls through to the **safe backup/prompt** path. That is acceptable
+  (still non-destructive), but the plan must state it: the running-check is best-effort/POSIX, and
+  the backup default is the real safety net on Windows / when detection is unavailable.
+- **TPR-4 (Low, reuse):** reuse the EXISTING symbols, do not re-implement: `check_opencode_process_lock`
+  / `detect_running_opencode` (ocman.py:5090/4997) for the safety check (it already raises a
+  detailed `RecoveryError`), and `_backup_compacted_bu` (ocman.py:3392) for the backup branch. The
+  shared helper wraps these; it does not add a second `pgrep` or a second backup scheme.
+
 ## Open questions
 
 *Resolved interactively 2026-07-06:*

@@ -81,6 +81,24 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. Repro/ev
 - **PRC-5 (Low, anti-regression):** Step 2 now requires a **characterization test first** (pin the
   current `.prompt.md` selection) so the lookup fix is provably behavior-preserving.
 
+### Targeted plan-review of TUI full-parity (2026-07-06)
+
+Verified the expanded Step 1 (parity) against source:
+
+- **TPR-3 (Low, correctness):** `maybe_copy_compacted_to_project(compacted_path, session, ...)`
+  needs a `SessionInfo`-shaped `session` (it calls `project_prompt_copy_name(session)`, which reads
+  `.session_id` and `.updated`). The TUI's local `DummySession` dataclass (`ocman_tui/app.py:1258`)
+  has both fields, so it works via duck-typing - pass the `DummySession` (or a real `SessionInfo`),
+  NOT the bare `self.selected_session_id` string. `DummySession.updated == ""` -> `project_prompt_copy_name`
+  falls back to process time (fine). Pin this in the test.
+- **TPR-2 (cross-ref):** the shared EC-1 collision helper the TUI compaction now also uses is a
+  no-op running-check on Windows (see edge-cases IPD); the TUI's compacted write stays safe there
+  via the backup default. The TUI "refuse + advise quitting" branch only fires where detection works
+  (POSIX); on Windows it proceeds to the safe path.
+- **Reuse, don't abstract:** the TUI parity is achieved by CALLING existing functions
+  (`canonical_recovery_name`, `maybe_copy_compacted_to_project`, `load_ocman_config` for the out
+  dir), not by introducing a shared writer abstraction (KISS).
+
 ## Required tests / validation
 
 - `tests/test_tui.py` (extend): the TUI recovery code path uses `canonical_recovery_name` with the
