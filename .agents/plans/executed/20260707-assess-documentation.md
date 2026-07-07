@@ -3,7 +3,7 @@
 - Date: 2026-07-07
 - Concern: documentation
 - Scope: project documentation (README.md, ARCHITECTURE.md, CHANGELOG.md, CITATION.cff, AGENTS.md, TODO.md). Framework dirs (`.agents/workflows/`, `workflow-artifacts/`, installer backups, `.claude/`, `.opencode/`, `node_modules`) excluded per review-scope rules.
-- Status: PENDING (awaiting human approval; not executed)
+- Status: EXECUTED (2026-07-07; all four changes applied and validated)
 - Author: opencode (its_direct/pt3-claude-opus-4.8-1m-us)
 
 ## Goal
