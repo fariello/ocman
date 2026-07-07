@@ -140,6 +140,23 @@ def test_filter_size_cap_force_bypass(tmp_path, mock_llm, monkeypatch):
     assert out is not None and "prompt" in mock_llm
 
 
+def test_filter_oversized_refused_before_read(tmp_path, mock_llm, monkeypatch):
+    """S2-E1: an oversized file is rejected by its on-disk size BEFORE being read into memory."""
+    monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 50, "filter_secret_scan": "conservative"})
+    src = _src(tmp_path, text="x" * 5000)
+    # If read_text were called on the oversized file, this would raise a different error.
+    called = {"read": False}
+    orig_read = Path.read_text
+    def spy_read(self, *a, **k):
+        if self == src:
+            called["read"] = True
+        return orig_read(self, *a, **k)
+    monkeypatch.setattr(Path, "read_text", spy_read)
+    with pytest.raises(ocman.RecoveryError, match="filter_max_bytes"):
+        cli_filter(src, project=None, scope="ocman", model_spec="", out_path=None, verbosity=0)
+    assert called["read"] is False  # rejected before reading the source
+
+
 def test_filter_secret_scan_blocks(tmp_path, mock_llm, monkeypatch):
     monkeypatch.setattr(ocman, "load_ocman_config", lambda *a, **k: {"filter_max_bytes": 0, "filter_secret_scan": "conservative"})
     src = _src(tmp_path, text="notes\napi_key = deadbeefcafe1234567890\nmore")

@@ -88,6 +88,13 @@ ocman -s SESSION_ID -mi 50 --compact uri/its_direct/pt1-qwen3-32b-us
 > directory. This only applies when compaction runs (a plain recovery copies nothing). Disable
 > per-run with `--no-project-prompt`, or globally via `copy_restart_to_project_prompts = false`.
 
+> [!NOTE]
+> **Upgrading from an older ocman?** Recovery files are now named
+> `YYYYMMDD-HHMM-<session_id>.<kind>.md` (local time). Older files (e.g.
+> `opencode-YYYYMMDD-HHMMSS-<id>...`) still work as-is; to normalize them on disk, run
+> `python scripts/migrate_recovery_names.py <dir> --dry-run` to preview, then again without
+> `--dry-run` to apply. It never deletes a source and skips files already in the canonical form.
+
 ---
 
 ## Installation

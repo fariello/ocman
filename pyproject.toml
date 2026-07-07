@@ -34,6 +34,7 @@ packages = [
 
 [tool.hatch.build.targets.wheel.force-include]
 "ocman.py" = "ocman.py"
+"scripts/migrate_recovery_names.py" = "scripts/migrate_recovery_names.py"
 
 [tool.hatch.build.targets.sdist]
 exclude = [

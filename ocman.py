@@ -4457,7 +4457,10 @@ Examples:
     parser.add_argument(
         "--force",
         action="store_true",
-        help="Bypass active process lock checks during deletion or cleanup.",
+        help=(
+            "Bypass active process lock checks during deletion or cleanup, and override the "
+            "input size cap (filter_max_bytes) for 'filter' and --compact."
+        ),
     )
 
     parser.add_argument(
@@ -5051,6 +5054,19 @@ def cli_filter(
 
     if not input_path.is_file():
         raise RecoveryError(f"Input file not found: {input_path}")
+    # Reject an oversized file by its on-disk size BEFORE reading it into memory (RR2 S2-E1).
+    # This mirrors the egress size cap and avoids loading a huge file just to refuse it.
+    _ocman_cfg = load_ocman_config()
+    _max_bytes = int(_ocman_cfg.get("filter_max_bytes", 5 * 1024 * 1024))
+    try:
+        _src_size = input_path.stat().st_size
+    except OSError:
+        _src_size = 0
+    if _max_bytes > 0 and _src_size > _max_bytes and not force:
+        raise RecoveryError(
+            f"Input {input_path.name} is {_src_size:,} bytes, over the filter_max_bytes cap "
+            f"({_max_bytes:,}). Pass --force to filter it anyway, or raise filter_max_bytes in ocman.toml."
+        )
     try:
         source_text = input_path.read_text(encoding="utf-8")
     except (OSError, UnicodeDecodeError) as error:

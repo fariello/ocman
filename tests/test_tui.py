@@ -326,6 +326,66 @@ async def test_tui_compaction_end_to_end_network_mocked(tui_db, tmp_path, monkey
         assert out_files[0].read_text(encoding="utf-8") == "COMPACTED OUTPUT"
         assert any("successfully" in n.lower() for n in notes), f"expected success notice, got {notes}"
         assert not any("failed" in n.lower() for n in notes), f"unexpected failure notice: {notes}"
+        # S3-T1: pin TUI/CLI naming parity - the TUI must use the canonical scheme with the FULL
+        # session id (not truncated), parseable by the CLI's parse_recovery_name as a compacted kind.
+        sid, dt, kind = ocman.parse_recovery_name(out_files[0])
+        assert kind == "compacted" and sid == "sess1" and dt is not None, out_files[0].name
+
+
+@pytest.mark.anyio
+async def test_tui_compaction_honors_out_dir_and_copies_to_project(tui_db, tmp_path, monkeypatch):
+    """S3-T1 (release-review): the TUI compaction path honors the configured default_out_dir and
+    invokes maybe_copy_compacted_to_project (CLI parity), with the network mocked."""
+    import json as _json
+    import ocman_tui.app as app_mod
+    import ocman as ocman_mod
+    from ocman import ModelInfo
+
+    out_dir = tmp_path / "custom-out"
+    monkeypatch.chdir(tmp_path)
+    # Configured out dir differs from the old hardcoded "opencode-recovery".
+    monkeypatch.setattr(app_mod, "load_ocman_config", lambda *a, **k: {
+        "default_out_dir": str(out_dir), "copy_restart_to_project_prompts": True,
+    })
+    monkeypatch.setattr(app_mod, "load_opencode_config", lambda *a, **k: {})
+    fake_model = ModelInfo("prov", "m1", "Model 1", "https://api.example.com/v1", "sk-test", 1.0, 2.0, True)
+    monkeypatch.setattr(app_mod, "extract_models_from_config", lambda *a, **k: [fake_model])
+    monkeypatch.setattr(app_mod, "resolve_model", lambda *a, **k: fake_model)
+
+    class _Resp:
+        def __init__(self, payload): self._d = _json.dumps(payload).encode("utf-8")
+        def read(self): return self._d
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+    monkeypatch.setattr(ocman_mod.urllib.request, "urlopen",
+                        lambda *a, **k: _Resp({"choices": [{"message": {"content": "OUT"}}], "usage": {}}))
+
+    # Capture the compacted-copy parity call.
+    copied = {}
+    monkeypatch.setattr(ocman_mod, "maybe_copy_compacted_to_project",
+                        lambda path, session, project_dir, enabled, verbosity=0: copied.update(
+                            path=path, sid=session.session_id, enabled=enabled) or None)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "Session 1"
+        app.current_turns = [ocman.Turn("user", "hi", 1, "s"), ocman.Turn("assistant", "hello", 2, "s")]
+        sel = app.query_one("#select-compaction-model", Select)
+        sel.set_options([("Model 1", "prov/m1")]); sel.value = "prov/m1"
+        monkeypatch.setattr(app, "notify", lambda msg, **k: None)
+        app.run_llm_compaction()
+        for _ in range(50):
+            if not app.compaction_running:
+                break
+            await pilot.pause(0.1)
+
+    # Honors configured out dir (not the hardcoded "opencode-recovery").
+    out_files = list(out_dir.glob("*.compacted.md"))
+    assert out_files, f"expected output in {out_dir}"
+    assert not (tmp_path / "opencode-recovery").exists()
+    # Invoked the compacted-copy parity with the full session id.
+    assert copied.get("sid") == "sess1" and copied.get("enabled") is True
 
 
 @pytest.mark.anyio
