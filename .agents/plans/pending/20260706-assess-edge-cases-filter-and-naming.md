@@ -42,7 +42,7 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. All repr
 
 | Step | Source | Change | Files | Remediation Risk | Validation |
 |------|--------|--------|-------|------------------|------------|
-| 1 | EC-1 | On a canonical-name collision during migration, print an **explanatory** message (not just "SKIP"): name the two source files, explain that minute-precision names collided, and tell the user to rename/inspect manually or re-run with `--force` to overwrite (with the loss that implies). Keep the safe default (skip, source preserved). **PRE-1 (plan-review):** the current guard only checks apply-time `dst.exists()` (`migrate_dir:84`), so it misses **two in-plan sources that target the same canonical name** - at dry-run BOTH print "WOULD RENAME" to the same target (misleading; verified), and at apply the second is silently skipped. Detect **in-plan duplicate targets** by grouping the planned renames by target: any target claimed by >1 source is a collision reported in BOTH dry-run and apply (rename the first deterministically - e.g. earliest by original name - and skip/flag the rest). Also add a one-line note in `--help`/README that canonical names are minute-precision and same-minute artifacts of one session can collide. | scripts/migrate_recovery_names.py:41-92 | Low | Tests: (i) two same-minute legacy files -> **dry-run** reports the collision (not two plain "WOULD RENAME"); (ii) apply renames exactly one, skips the other with the explanatory message, and **both source files still exist** (data-safety invariant); (iii) collision with a pre-existing canonical file still skips safely |
+| 1 | EC-1 | **Collision handling (redesigned per user decision 2026-07-06) - shared across migration AND live generation.** A collision is any would-overwrite of an existing canonical file (migration: a legacy source maps onto an existing/other target; live: `filter`/`compact` would overwrite an existing canonical output). Behavior: **(1) Safety check first** - reuse the existing running-instance detection (the `pgrep`/process-lock helper used by delete/clean) to see if opencode/ocman is running, and check whether the target file is currently being modified (e.g. mtime moving / lock). **(2) If unsafe** (running or file changing): **CLI/non-TUI -> print an error and exit** (do not touch anything); **TUI -> refuse the operation and tell the user to quit the running instance and retry**. No backup, no delete while unsafe. **(3) If safe + interactive (TTY):** prompt the user to either **back up** the existing file (reuse the existing `.bu.NNN` convention, i.e. `<stem>.<kind>.bu.NNN.md` incrementing) then write, or **delete** the existing then write. **(4) If safe + non-interactive (no TTY, e.g. migration `--yes` / CI):** **default to safe backup** via `.bu.NNN`, and **NEVER delete** (deletion requires an explicit interactive choice or a future explicit flag). **PRE-1 (still applies):** also detect **in-plan duplicate targets** in the migration by grouping planned renames by target, so two same-minute sources are surfaced in dry-run (not two plain "WOULD RENAME") and resolved via the same collision flow at apply. Factor the safety-check + resolve into ONE shared helper used by the migration and by `cli_filter`/`run_compaction`, so the behavior is identical everywhere (KISS, one convention). Add a `--help`/README note that names are minute-precision and same-minute artifacts can collide. | scripts/migrate_recovery_names.py:41-99; ocman.py `_backup_compacted_bu`/`write_text` call sites in `cli_filter` (4946) and `run_compaction`; the existing running-instance detection helper | Low-Medium | Tests: (a) migration dry-run reports in-plan duplicate-target collisions; (b) safe+non-interactive -> existing backed up to `.bu.NNN`, never deleted, source preserved; (c) unsafe (running mocked) -> CLI errors+exits, nothing written/renamed; (d) interactive backup vs. delete both exercised (mock TTY); (e) live `filter`/`compact` overwrite path uses the same helper (same outcomes) |
 | 2 | EC-2 | In `cli_filter`, after reading the input, **refuse empty/whitespace-only content** with a clear `RecoveryError("Input file is empty: ...")`. **PRE-3 (ordering):** this check must sit **after** the file read but **before** the security IPD's size-cap/secret-scan and the API call, so the three guards form one ordered gate (read -> empty-check -> size-cap -> secret-scan -> send). Coordinate placement when executing both IPDs to avoid duplicate/parallel guards. | ocman.py:4875-4903 | Low | Test: empty and whitespace-only input raise `RecoveryError`; API not called (monkeypatched) |
 | 3 | EC-3 | `.strip()` the `--scope` value (and treat all-whitespace as absent) before the "at least one of --project/--scope" check so whitespace-only scope is rejected consistently with empty/None. Use the stripped value for the scope text sent to the model too. | ocman.py:4892-4896 | Low | Test: `--scope "   "` raises the same `RecoveryError` as empty scope |
 | 4 | EC-4 | Add a lightweight guard in `canonical_recovery_name`: validate `kind in RECOVERY_KINDS` (raise `ValueError` on a bad kind) so a wrong-kind caller fails loudly instead of writing an unparseable name. KISS - one membership check, no new abstraction. **Verified safe:** all in-code callers pass literal kinds (`"compacted"`/`"restart"`, ocman.py:3497,3688,4814,4941); the only dynamic caller (`migrate_recovery_names.py:61`) already filters `kind not in RECOVERY_KINDS` first (line 52), so the raise cannot break an existing path. | ocman.py (canonical_recovery_name) | Low | Test: `canonical_recovery_name(..., 'bogus')` raises `ValueError`; each real kind still works |
@@ -60,10 +60,16 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. All repr
 
 - Over-scope: none proposed. Do NOT add content-hash suffixes or a collision-avoidance counter to
   canonical names - that would complicate the naming scheme the user deliberately kept simple
-  (Complexity axis). Step 1's in-plan duplicate-target detection (PRE-1) is a migration-time
-  reporting improvement, NOT a change to the naming scheme itself, so it stays within KISS.
+  (Complexity axis). Step 1's collision handling is a runtime safety/resolve behavior, NOT a change
+  to the naming scheme itself.
+- EC-1 scope note: the collision design grew (per the user's 2026-07-06 decision) from a
+  migration-only message into a **shared safety-check + interactive-resolve helper** used by both
+  the migration and live `filter`/`compact`. This added complexity is a deliberate, user-requested
+  requirement (protect against clobbering while an instance is running; give the user backup/delete
+  control), not gold-plating - so it is in-scope despite the Complexity axis. Keep it to ONE shared
+  helper (do not fork the logic per call site).
 - Under-scope (added above): empty-input rejection (EC-2), whitespace-scope rejection (EC-3),
-  kind validation (EC-4), case-insensitive suffix (EC-5), and the collision explanation (EC-1).
+  kind validation (EC-4), case-insensitive suffix (EC-5), and collision safety/resolve (EC-1).
 
 ## Required tests / validation
 
@@ -106,12 +112,18 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. All repr
 
 ## Open questions
 
-1. **EC-1 collision handling:** three options - (a) skip + explain (proposed; KISS, no silent
-   renames), (b) auto-disambiguate the second same-minute file (append `-2`), or (c) skip only when
-   contents differ but silently drop an exact-duplicate. Proposed (a). (b) complicates the scheme;
-   (c) risks a wrong "duplicate" judgment. This is a human call.
-2. **EC-5 case-insensitivity:** worth doing for macOS safety, but ocman is Linux-primary. Confirm
-   you want it (proposed yes; one-line, zero-risk).
+*Resolved interactively 2026-07-06:*
+
+1. **EC-1 collision handling:** RESOLVED = safety-check-then-resolve (see Step 1), shared across
+   migration and live generation: if opencode/ocman is running or the file is changing, CLI errors
+   and exits / TUI refuses and advises quitting; if safe, interactive prompt to back up (`.bu.NNN`)
+   or delete; non-interactive defaults to safe backup, never delete. (Superseded the earlier
+   skip/auto-suffix/dedupe options.)
+2. **EC-5 case-insensitivity:** RESOLVED = yes, make the suffix match case-insensitive (Step 5).
+
+*Remaining for the executing agent:* none blocking. The precise "file is being modified" check is
+an implementation detail (e.g. mtime stability window or an existing lock file); keep it simple and
+fail safe (treat uncertain as unsafe).
 
 ## Approval and execution gate
 

@@ -44,7 +44,7 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. Repro/ev
 
 | Step | Source | Change | Files | Remediation Risk | Validation |
 |------|--------|--------|-------|------------------|------------|
-| 1 | COMP-1, COMP-2 | **Unify TUI naming with the CLI canonical scheme.** Make the TUI write via `canonical_recovery_name(session_id, dt, kind)` using the **full** `self.selected_session_id` for transcript/restart/prompt/compacted - so both entry points produce identical, migratable names. **PRC-2 (precision):** pass a `datetime` **object** (e.g. `datetime.now()`) to `canonical_recovery_name`, NOT the pre-formatted string at `app.py:1247` (that string may remain for any non-canonical use). Change the TUI's `.compact-prompt.md` output to `.prompt.md` and update the button label (`ocman_tui/app.py:841,1279`) to match. This also removes the sid `[:8]` truncation divergence. | ocman_tui/app.py:1247,1267,1273,1279,1338,841 | Low-Medium | Assert the TUI code path calls `canonical_recovery_name` with the full sid (test the helper usage, not the Textual UI; PRC-4); a name it produces is recognized by `parse_recovery_name` and normalized by the migration; the resulting name equals the CLI's for the same (session, kind, minute) |
+| 1 | COMP-1, COMP-2, +PRC-3, +parity (user decision 2026-07-06) | **Bring the TUI recovery/compaction flow to full CLI parity** (expanded from naming-only per user decision). (1a) **Naming:** write via `canonical_recovery_name(self.selected_session_id, dt, kind)` with the **full** sid for transcript/restart/prompt/compacted; pass a `datetime` **object** (`datetime.now()`), NOT the pre-formatted string at `app.py:1247` (PRC-2); change `.compact-prompt.md` -> `.prompt.md` and update the button label (`app.py:841,1279`); removes the `[:8]` truncation. (1b) **Output dir (PRC-3):** replace the hardcoded `out_dir = Path("opencode-recovery")` (`app.py:1253`) with the configured `default_out_dir` (via `load_ocman_config`), matching the CLI. (1c) **Compacted-copy parity:** after TUI compaction (`app.py:1338`), call `maybe_copy_compacted_to_project(...)` with the same enable/opt-out semantics as the CLI so the TUI also drops the compacted file into a project's `.agents/prompts/pending/`. | ocman_tui/app.py:1247,1253,1267,1273,1279,1338,841 | Low-Medium | (a) TUI code path calls `canonical_recovery_name` with the full sid (test helper usage, not the Textual UI; PRC-4); name equals the CLI's for the same (session,kind,minute) and parses/migrates; (b) TUI writes into the configured out dir, not a hardcoded one; (c) TUI compaction invokes `maybe_copy_compacted_to_project` (mockable) with the correct args |
 | 2 | COMP-2 | **PRC-5 (anti-regression):** FIRST add a characterization test pinning the CURRENT selection (that today's compaction acts on the `.prompt.md` file - it works only via the `generated_paths[-1]` fallback), green before the change. THEN fix the stale lookup: change `endswith(".compact-prompt.md")` to `.prompt.md` at ocman.py:8907 so the file is selected by name, not by position; fix the docstring at ocman.py:4752 (`.compact-prompt.md` -> `.prompt.md`). Behavior must be identical (same file selected), just robust to reordering. | ocman.py:8906-8909, 4752 | Low | Characterization test green before + after; a reordered `generated_paths` still selects the `.prompt.md` file by name |
 | 3 | COMP-3 | Adopt the edge-cases IPD's case-insensitive `parse_recovery_name` fix (do NOT duplicate it - execute once, shared). Confirms macOS legacy files migrate. | ocman.py:3431-3440 (see edge-cases Step 5) | Low | macOS-style `*.RESTART.MD` recognized (case-insensitive test) |
 | 4 | COMP-5 | **VERIFY (not a separate fix; PRC-1).** `load_ocman_config` already starts from `dict(DEFAULT_CONFIG)` and ignores keys absent from `DEFAULT_CONFIG` (`if key not in config: continue`), so config back-compat is **automatic once the new keys are added to `DEFAULT_CONFIG` + the template** - which the **security** IPD (`filter_max_bytes`, `filter_secret_scan`) and **edge-cases** IPD own. This step is therefore a cross-reference/verification: confirm those keys land in `DEFAULT_CONFIG`/`DEFAULT_CONFIG_TEMPLATE`, not a duplicate config change here. | load_ocman_config (already handles it); DEFAULT_CONFIG (owned by sibling IPDs) | Low | Test: a minimal/old `ocman.toml` (without the new keys) loads and yields the defaults; no error on absent keys |
@@ -58,15 +58,14 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. Repro/ev
 
 ## Scope check
 
-- Over-scope: do NOT re-architect the TUI's recovery flow or introduce a shared "artifact writer"
-  abstraction - the KISS fix is to route the TUI's existing writes through `canonical_recovery_name`
-  (Complexity axis). Do not add a Windows reserved-name filter (deferred above).
-- Under-scope (added above): TUI/CLI naming unification (COMP-1/2), the stale-lookup fix (COMP-2).
-  COMP-5 is a verification cross-reference, not a separate config change (PRC-1).
-- **Noted, not silently dropped (PRC-3):** the TUI also **hardcodes** its output dir
-  (`out_dir = Path("opencode-recovery")`, `ocman_tui/app.py:1253`) instead of honoring the CLI's
-  configured `default_out_dir` - a real CLI/TUI consistency gap adjacent to COMP-1. It is out of
-  this naming-focused scope; recorded as Open Question 3 so it is not lost.
+- Over-scope: do NOT introduce a shared "artifact writer" abstraction / framework - route the TUI's
+  existing writes through `canonical_recovery_name` and reuse `maybe_copy_compacted_to_project`
+  (Complexity axis: reuse, don't abstract). Do not add a Windows reserved-name filter (deferred).
+- Under-scope, now IN SCOPE (user decision 2026-07-06): TUI full CLI parity - naming (COMP-1/2),
+  the configured `out_dir` (PRC-3), and compacted-copy parity - all folded into Step 1. COMP-5 is a
+  verification cross-reference, not a separate config change (PRC-1). These are user-requested parity
+  requirements, not gold-plating, so the Complexity axis does not bar them; the constraint is to
+  REUSE existing helpers rather than build new abstractions.
 
 ### Plan-review revisions (2026-07-06, applied in place)
 
@@ -105,18 +104,17 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. Repro/ev
 
 ## Open questions
 
-1. **TUI compacted-copy parity:** the CLI copies the compacted file into a project's
-   `.agents/prompts/pending/`; the TUI compaction (`ocman_tui/app.py:1338`) does not. Should Step 1
-   also wire the TUI to the same project-copy behavior, or is that a separate follow-up? (Proposed:
-   out of scope here - naming unification only; note it for a functionality follow-up.)
-2. **Coordination:** COMP-3 shares the case-insensitive fix with the edge-cases IPD, and COMP-5
-   depends on the config keys introduced by the security + edge-cases IPDs. Execute all three
-   together (they touch overlapping code) or sequence security -> edge-cases -> compatibility?
-   (Proposed: one combined execution pass.)
-3. **TUI hardcoded output dir (PRC-3):** the TUI writes to `Path("opencode-recovery")` (relative
-   to CWD) while the CLI honors the configured `default_out_dir`. Fold this into the TUI
-   unification (Step 1) or leave as a separate follow-up? (Proposed: separate follow-up - this
-   IPD is naming-only - but flagged so it is not forgotten.)
+*Resolved interactively 2026-07-06:*
+
+1. **TUI compacted-copy parity:** RESOLVED = add it now (folded into Step 1c) - TUI compaction
+   calls `maybe_copy_compacted_to_project` like the CLI.
+2. **Coordination:** RESOLVED = **one combined execution pass** with the security + edge-cases IPDs
+   (shared `cli_filter`, `parse_recovery_name`, config, and the EC-1 collision helper). Move all
+   three IPDs to `executed/` together.
+3. **TUI hardcoded output dir:** RESOLVED = fix it now (folded into Step 1b) - honor the configured
+   `default_out_dir`.
+
+*Remaining for the executing agent:* none blocking.
 
 ## Approval and execution gate
 

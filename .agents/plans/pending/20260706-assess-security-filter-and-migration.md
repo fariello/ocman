@@ -154,6 +154,14 @@ This IPD was hardened by `plan-review` before approval. Changes made to the plan
 5. **Bypass flags (Q4):** RESOLVED = new **`--allow-secrets`** for the secret-scan bypass; reuse
    existing **`--force`** for the size-cap override. Do not add a third confirmation idiom.
 
+6. **Overwrite-collision handling (cross-plan, decided 2026-07-06 in the edge-cases IPD):** the
+   live `filter`/`compact` write path (which this IPD hardens) shares the edge-cases IPD's new
+   collision helper: on a would-overwrite, first check whether opencode/ocman is running or the
+   target is being modified; if unsafe, CLI errors+exits / TUI refuses+advises quitting; if safe,
+   interactively prompt to back up (`.bu.NNN`) or delete, defaulting non-interactively to safe
+   backup (never delete). Execute that helper ONCE (shared) and call it from `cli_filter`/
+   `run_compaction` here. See edge-cases IPD Step 1.
+
 *Remaining for the executing agent:* none blocking. The `aggressive`-mode keyword list and the
 exact token-likeness threshold for `KEY=VALUE` detection are implementation details to tune with
 the tests (keep conservative-mode false positives at zero on the existing recovery-doc fixtures).
