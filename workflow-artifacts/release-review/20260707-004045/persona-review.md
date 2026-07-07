@@ -13,3 +13,10 @@ Lead-persona notes appended per section (S2-S6); full eight-persona sign-off in 
   off-box; redaction verified (S2-S1); gitleaks found ZERO leaks in tree + 229-commit history.
   Path-containment (_safe_destination) now realpaths the parent (fixed the prior no-op).
 - (novice/stakeholder): no new finding this section.
+
+## Section 3 (tests/regression)
+- Testing/regression expert: strong CLI-delta coverage (66 tests across file_tools/recovery_naming/
+  migrate/config/compacted_prompt). Gap: TUI parity specifics not pinned (S3-T1). The e2e TUI
+  compaction test proves a .compacted.md is still written+success, but not the new name/out_dir/copy.
+- QA/QC: 172 passed, 2 skipped; no flaky/failing paths. The collision-safety test correctly mocks
+  the running-instance check for determinism.
