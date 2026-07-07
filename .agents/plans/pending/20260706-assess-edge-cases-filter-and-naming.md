@@ -114,12 +114,10 @@ Severity is impact if left alone; Remediation Risk is the Fix-Bar gate. All repr
 
 Verified the new collision/safety design against source; refinements for the executor:
 
-- **TPR-1 (Medium, functionality):** the "**file being modified**" half of the safety check is
-  NEW code with no existing implementation. Descope it to the **running-instance check only**
-  (recommended, KISS) - that is the meaningful signal - OR, if kept, implement it as a simple
-  best-effort mtime-stability check (read mtime twice with a short sleep; treat any change or any
-  error as "unsafe"). Do NOT build file-locking. The "file changing" clause as originally worded is
-  underspecified.
+- **TPR-1 (Medium, functionality):** RESOLVED (user decision 2026-07-06) = **running-instance
+  check only**. The safety check is exactly `check_opencode_process_lock`/`detect_running_opencode`;
+  there is **no** "file being modified"/mtime check (dropped as fiddly and low-value for a local
+  single-user tool; no file-locking). "Unsafe" == opencode/ocman is running.
 - **TPR-2 (Medium, compatibility):** the running-instance helper `check_opencode_process_lock`
   (ocman.py:5090) is a **no-op on Windows** (`sys.platform == "win32"` early-return, line 5096) and
   **fails open** if it cannot enumerate processes. So on Windows the "unsafe -> error/exit" branch
