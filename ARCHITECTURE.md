@@ -18,13 +18,24 @@ export/import).
   `ocman <group> <action> [options]`, where the groups are `session`, `project`, `db`,
   `backup`, `history`, and `config` (e.g. `ocman session recover ID`, `ocman db clean`).
   A handful of top-level verbs are kept as aliases (`search`, `info`, `disk`, `logs`,
-  `models`, `compaction-prompt`, `filter`, `ui`/`gui`, `help`). `build_parser()` builds the
-  parser tree; `main()` parses arguments (`parse_args`) and `_normalize()` folds the parsed
-  subcommand namespace back into a flat namespace that `main()` dispatches on. Global options
-  (`--db`, `-v/--verbose`, `-V/--version`, `-h/--help`) work on any subcommand, before or
-  after it. `preprocess_argv` applies the one remaining bit of natural-language sugar: an
-  optional `in [project] NAME` phrase in `session list`, `session search`, and `search`, which
-  reduces to the trailing project `NAME` positional those parsers already accept.
+  `models`, `compaction-prompt`, `filter`, `move`, `export`, `ui`/`gui`, `help`).
+  `build_parser()` builds the parser tree; `main()` parses arguments (`parse_args`) and
+  `_normalize()` folds the parsed subcommand namespace back into a flat namespace that
+  `main()` dispatches on. Global options (`--db`, `-v/--verbose`, `-V/--version`,
+  `-h/--help`) work on any subcommand, before or after it. Per-command `-h` prints that
+  command's own argparse-generated usage; only the root `-h`/`help` use the curated
+  verb-first renderer (`build_help`).
+
+  `preprocess_argv` applies natural-language sugar on top of the grammar: word-order list
+  aliases (`list projects` / `list sessions [NAME]`), the optional `to` keyword for
+  `move`/`export` (`move X to Y` == `move X Y`), and an `in [project|session] NAME` phrase in
+  `search`/`session search`. Two shared helpers keep behavior consistent: `resolve_target()`
+  resolves a specifier that could be a project or a session (used by `move`, `export`, and the
+  search scope, with an explicit "ambiguous" outcome that forces disambiguation), and
+  `parse_duration_to_days()` parses `--older-than`/positional durations (`2h`, `5d`, `6w`,
+  `6mo`, `1y`, or spelled-out `"30 days"`; `mo`/`y` are approximate). The legacy `--days` is a
+  hidden alias of `--older-than`. `backup create`/`backup restore` stream byte-level progress
+  for large files (the multi-GB database) via `copy_file_with_progress`/`zip_write_with_progress`.
 
   Recovery artifacts share a canonical local-time name `YYYYMMDD-HHMM-<session_id>.<kind>.md`
   (`kind` = transcript/restart/prompt/compacted); `canonical_recovery_name`/`parse_recovery_name`

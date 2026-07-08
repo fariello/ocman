@@ -3950,6 +3950,7 @@ def db_search_sessions(
     query: str,
     project_id: str | None = None,
     limit: int = 50,
+    session_id: str | None = None,
 ) -> list[dict[str, Any]]:
     """
     Search sessions by content (message/tool text in the `part` table) and by
@@ -4015,6 +4016,11 @@ def db_search_sessions(
                 (like,),
             )
         title_ids = {row[0] for row in cursor.fetchall()}
+
+        # Optional single-session scope.
+        if session_id:
+            content_ids = {sid for sid in content_ids if sid == session_id}
+            title_ids = {sid for sid in title_ids if sid == session_id}
 
         all_ids = content_ids | title_ids
         if not all_ids:
@@ -4168,6 +4174,87 @@ def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
         print(f"  {cwd}")
 
 
+# Duration units accepted by --older-than and positional durations, expressed
+# in days. "mo" and "y" are approximate (calendar-agnostic) by design; this is
+# fine for retention windows and is called out in help text.
+_DURATION_UNIT_DAYS: dict[str, float] = {
+    "h": 1.0 / 24.0,
+    "hour": 1.0 / 24.0,
+    "hours": 1.0 / 24.0,
+    "d": 1.0,
+    "day": 1.0,
+    "days": 1.0,
+    "w": 7.0,
+    "week": 7.0,
+    "weeks": 7.0,
+    "mo": 30.0,
+    "month": 30.0,
+    "months": 30.0,
+    "y": 365.0,
+    "year": 365.0,
+    "years": 365.0,
+}
+
+# Units usable as a compact suffix (e.g. "6mo"); excludes bare "m" on purpose to
+# avoid the minutes/months ambiguity.
+_DURATION_COMPACT_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(h|d|w|mo|y)\s*$", re.IGNORECASE)
+
+
+class DurationError(ValueError):
+    """Raised when a duration string cannot be parsed."""
+
+
+def parse_duration_to_days(text: str) -> float:
+    """
+    Parse a human duration into fractional days.
+
+    Accepts compact suffixes ("2h", "5d", "6w", "6mo", "1y") and, when the number
+    and unit are already separate tokens, a spelled-out unit ("30 days", "6
+    weeks"). A bare number is treated as days for backward compatibility.
+
+    Raises:
+        DurationError: if the string is not a recognizable duration.
+    """
+    if text is None:
+        raise DurationError("empty duration")
+    s = str(text).strip()
+    if not s:
+        raise DurationError("empty duration")
+
+    # Bare number => days (matches the historical --days meaning).
+    try:
+        return float(s)
+    except ValueError:
+        pass
+
+    # Compact form: "6mo", "2h", "30d" (no space).
+    m = _DURATION_COMPACT_RE.match(s)
+    if m:
+        value = float(m.group(1))
+        unit = m.group(2).lower()
+        return value * _DURATION_UNIT_DAYS[unit]
+
+    # "<number> <unit-word>" (e.g. "30 days").
+    parts = s.split()
+    if len(parts) == 2:
+        num, unit = parts
+        try:
+            value = float(num)
+        except ValueError:
+            raise DurationError(f"not a number: {num!r}")
+        unit_l = unit.lower()
+        if unit_l in _DURATION_UNIT_DAYS:
+            return value * _DURATION_UNIT_DAYS[unit_l]
+        raise DurationError(f"unknown time unit: {unit!r}")
+
+    raise DurationError(f"could not parse duration: {text!r}")
+
+
+def _looks_like_duration_unit(token: str) -> bool:
+    """True if the token is a spelled-out duration unit word (e.g. 'days')."""
+    return token.lower() in _DURATION_UNIT_DAYS
+
+
 def resolve_project(spec: str) -> dict[str, Any] | None:
     """Resolve a project by number (from --list-projects), ID, directory path, or substring match."""
     projects = db_list_projects()
@@ -4248,6 +4335,63 @@ def resolve_session_spec(
 
     # If multiple title matches, return None (ambiguous).
     return None
+
+
+class TargetResolution:
+    """
+    Result of resolving an unqualified project-or-session specifier.
+
+    Exactly one of these outcomes holds:
+      - kind == "project": `project` is set (a db_list_projects row).
+      - kind == "session": `session` is set (a db_list_sessions row).
+      - kind == "ambiguous": the spec matched both a project and a session.
+      - kind == "none": nothing matched.
+    """
+
+    __slots__ = ("kind", "project", "session")
+
+    def __init__(self, kind, project=None, session=None):
+        self.kind = kind
+        self.project = project
+        self.session = session
+
+
+def resolve_target(spec: str, prefer: str | None = None) -> TargetResolution:
+    """
+    Resolve a specifier that could name a project OR a session.
+
+    Args:
+        spec: A project path/name/number, or a session ID/number/title.
+        prefer: If "project" or "session", only that kind is considered
+            (used by the explicit 'move project|session ...' forms).
+
+    Behavior:
+        - A bare integer is a list-number and is inherently kind-specific, so it
+          is only resolved when `prefer` disambiguates it. Without `prefer`, a
+          bare integer returns "ambiguous" (the caller must qualify it).
+        - Otherwise the spec is matched against projects and sessions; if it
+          uniquely matches one kind, that wins. Matching both is "ambiguous".
+    """
+    want_project = prefer in (None, "project")
+    want_session = prefer in (None, "session")
+
+    if spec.strip().isdigit() and prefer is None:
+        # #N is meaningless without knowing project-vs-session numbering.
+        return TargetResolution("ambiguous")
+
+    proj = resolve_project(spec) if want_project else None
+    sess = None
+    if want_session:
+        sessions = db_list_sessions(None)
+        sess = resolve_session_spec(spec, sessions, filter_subagents=True) if sessions else None
+
+    if proj and sess and prefer is None:
+        return TargetResolution("ambiguous", project=proj, session=sess)
+    if proj and want_project and (prefer == "project" or not sess):
+        return TargetResolution("project", project=proj)
+    if sess and want_session:
+        return TargetResolution("session", session=sess)
+    return TargetResolution("none")
 
 
 # ---------------------------------------------------------------------------
@@ -4334,11 +4478,10 @@ def build_help(topic: str | None = None) -> str:
         return out
 
     browse = [
-        (f"{prog} project list", "List all known opencode projects"),
-        (f"{prog} session list", "List sessions (auto-detects project from CWD)"),
-        (f"{prog} session list NAME", "List sessions in a named project"),
-        (f'{prog} search "some text"', "Search sessions by content + title"),
-        (f'{prog} search "text" in NAME', "Search within one project"),
+        (f"{prog} list projects", "List all known opencode projects"),
+        (f"{prog} list sessions [NAME]", "List sessions (word order also: 'session list')"),
+        (f'{prog} search "some text"', "Search sessions by content + title (first 10)"),
+        (f'{prog} search "text" in NAME', "Search within a project or session (-n to change count)"),
         (f"{prog} session show ID", "Show session details"),
         (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
@@ -4358,26 +4501,26 @@ def build_help(topic: str | None = None) -> str:
     ]
 
     maintain = [
-        (f"{prog} db clean", "Delete sessions older than the retention window"),
-        (f"{prog} db clean --days 30", "Set the retention window (accepts fractions)"),
+        (f"{prog} db clean 30 days", "Delete sessions older than a duration"),
+        (f"{prog} db clean --older-than 6mo", "Same, compact form (2h/5d/6w/6mo/1y)"),
         (f"{prog} db clean-orphans", "Remove orphaned DB records and sidecar diffs"),
-        (f"{prog} backup clean --days 30", "Prune old backup archives"),
+        (f"{prog} backup clean 30 days", "Prune old backup archives"),
         (f"{prog} session delete ID", "Delete a single session (with confirmation)"),
         (f"{prog} project delete NAME", "Delete a project and all its sessions"),
         (f"{prog} db clean --dry-run", "Preview any clean/delete without changing data"),
     ]
 
     backup = [
-        (f"{prog} backup create [DEST]", "Create a ZIP backup of all opencode state"),
-        (f"{prog} backup restore PATH", "Restore state from a ZIP archive or directory"),
-        (f"{prog} backup clean --days 30", "Prune old backup archives"),
+        (f"{prog} backup create [DEST]", "Create a ZIP backup (streams progress)"),
+        (f"{prog} backup restore PATH", "Restore from a ZIP archive or directory"),
+        (f"{prog} backup clean --older-than 30d", "Prune old backup archives"),
     ]
 
     move = [
-        (f"{prog} project move SRC --to DST", "Relocate a project (DB + disk)"),
-        (f"{prog} session move ID --to DST", "Relocate a single session"),
+        (f"{prog} move SPEC to DST", "Move a project or session (auto-detects which)"),
+        (f"{prog} move project SRC to DST", "Force project (disambiguate / use a number)"),
         (f"{prog} db rebase --from A --to B", "Bulk rebase path prefixes in the DB"),
-        (f"{prog} session export ID --to F.ocbox", "Export a session bundle"),
+        (f"{prog} export SPEC to F.ocbox", "Export a session bundle (auto-detects)"),
         (f"{prog} session import F.ocbox", "Import a session bundle"),
     ]
 
@@ -4449,7 +4592,7 @@ def build_help_reference() -> str:
     groups: list[tuple[str, list[tuple[str, str]]]] = [
         ("session <action>", [
             ("list [NAME] [-A]", "List sessions (optionally scoped to a project)"),
-            ("search QUERY [NAME] [-L N] [-A]", "Search content + titles"),
+            ("search QUERY [NAME] [-n N] [-A]", "Search content + titles (default 10)"),
             ("show ID [-D] [-H N] [-T N]", "Details, or first/last N exchanges"),
             ("recover ID [recovery opts]", "Recover to restart-ready Markdown"),
             ("compact ID [MODEL] [opts]", "Recover + LLM-compact"),
@@ -4465,14 +4608,14 @@ def build_help_reference() -> str:
         ]),
         ("db <action>", [
             ("info [--by-project]", "Database & storage usage (alias: 'ocman info')"),
-            ("clean [NAME] [--days N] [--dry-run]", "Delete sessions older than the window"),
+            ("clean [NAME] [AGE] [--dry-run]", "Delete older than AGE (e.g. '30 days', 6mo)"),
             ("clean-orphans [--dry-run --force]", "Delete orphaned DB records"),
             ("rebase --from A --to B", "Bulk rebase path prefixes"),
         ]),
         ("backup <action>", [
-            ("create [DEST]", "ZIP backup of all opencode state"),
+            ("create [DEST]", "ZIP backup of all opencode state (streams progress)"),
             ("restore PATH", "Restore from a ZIP archive or directory"),
-            ("clean [--days N] [--dry-run]", "Prune old backup archives"),
+            ("clean [AGE] [--dry-run]", "Prune old backups (--older-than / '30 days')"),
         ]),
         ("history / config", [
             ("history show", "Historical activity (alias: 'ocman logs')"),
@@ -4495,12 +4638,14 @@ def build_help_reference() -> str:
             ("--allow-secrets", "Bypass the pre-egress secret/PII scan (compact)"),
         ]),
         ("other verbs", [
-            ("search QUERY [in NAME]", "Alias of 'session search'"),
+            ("search QUERY [in [project|session] NAME]", "Alias of 'session search'"),
+            ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
+            ("export [session] SPEC to FILE", "Export a session bundle; auto-detects"),
+            ("list projects | list sessions [NAME]", "Word-order aliases"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
             ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
-            ("models", "List available LLM models"),
-            ("compaction-prompt", "Print the compaction prompt template"),
+            ("models / compaction-prompt", "List models / print the compaction prompt"),
             ("ui / gui", "Launch the interactive terminal dashboard"),
             ("help [TOPIC]", "This help; TOPIC focuses one section"),
         ]),
@@ -4530,55 +4675,98 @@ def print_help(topic: str | None = None) -> None:
 
 def preprocess_argv(argv: list[str]) -> list[str]:
     """
-    Light natural-language sugar on top of the subcommand grammar.
+    Natural-language sugar layered on top of the subcommand grammar.
 
-    The only rewrite is the optional "in [project]" phrasing so that
-    "ocman session list in NAME", "ocman session search TEXT in NAME", and
-    "ocman search TEXT in project NAME" all reduce to the positional NAME that
-    the parsers expect. A lone "in" (and an immediately following "project"
-    keyword) is dropped; the words after it are collapsed into a single NAME
-    token so multi-word project names survive without quoting.
+    Rewrites performed:
+      1. Word-order aliases: "list projects" -> "project list";
+         "list sessions [NAME]" -> "session list [NAME]".
+      2. The "to" keyword in move/export: "move X to Y" -> "move X Y".
+      3. Search scope sugar: "... in [project|session] NAME" is rewritten to the
+         hidden --scope-kind/--scope-name flags, collapsing a multi-word NAME so
+         it need not be quoted. Applies to 'search' and 'session search'.
 
-    Everything else (list/search/delete/info/disk/logs/...) is a real
-    subcommand, so no other rewriting happens here.
+    Anything not matching these forms is passed through unchanged.
     """
     if len(argv) < 2:
         return list(argv)
 
-    prog, rest = argv[0], argv[1:]
+    prog, rest = argv[0], list(argv[1:])
 
-    # Only the browse/search/clean argument lists use a project NAME positional.
-    sugar_groups = {"session", "search", "db", "list", "sessions"}
-    if rest[0].lower() not in sugar_groups:
-        return list(argv)
+    # (1) word-order: "list projects|sessions ..."
+    if rest and rest[0].lower() == "list" and len(rest) >= 2:
+        second = rest[1].lower()
+        if second in ("projects", "porjects", "project"):
+            rest = ["project", "list", *rest[2:]]
+        elif second in ("sessions", "session"):
+            rest = ["session", "list", *rest[2:]]
 
-    out: list[str] = []
-    i = 0
-    n = len(rest)
-    while i < n:
-        tok = rest[i]
-        if tok.lower() == "in" and i + 1 < n and not rest[i + 1].startswith("-"):
-            i += 1  # drop "in"
-            if i < n and rest[i].lower() == "project":
-                i += 1  # drop optional "project"
-            # Collapse the remaining non-flag words into one NAME token.
-            name_words: list[str] = []
-            trailing_flags: list[str] = []
-            while i < n:
-                w = rest[i]
-                if w.startswith("-"):
-                    trailing_flags.append(w)
-                else:
-                    name_words.append(w)
+    # "session list in [project] NAME" -> "session list NAME" (drop the sugar
+    # words and collapse a multi-word NAME).
+    if len(rest) >= 3 and rest[0].lower() == "session" and rest[1].lower() == "list" \
+            and "in" in [t.lower() for t in rest[2:]]:
+        head = rest[:2]
+        tail = rest[2:]
+        collapsed: list[str] = []
+        i = 0
+        while i < len(tail):
+            t = tail[i]
+            if t.lower() == "in" and i + 1 < len(tail) and not tail[i + 1].startswith("-"):
                 i += 1
-            if name_words:
-                out.append(" ".join(name_words))
-            out.extend(trailing_flags)
-            break
-        out.append(tok)
-        i += 1
+                if tail[i].lower() == "project":
+                    i += 1
+                words, flags = [], []
+                while i < len(tail):
+                    w = tail[i]
+                    (flags if w.startswith("-") else words).append(w)
+                    i += 1
+                if words:
+                    collapsed.append(" ".join(words))
+                collapsed.extend(flags)
+                break
+            collapsed.append(t)
+            i += 1
+        rest = [*head, *collapsed]
 
-    return [prog, *out]
+    # (2) "to" keyword for move/export (drop a standalone 'to' before the dst).
+    if rest and rest[0].lower() in ("move", "export"):
+        rest = [tok for tok in rest if tok.lower() != "to"]
+
+    # (3) search scope sugar: only within a search command.
+    is_search = (rest and rest[0].lower() == "search") or (
+        len(rest) >= 2 and rest[0].lower() == "session" and rest[1].lower() == "search"
+    )
+    if is_search and "in" in [t.lower() for t in rest]:
+        out: list[str] = []
+        i = 0
+        n = len(rest)
+        while i < n:
+            tok = rest[i]
+            if tok.lower() == "in" and i + 1 < n and not rest[i + 1].startswith("-"):
+                i += 1  # drop "in"
+                kind = None
+                if rest[i].lower() in ("project", "session"):
+                    kind = rest[i].lower()
+                    i += 1
+                name_words: list[str] = []
+                trailing_flags: list[str] = []
+                while i < n:
+                    w = rest[i]
+                    if w.startswith("-"):
+                        trailing_flags.append(w)
+                    else:
+                        name_words.append(w)
+                    i += 1
+                if kind:
+                    out.extend(["--scope-kind", kind])
+                if name_words:
+                    out.extend(["--scope-name", " ".join(name_words)])
+                out.extend(trailing_flags)
+                break
+            out.append(tok)
+            i += 1
+        rest = out
+
+    return [prog, *rest]
 
 
 def _legacy_defaults(config: dict) -> dict:
@@ -4616,7 +4804,9 @@ def _legacy_defaults(config: dict) -> dict:
         "list_sessions": False,
         "all_sessions": False,
         "search": None,
-        "limit": 50,
+        "limit": 10,
+        "search_session_id": None,
+        "_search_project_row": None,
         "details": False,
         "head": None,
         "tail": None,
@@ -4690,8 +4880,15 @@ def _add_global_opts(p: argparse.ArgumentParser, is_root: bool = False) -> None:
     """
     default_db = None if is_root else argparse.SUPPRESS
     default_verbose = 0 if is_root else argparse.SUPPRESS
-    p.add_argument("-h", "--help", action=_OcmanHelpAction,
-                   help="Show help for this command.")
+    if is_root:
+        # Root -h/help/help TOPIC use the curated, verb-first overview.
+        p.add_argument("-h", "--help", action=_OcmanHelpAction,
+                       help="Show help. Use 'ocman help TOPIC' for a focused section.")
+    else:
+        # Per-command -h shows that command's own (accurate, auto-generated)
+        # argparse usage: positionals, options, and defaults.
+        p.add_argument("-h", "--help", action="help",
+                       help="Show options for this command.")
     p.add_argument("--db", type=Path, default=default_db,
                    help="Path to the opencode SQLite database.")
     p.add_argument("-v", "--verbose", action="count", default=default_verbose,
@@ -4733,6 +4930,46 @@ def _add_recovery_opts(p: argparse.ArgumentParser) -> None:
                    help="Remove prior recovery outputs first.")
     p.add_argument("-ct", "--clean-tmp", action="store_true", default=False,
                    help="Prune leftover temp export files from /tmp.")
+
+
+def _add_search_opts(p: argparse.ArgumentParser) -> None:
+    """
+    Options shared by 'session search' and the top-level 'search' alias.
+
+    Scope is expressed as a trailing NAME positional, or via the "in
+    [project|session] NAME" sugar which preprocess_argv rewrites into the hidden
+    --scope-kind / --scope-name flags (avoiding optional-positional ambiguity).
+    """
+    p.add_argument("query", help="Text to search for.")
+    p.add_argument("name", nargs="?", default=None,
+                   help="Scope to a project or session (path, name, id, or number).")
+    p.add_argument("--scope-kind", dest="scope_kind", default=None,
+                   choices=["project", "session"], help=argparse.SUPPRESS)
+    p.add_argument("--scope-name", dest="scope_name", default=None, help=argparse.SUPPRESS)
+    p.add_argument("-n", "--limit", type=int, default=10, metavar="N",
+                   help="Max results to show (default: 10).")
+    p.add_argument("-A", "--all-sessions", action="store_true",
+                   help="Include subagent/child sessions.")
+
+
+def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
+    """
+    Options shared by 'db clean' and 'backup clean' (retention + duration).
+
+    Positional words are captured raw and split in _normalize() into an optional
+    leading NAME (project, for 'db clean') and a trailing duration
+    ("30 days" / "6mo"). Doing the split ourselves avoids argparse's inability to
+    cleanly express "[NAME] [N unit...]".
+    """
+    p.add_argument("words", nargs="*", default=[],
+                   help=("Optional project NAME (db clean) and/or an age like "
+                         "'30 days' or '6mo'."))
+    p.add_argument("--older-than", default=None, metavar="AGE",
+                   help="Delete items older than AGE (e.g. 2h, 5d, 6w, 6mo, 1y, or '30 days').")
+    p.add_argument("--days", type=float, default=None, help=argparse.SUPPRESS)  # deprecated alias
+    p.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    p.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    p._ocman_clean_has_name = with_name  # type: ignore[attr-defined]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -4779,13 +5016,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Include subagent/child sessions.")
 
     sp = new_action(p_session, s_sub, "search", help="Search session content and titles.")
-    sp.add_argument("query", help="Text to search for.")
-    sp.add_argument("name", nargs="?", default=None,
-                    help="Project name/number to scope to.")
-    sp.add_argument("-L", "--limit", type=int, default=50, metavar="N",
-                    help="Max results (default: 50).")
-    sp.add_argument("-A", "--all-sessions", action="store_true",
-                    help="Include subagent/child sessions.")
+    _add_search_opts(sp)
 
     sp = new_action(p_session, s_sub, "show", help="Show session details or a transcript preview.")
     sp.add_argument("session", help="Session ID, list number, or title substring.")
@@ -4865,12 +5096,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Add a per-project on-disk breakdown.")
 
     sp = new_action(p_db, db_sub, "clean", help="Delete sessions older than the retention window.")
-    sp.add_argument("name", nargs="?", default=None,
-                    help="Project to scope the cleanup to.")
-    sp.add_argument("--days", type=float, default=None, metavar="N",
-                    help="Retention window in days (fractions ok).")
-    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
-    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    _add_clean_opts(sp, with_name=True)
 
     sp = new_action(p_db, db_sub, "clean-orphans", help="Delete orphaned DB records.")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
@@ -4893,9 +5119,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("path", help="Archive or directory to restore from.")
 
     sp = new_action(p_backup, b_sub, "clean", help="Prune old backup archives.")
-    sp.add_argument("--days", type=float, default=None, metavar="N",
-                    help="Retention window in days.")
-    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    _add_clean_opts(sp, with_name=False)
 
     # ---- history / config --------------------------------------------------
     p_history = new_sub("history", help="Historical activity ledger.")
@@ -4911,12 +5135,26 @@ def build_parser() -> argparse.ArgumentParser:
 
     # ---- top-level verbs / aliases ----------------------------------------
     sp = new_sub("search", help="Search session content and titles (alias of 'session search').")
-    sp.add_argument("query", help="Text to search for.")
-    sp.add_argument("name", nargs="?", default=None, help="Project to scope to.")
-    sp.add_argument("-L", "--limit", type=int, default=50, metavar="N",
-                    help="Max results (default: 50).")
-    sp.add_argument("-A", "--all-sessions", action="store_true",
-                    help="Include subagent/child sessions.")
+    _add_search_opts(sp)
+
+    # 'ocman move [project|session] SPEC to DST' (kind auto-detected if omitted).
+    sp = new_sub("move", help="Move a project or session (auto-detects which).")
+    sp.add_argument("kind", nargs="?", default=None, choices=["project", "session"],
+                    help="Optional: force 'project' or 'session' to disambiguate.")
+    sp.add_argument("spec", help="Project path/name/number, or session id/number/title.")
+    sp.add_argument("dst", help="Destination path (may be preceded by the word 'to').")
+    sp.add_argument("--to", dest="to_flag", default=None,
+                    help=argparse.SUPPRESS)  # 'to DST' is the preferred form
+    sp.add_argument("--metadata-only", action="store_true",
+                    help="Update DB paths only; do not move files.")
+
+    # 'ocman export [session] SPEC to FILE' (session-scope for now).
+    sp = new_sub("export", help="Export a session bundle (.ocbox); auto-detects the session.")
+    sp.add_argument("kind", nargs="?", default=None, choices=["project", "session"],
+                    help="Optional: force 'session' (project export is not yet supported).")
+    sp.add_argument("spec", help="Session id/number/title to export.")
+    sp.add_argument("dst", help="Destination .ocbox file (may be preceded by 'to').")
+    sp.add_argument("--to", dest="to_flag", default=None, help=argparse.SUPPRESS)
 
     sp = new_sub("info", help="Show database and storage usage (alias of 'db info').")
     sp.add_argument("--by-project", action="store_true",
@@ -4949,6 +5187,135 @@ def build_parser() -> argparse.ArgumentParser:
                     help="One of: " + ", ".join(HELP_TOPICS))
 
     return parser
+
+
+def _apply_search(out: dict, ns: argparse.Namespace, g) -> None:
+    """
+    Normalize a search subcommand into the legacy namespace.
+
+    Scope may come from the trailing NAME positional or the sugar-derived
+    --scope-name/--scope-kind. The scope is resolved (project or session) and
+    stored as out['project'] or out['search_session_id'] for main().
+    """
+    out["search"] = g("query")
+    out["limit"] = g("limit", 10)
+    out["all_sessions"] = bool(g("all_sessions", False))
+
+    scope_name = g("scope_name") or g("name")
+    scope_kind = g("scope_kind")
+    if not scope_name:
+        return
+
+    res = resolve_target(scope_name, prefer=scope_kind)
+    if res.kind == "project":
+        out["project"] = res.project["directory"]
+        # resolve_project matched; pass the resolved directory so main() scopes it.
+        out["_search_project_row"] = res.project
+    elif res.kind == "session":
+        out["search_session_id"] = res.session["id"]
+    elif res.kind == "ambiguous":
+        _die_cli(f"{scope_name!r} matches both a project and a session. "
+                 f"Disambiguate: 'in project {scope_name}' or 'in session {scope_name}'.")
+    else:
+        _die_cli(f"No project or session matches {scope_name!r}.")
+
+
+def _resolve_clean_args(ns, g, with_name: bool, default_days: float):
+    """
+    Split the 'db clean'/'backup clean' positional words into an optional
+    project NAME and a duration, and reconcile with --older-than/--days.
+
+    Returns (name_or_None, days_float). Duration precedence:
+    --older-than > --days (deprecated) > positional duration > default.
+    """
+    words = list(g("words", []) or [])
+
+    # Peel a trailing duration off the positional words. Two shapes:
+    #   "... 30 days"  (number word + unit word)
+    #   "... 6mo"      (compact single token)
+    pos_days = None
+    if words:
+        # number + unit-word
+        if len(words) >= 2 and _looks_like_duration_unit(words[-1]):
+            maybe_num = words[-2]
+            try:
+                float(maybe_num)
+                pos_days = parse_duration_to_days(f"{maybe_num} {words[-1]}")
+                words = words[:-2]
+            except (ValueError, DurationError):
+                pass
+        # compact token (e.g. 6mo, 5d) as the last word
+        if pos_days is None and words:
+            try:
+                pos_days = parse_duration_to_days(words[-1])
+                # Only treat as duration if it actually carried a unit (not a
+                # bare number, which would ambiguously be a project #).
+                if _DURATION_COMPACT_RE.match(words[-1]):
+                    words = words[:-1]
+                else:
+                    pos_days = None
+            except DurationError:
+                pos_days = None
+
+    name = None
+    if with_name and words:
+        name = " ".join(words)
+    elif words:
+        # backup clean takes no NAME; leftover words are an error.
+        _die_cli(f"unexpected argument(s) for 'backup clean': {' '.join(words)!r}")
+
+    older = g("older_than")
+    days_flag = g("days")
+    if older is not None:
+        try:
+            days = parse_duration_to_days(older)
+        except DurationError as e:
+            _die_cli(f"invalid --older-than value: {e}")
+    elif days_flag is not None:
+        days = float(days_flag)
+    elif pos_days is not None:
+        days = pos_days
+    else:
+        days = default_days
+    return name, days
+
+
+def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> None:
+    """Normalize top-level 'move'/'export' with project/session auto-detection."""
+    spec = g("spec")
+    dst = g("to_flag") or g("dst")
+    kind = g("kind")
+
+    if verb == "export" and kind == "project":
+        _die_cli("Project export is not yet supported. Use 'ocman export session SPEC to FILE'. "
+                 "(Whole-project export is planned; see the project-export plan.)")
+
+    res = resolve_target(spec, prefer=kind)
+    if res.kind == "ambiguous":
+        _die_cli(f"{spec!r} matches both a project and a session. "
+                 f"Disambiguate: 'ocman {verb} project {spec} to ...' or "
+                 f"'ocman {verb} session {spec} to ...'.")
+    if res.kind == "none":
+        _die_cli(f"No project or session matches {spec!r}.")
+
+    out["to"] = dst
+    if verb == "move":
+        out["metadata_only"] = bool(g("metadata_only", False))
+        if res.kind == "project":
+            out["move_project"] = res.project["id"]
+        else:
+            out["move_session"] = res.session["id"]
+    else:  # export
+        if res.kind == "project":
+            _die_cli("Project export is not yet supported. Use a session, e.g. "
+                     "'ocman export session SPEC to FILE'.")
+        out["export_session"] = res.session["id"]
+
+
+def _die_cli(message: str) -> None:
+    """Print a CLI error to stderr and exit 2 (parse-time / usage error)."""
+    print(f"ocman: {message}", file=sys.stderr)
+    sys.exit(2)
 
 
 def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
@@ -5003,10 +5370,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["project"] = g("name")
             out["all_sessions"] = bool(g("all_sessions", False))
         elif action == "search":
-            out["search"] = g("query")
-            out["project"] = g("name")
-            out["limit"] = g("limit", 50)
-            out["all_sessions"] = bool(g("all_sessions", False))
+            _apply_search(out, ns, g)
         elif action == "show":
             out["session"] = g("session")
             out["details"] = bool(g("details", False))
@@ -5067,9 +5431,9 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["by_project"] = bool(g("by_project", False))
         elif action == "clean":
             out["clean"] = True
-            out["project"] = g("name")
-            if g("days") is not None:
-                out["days"] = g("days")
+            name, days = _resolve_clean_args(ns, g, with_name=True, default_days=out["days"])
+            out["project"] = name
+            out["days"] = days
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
         elif action == "clean-orphans":
@@ -5090,8 +5454,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["restore"] = g("path")
         elif action == "clean":
             out["clean_backups"] = True
-            if g("days") is not None:
-                out["days"] = g("days")
+            _name, days = _resolve_clean_args(ns, g, with_name=False, default_days=out["days"])
+            out["days"] = days
             out["dry_run"] = bool(g("dry_run", False))
         else:
             _no_action_error("backup")
@@ -5113,10 +5477,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             _no_action_error("config")
 
     elif group == "search":
-        out["search"] = g("query")
-        out["project"] = g("name")
-        out["limit"] = g("limit", 50)
-        out["all_sessions"] = bool(g("all_sessions", False))
+        _apply_search(out, ns, g)
+
+    elif group == "move":
+        _apply_move_or_export(out, ns, g, "move")
+
+    elif group == "export":
+        _apply_move_or_export(out, ns, g, "export")
 
     elif group == "info":
         out["info"] = True
@@ -7482,6 +7849,79 @@ def human_size_local(bytes_size: int) -> str:
         return f"{bytes_size} B"
 
 
+# Files below this size copy fast enough that byte-level progress is just noise.
+_PROGRESS_MIN_BYTES = 64 * 1024 * 1024  # 64 MB
+
+
+def _tty_progress(label: str, done: int, total: int) -> None:
+    """
+    Render an in-place progress line to stdout when it is a TTY. No-op for
+    non-interactive output (so logs/pipes stay clean).
+    """
+    if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        return
+    pct = (done / total * 100.0) if total else 100.0
+    bar_w = 24
+    filled = int(bar_w * done / total) if total else bar_w
+    bar = "#" * filled + "-" * (bar_w - filled)
+    line = f"\r    {label} [{bar}] {pct:5.1f}%  {human_size_local(done)}/{human_size_local(total)}"
+    sys.stdout.write(line)
+    sys.stdout.flush()
+    if total and done >= total:
+        sys.stdout.write("\n")
+        sys.stdout.flush()
+
+
+def copy_file_with_progress(src: Path, dst: Path, label: str | None = None) -> None:
+    """
+    Copy a file, showing byte-level progress for large files on a TTY. Preserves
+    metadata (like shutil.copy2). Small files are copied directly with no bar.
+    """
+    src = Path(src)
+    dst = Path(dst)
+    total = src.stat().st_size
+    if total < _PROGRESS_MIN_BYTES:
+        shutil.copy2(src, dst)
+        return
+    lbl = label or src.name
+    chunk = 8 * 1024 * 1024
+    done = 0
+    with open(src, "rb") as fsrc, open(dst, "wb") as fdst:
+        while True:
+            buf = fsrc.read(chunk)
+            if not buf:
+                break
+            fdst.write(buf)
+            done += len(buf)
+            _tty_progress(lbl, done, total)
+    if total >= _PROGRESS_MIN_BYTES and not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        pass  # non-tty: the caller's per-file line is enough
+    shutil.copystat(src, dst)
+
+
+def zip_write_with_progress(zipf, src: Path, arcname: str) -> None:
+    """
+    Add a file to an open ZipFile, showing byte-level progress for large files
+    on a TTY. Falls back to a plain write for small files.
+    """
+    src = Path(src)
+    total = src.stat().st_size
+    if total < _PROGRESS_MIN_BYTES:
+        zipf.write(src, arcname)
+        return
+    chunk = 8 * 1024 * 1024
+    done = 0
+    # Stream into the archive so we can report progress on the read side.
+    with open(src, "rb") as fsrc, zipf.open(arcname, "w") as fdst:
+        while True:
+            buf = fsrc.read(chunk)
+            if not buf:
+                break
+            fdst.write(buf)
+            done += len(buf)
+            _tty_progress(f"compressing {src.name}", done, total)
+
+
 @dataclass
 class PreviewItem:
     """One row in a destructive-action preview (a file/dir/session about to be kept or removed)."""
@@ -8206,7 +8646,7 @@ def db_show_info(args) -> None:
         print(f"  Total Size:      {color_yellow(human_size_local(backup_total))}")
         if backup_count:
             print(f"  Oldest / Newest: {oldest_b} / {newest_b}")
-            print(color_dim("  Prune old backups with: ocman --clean-backups --days N"))
+            print(color_dim("  Prune old backups with: ocman backup clean --older-than 30d"))
     else:
         print(f"  Backups:         0")
         print(f"  Total Size:      {color_yellow('0 B')} (no backups directory)")
@@ -8323,7 +8763,7 @@ def cli_backup(dest: str = None) -> Path:
             p.parent.mkdir(parents=True, exist_ok=True)
             dest_path = p
 
-    print(f"Creating system backup at: {dest_path}")
+    print(f"{info_prefix()} Creating system backup at: {dest_path}")
 
     files_to_backup = []
 
@@ -8358,17 +8798,27 @@ def cli_backup(dest: str = None) -> Path:
             if f.is_file() and f.suffix == ".json":
                 files_to_backup.append((f, Path("session_diff") / f.name))
 
+    # Deduplicate and total up so we can report progress.
+    unique: list[tuple[Path, str]] = []
+    seen: set[str] = set()
+    for disk_path, zip_path in files_to_backup:
+        if not disk_path.exists():
+            continue
+        zp = str(zip_path)
+        if zp in seen:
+            continue
+        seen.add(zp)
+        unique.append((disk_path, zp))
+
+    total_bytes = sum(p.stat().st_size for p, _ in unique)
+    print(f"{info_prefix()} Packaging {len(unique)} file(s), {human_size_local(total_bytes)} total.")
+
     try:
-        added_zip_paths = set()
         with zipfile.ZipFile(dest_path, "w", zipfile.ZIP_DEFLATED) as zipf:
-            for disk_path, zip_path in files_to_backup:
-                if not disk_path.exists():
-                    continue
-                zip_path_str = str(zip_path)
-                if zip_path_str in added_zip_paths:
-                    continue
-                added_zip_paths.add(zip_path_str)
-                zipf.write(disk_path, zip_path_str)
+            for idx, (disk_path, zp) in enumerate(unique, start=1):
+                fsize = disk_path.stat().st_size
+                print(f"    [{idx}/{len(unique)}] {zp} ({human_size_local(fsize)})")
+                zip_write_with_progress(zipf, disk_path, zp)
     except Exception as e:
         raise RecoveryError(f"Failed to write ZIP archive: {e}")
 
@@ -8397,6 +8847,7 @@ def cli_restore(source: str) -> None:
         temp_dir = tempfile.mkdtemp(prefix="ocman-restore-")
         restore_dir = Path(temp_dir)
         try:
+            print(f"{info_prefix()} Extracting archive...")
             with zipfile.ZipFile(source_path, "r") as zipf:
                 _safe_extract_zip(zipf, restore_dir)
         except Exception as e:
@@ -8413,7 +8864,8 @@ def cli_restore(source: str) -> None:
             shutil.rmtree(temp_dir, ignore_errors=True)
         raise RecoveryError("Invalid backup structure: opencode.db not found in source.")
 
-    print("Creating rollback safety backup of current state...")
+    print(f"{info_prefix()} Restoring opencode state from: {source_path}")
+    print(f"{info_prefix()} Creating rollback safety backup of current state...")
     rollback_file = None
     try:
         config = load_ocman_config()
@@ -8455,9 +8907,9 @@ def cli_restore(source: str) -> None:
                 if zip_path_str in added_zip_paths:
                     continue
                 added_zip_paths.add(zip_path_str)
-                zipf.write(disk_path, zip_path_str)
+                zip_write_with_progress(zipf, disk_path, zip_path_str)
 
-        print(f"Rollback safety backup created: {rollback_file}")
+        print(f"{info_prefix()} Rollback safety backup created: {rollback_file}")
     except Exception as e:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
@@ -8494,7 +8946,9 @@ def cli_restore(source: str) -> None:
         if active_shm.exists():
             active_shm.unlink()
 
-        shutil.copy2(db_file, target_db)
+        print(f"{info_prefix()} Restoring database "
+              f"({human_size_local(db_file.stat().st_size)})...")
+        copy_file_with_progress(db_file, target_db, label="restoring opencode.db")
         db_restored = True
 
         new_wal = restore_dir / "opencode.db-wal"
@@ -8519,10 +8973,12 @@ def cli_restore(source: str) -> None:
                 f.unlink()
 
         if backup_storage.exists() and backup_storage.is_dir():
-            for f in backup_storage.iterdir():
-                if f.is_file() and f.suffix == ".json":
-                    shutil.copy2(f, target_storage / f.name)
-                    sessions_restored += 1
+            diff_files = [f for f in backup_storage.iterdir()
+                          if f.is_file() and f.suffix == ".json"]
+            print(f"{info_prefix()} Restoring {len(diff_files)} session-diff file(s)...")
+            for f in diff_files:
+                shutil.copy2(f, target_storage / f.name)
+                sessions_restored += 1
 
     except Exception as e:
         print(color_red(f"Restoration failed: {e}. Triggering rollback safety..."))
@@ -9183,17 +9639,24 @@ def main() -> None:
 
     # Handle --search early.
     if args.search:
+        _search_session_id = getattr(args, "search_session_id", None)
         results = db_search_sessions(
             args.search,
             project_id=_project_id,
             limit=args.limit,
+            session_id=_search_session_id,
         )
 
-        # Filter child sessions unless --all-sessions.
-        if not args.all_sessions:
+        # Filter child sessions unless --all-sessions (skip when scoped to one session).
+        if not args.all_sessions and not _search_session_id:
             results = [s for s in results if not s["parent_id"]]
 
-        scope = f" in {_project_dir}" if _project_dir else " across all projects"
+        if _search_session_id:
+            scope = f" in session {_search_session_id}"
+        elif _project_dir:
+            scope = f" in {_project_dir}"
+        else:
+            scope = " across all projects"
         if not results:
             print(color_bold(f"No sessions match {args.search!r}{scope}."))
             if not args.all_sessions:
@@ -9215,7 +9678,7 @@ def main() -> None:
             if s["snippet"]:
                 print(f"       {color_dim(s['snippet'])}")
         print()
-        print("Use --session <id> with --details, --head, or --tail to view a session.")
+        print("Use 'ocman session show <id>' to view details, or add -H/-T for a preview.")
         return
 
     # Handle --clean or --clean-orphans

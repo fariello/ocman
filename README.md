@@ -51,7 +51,8 @@ ocman gui
 ocman db info   # alias: ocman info
 
 # Clean sessions older than 7 days and reclaim database disk space
-ocman db clean --days 7
+ocman db clean --older-than 7d   # positional also works: ocman db clean 7 days
+# (the old --days N flag still works but is a deprecated alias for --older-than)
 
 # Scan and delete all orphaned database records/files
 ocman db clean-orphans
@@ -149,7 +150,7 @@ The interactive terminal user interface organizes your workflow across several t
 *   `ocman help` (or `ocman -h`, `ocman --help`) shows the overview grouped by task (Browse, Recover & compact, Maintain, Backup).
 *   `ocman help TOPIC` shows a focused section. Topics: `browse`, `recover`, `maintain`, `backup`, `move`, `config`.
 *   `ocman help all` prints the complete command reference (every group, action, and option).
-*   Every subcommand also accepts `-h`/`--help` for its own usage, e.g. `ocman session compact -h`.
+*   `ocman <command> -h` prints that specific command's own options and usage, e.g. `ocman db clean -h`, `ocman session -h`, or `ocman session compact -h`. This per-command help is auto-generated, while `ocman help` / `ocman help TOPIC` stay the curated overview.
 
 ### Command structure
 `ocman` uses a noun-based, git/kubectl-style grammar: `ocman <group> <action> [options]`. The groups
@@ -165,13 +166,35 @@ A handful of top-level verbs are kept as convenient aliases for the most common 
 *   `ocman disk` = `ocman db info --by-project`
 *   `ocman logs` = `ocman history show`
 
-The only remaining natural-language sugar is an optional `in [project] NAME` phrase, accepted by
-`ocman session list`, `ocman session search`, and `ocman search`. It is equivalent to passing the
-project as the trailing `NAME` positional, and it lets multi-word project names be written without
-quotes:
+**Word-order aliases.** The `list` verb accepts either word order, so you can read it whichever way
+feels natural:
+*   `ocman list projects` = `ocman project list`
+*   `ocman list sessions [NAME]` = `ocman session list [NAME]`
+
+**Auto-detecting `move` and `export` verbs.** Two top-level verbs figure out whether you gave them a
+project or a session, so you rarely need to say which:
+*   `ocman move SPEC to DST` relocates whichever project or session `SPEC` names. The word `to` is
+    optional sugar (`ocman move SPEC DST` and `ocman move SPEC --to DST` also work), and
+    `--metadata-only` is still supported. This is equivalent to `ocman project move` /
+    `ocman session move`. If `SPEC` matches both a project and a session, or is a bare integer (a
+    list number), ocman errors and asks you to disambiguate with `ocman move project SPEC to DST` or
+    `ocman move session SPEC to DST`.
+*   `ocman export SPEC to FILE` exports the session `SPEC` names to a `.ocbox` bundle (`to` optional;
+    `--to FILE` also works). Whole-project export is not yet supported: `ocman export project SPEC`
+    prints a clear "not yet supported" error. It is planned (see
+    `.agents/plans/20260708-project-export-ipd.md`) but not yet available.
+
+The remaining natural-language sugar is an optional `in [project|session] NAME` phrase, accepted by
+`ocman session list`, `ocman session search`, and `ocman search`. For `session list` it is
+equivalent to passing the project as the trailing `NAME` positional, and it lets multi-word project
+names be written without quotes:
 *   `ocman session list in my-project` = `ocman session list my-project`
 *   `ocman session search bug in project My Project` = `ocman session search bug "My Project"`
 *   `ocman search bug in my-project` = `ocman search bug my-project`
+
+For search, `in NAME` accepts a **project or a session** and auto-detects which. Disambiguate an
+ambiguous NAME with `ocman search "text" in project NAME` or `ocman search "text" in session NAME`;
+an ambiguous or unmatched NAME errors.
 
 ### Database & Storage Status (`ocman db info`)
 Prints a breakdown of your current database state on disk, including the SQLite database
@@ -224,7 +247,7 @@ Global options work on any subcommand and may appear before or after it.
 | Command | Description |
 |:---|:---|
 | `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Also `session list in NAME`. Add `-A/--all-sessions` to include subagents. |
-| `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. `-L/--limit N` caps results (default: 50); `-A/--all-sessions` includes subagents. |
+| `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents. Also `search QUERY in [project\|session] NAME`. |
 | `ocman session show ID` | Show details for a session (bare form shows details). `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
 | `ocman session recover [ID]` | Recover a session to restart-ready Markdown (omit `ID` to pick interactively). Accepts the recovery options below. |
 | `ocman session compact [ID] [MODEL]` | Recover and LLM-compact a session. Accepts the recovery options below plus `--no-project-prompt`, `--allow-secrets`, and `--force` (override the input size cap). |
@@ -266,7 +289,7 @@ Global options work on any subcommand and may appear before or after it.
 | Command | Description |
 |:---|:---|
 | `ocman db info` | Show database and storage usage (incl. backups disk usage). `--by-project` adds a per-project on-disk session-diff breakdown. Alias: `ocman info` / `ocman disk`. |
-| `ocman db clean [NAME]` | Delete sessions older than the retention window, optionally scoped to project `NAME`. `--days N` sets the window (fractions ok, e.g. `0.25` = 6 hours; default: 5). `--dry-run` previews; `--force` bypasses process-lock checks. |
+| `ocman db clean [NAME] [AGE]` | Delete sessions older than the retention window, optionally scoped to project `NAME`. `--older-than AGE` sets the window; `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`), a spelled-out `"30 days"`, or a bare number (days). A positional duration also works (`ocman db clean 30 days`, `ocman db clean myproject 6mo`). `--days N` is a deprecated alias for `--older-than`. Default: 5 days. `--dry-run` previews; `--force` bypasses process-lock checks. |
 | `ocman db clean-orphans` | Remove orphaned records and sidecar diffs. `--dry-run` previews; `--force` bypasses process-lock checks. |
 | `ocman db rebase --from A --to B` | Bulk rebase DB workspace path prefixes (both `--from` and `--to` are required). |
 
@@ -274,9 +297,9 @@ Global options work on any subcommand and may appear before or after it.
 
 | Command | Description |
 |:---|:---|
-| `ocman backup create [DEST]` | Create a system backup archive ZIP (default destination from config). |
-| `ocman backup restore PATH` | Restore configuration, database, and diffs from a backup archive or directory (with rollback safety). |
-| `ocman backup clean` | Prune old backups; previews a KEEP/DELETE table before deleting (see Pruning Backups). `--days N` sets the window; `--dry-run` previews. |
+| `ocman backup create [DEST]` | Create a system backup archive ZIP (default destination from config). Streams progress as it runs (per-file lines and a byte-level progress bar for large files on an interactive terminal). |
+| `ocman backup restore PATH` | Restore configuration, database, and diffs from a backup archive or directory (with rollback safety). Streams the same per-file and byte-level progress as it runs. |
+| `ocman backup clean [AGE]` | Prune old backups; previews a KEEP/DELETE table before deleting (see Pruning Backups). `--older-than AGE` sets the window (compact `2h`/`5d`/`6w`/`6mo`/`1y`, `"90 days"`, or a bare number of days); a positional duration also works (`ocman backup clean 90 days`). `--days N` is a deprecated alias. `--dry-run` previews. |
 
 ### `history` (activity ledger)
 
@@ -295,7 +318,10 @@ Global options work on any subcommand and may appear before or after it.
 
 | Command | Description |
 |:---|:---|
-| `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in NAME`. |
+| `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in [project\|session] NAME` (auto-detects; disambiguate with `in project NAME` / `in session NAME`). `-n N`/`--limit N` caps results (default: 10). |
+| `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. |
+| `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |
+| `ocman export SPEC to FILE` | Auto-detects the session `SPEC` and exports it to a `.ocbox` bundle. `to` is optional (`--to FILE` also works). Whole-project export is not yet supported (planned). |
 | `ocman info` | Alias of `ocman db info`. |
 | `ocman disk` | Alias of `ocman db info --by-project`. |
 | `ocman logs` | Alias of `ocman history show`. |
@@ -369,12 +395,15 @@ The backup operation archives:
 Before executing a restoration, `ocman` packages the existing active state into a temporary archive (`~/.local/share/opencode/backups/rollback-before-restore-TIMESTAMP.zip`). If any stage of the restoration (file unpacking, database overwriting, config validation) throws an error, the rollback routine immediately triggers to extract the temporary rollback file, leaving your system state completely safe and unmodified.
 
 ### Pruning Backups (`ocman backup clean`)
-`ocman backup clean --days N` prunes old backups. Before deleting anything it prints a
+`ocman backup clean --older-than AGE` prunes old backups (positional durations such as
+`ocman backup clean 90 days` also work). Before deleting anything it prints a
 table of **all** backups, each tagged **DELETE** (past the retention window) or **KEEP**,
 with a right-aligned Size column and last-modified time, plus a running "N to delete, M kept"
 summary. If the prune would remove **every** backup, it prints a forceful warning that no
 rollback backups will remain. With many retained backups the KEEP rows are summarized; use
-`-v` to list them all. `--days` accepts fractions (e.g. `0.25` = 6 hours).
+`-v` to list them all. `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`; `mo` and `y`
+are approximate), a spelled-out `"90 days"`, or a bare number of days (fractions ok, e.g. `0.25` =
+6 hours). The old `--days N` flag still works as a deprecated alias.
 
 ---
 

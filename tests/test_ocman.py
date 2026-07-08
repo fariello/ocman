@@ -455,7 +455,7 @@ def test_build_help_overview_is_verb_first():
     # No ANSI in non-tty test environment.
     assert "\033[" not in text
     # Subcommand syntax is the primary interface shown.
-    assert "ocman session list" in text
+    assert "ocman list sessions" in text
     assert "ocman search" in text
     assert "ocman db info" in text
     # It advertises focused topics and the full reference.
@@ -813,24 +813,24 @@ def test_preprocess_argv_passthrough():
 
 
 def test_preprocess_argv_in_sugar():
-    """'in [project] NAME' collapses to a single NAME positional token."""
+    """'in [project] NAME' sugar for session list (positional) and search (flags)."""
     from ocman import preprocess_argv
 
-    # session list in NAME
+    # session list in NAME -> NAME positional
     assert preprocess_argv(["ocman", "session", "list", "in", "my-proj"]) == \
         ["ocman", "session", "list", "my-proj"]
 
-    # session search TEXT in project NAME
-    assert preprocess_argv(["ocman", "session", "search", "bug", "in", "project", "my-proj"]) == \
-        ["ocman", "session", "search", "bug", "my-proj"]
-
-    # multi-word project name (unquoted) is joined
-    assert preprocess_argv(["ocman", "search", "bug", "in", "My", "Project", "Name"]) == \
-        ["ocman", "search", "bug", "My Project Name"]
-
-    # trailing flags survive
+    # session list in NAME with trailing flag
     assert preprocess_argv(["ocman", "session", "list", "in", "my-proj", "-A"]) == \
         ["ocman", "session", "list", "my-proj", "-A"]
+
+    # session search TEXT in project NAME -> scope flags
+    assert preprocess_argv(["ocman", "session", "search", "bug", "in", "project", "my-proj"]) == \
+        ["ocman", "session", "search", "bug", "--scope-kind", "project", "--scope-name", "my-proj"]
+
+    # multi-word name (unquoted) is joined into --scope-name
+    assert preprocess_argv(["ocman", "search", "bug", "in", "My", "Project", "Name"]) == \
+        ["ocman", "search", "bug", "--scope-name", "My Project Name"]
 
 
 def test_cli_show_logs(mock_history_path, capsys):
@@ -923,9 +923,8 @@ def test_subcommand_session_list(monkeypatch):
 
 
 def test_subcommand_session_search(monkeypatch):
-    a = _parse(monkeypatch, ["session", "search", "needle", "my-proj", "-L", "10"])
+    a = _parse(monkeypatch, ["session", "search", "needle", "-n", "10"])
     assert a.search == "needle"
-    assert a.project == "my-proj"
     assert a.limit == 10
 
 
@@ -1068,6 +1067,161 @@ def test_subcommand_global_db_flag(monkeypatch):
     a = _parse(monkeypatch, ["--db", "/tmp/other.db", "project", "list"])
     assert a.db == Path("/tmp/other.db")
     assert a.list_projects is True
+
+
+# ---- duration parsing (items 7 & 8) ---------------------------------------
+
+def test_parse_duration_to_days():
+    from ocman import parse_duration_to_days
+    assert parse_duration_to_days("30") == 30.0            # bare number = days
+    assert parse_duration_to_days("5d") == 5.0
+    assert parse_duration_to_days("2h") == 2.0 / 24.0
+    assert parse_duration_to_days("6w") == 42.0
+    assert parse_duration_to_days("6mo") == 180.0
+    assert parse_duration_to_days("1y") == 365.0
+    assert parse_duration_to_days("30 days") == 30.0
+    assert parse_duration_to_days("6 weeks") == 42.0
+
+
+def test_parse_duration_rejects_garbage():
+    from ocman import parse_duration_to_days, DurationError
+    for bad in ("", "  ", "5x", "banana", "5 fortnights"):
+        with pytest.raises(DurationError):
+            parse_duration_to_days(bad)
+
+
+def test_db_clean_older_than_and_positional(monkeypatch):
+    # --older-than
+    a = _parse(monkeypatch, ["db", "clean", "--older-than", "2w", "--dry-run"])
+    assert a.clean is True and a.days == 14.0 and a.project is None
+    # positional "30 days"
+    a = _parse(monkeypatch, ["db", "clean", "30", "days"])
+    assert a.days == 30.0 and a.project is None
+    # compact positional
+    a = _parse(monkeypatch, ["db", "clean", "6mo"])
+    assert a.days == 180.0
+    # deprecated --days alias still works
+    a = _parse(monkeypatch, ["db", "clean", "--days", "7"])
+    assert a.days == 7.0
+    # NAME + duration
+    a = _parse(monkeypatch, ["db", "clean", "myproj", "30", "days"])
+    assert a.project == "myproj" and a.days == 30.0
+    # NAME only keeps default (5)
+    a = _parse(monkeypatch, ["db", "clean", "myproj"])
+    assert a.project == "myproj" and a.days == 5
+
+
+def test_backup_clean_duration(monkeypatch):
+    a = _parse(monkeypatch, ["backup", "clean", "90", "days"])
+    assert a.clean_backups is True and a.days == 90.0
+    a = _parse(monkeypatch, ["backup", "clean", "--older-than", "1y"])
+    assert a.days == 365.0
+
+
+# ---- search: default 10, -n, scope kind (items 5 & 6) ---------------------
+
+def test_search_default_limit_is_10(monkeypatch):
+    a = _parse(monkeypatch, ["search", "needle"])
+    assert a.search == "needle"
+    assert a.limit == 10
+
+
+def test_search_n_flag(monkeypatch):
+    a = _parse(monkeypatch, ["search", "needle", "-n", "25"])
+    assert a.limit == 25
+    a = _parse(monkeypatch, ["search", "needle", "--limit", "3"])
+    assert a.limit == 3
+
+
+# ---- preprocess sugar (items 2, 3, 6) -------------------------------------
+
+def test_preprocess_list_word_order():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "list", "projects"]) == ["ocman", "project", "list"]
+    assert preprocess_argv(["ocman", "list", "sessions"]) == ["ocman", "session", "list"]
+    assert preprocess_argv(["ocman", "list", "sessions", "myproj"]) == \
+        ["ocman", "session", "list", "myproj"]
+
+
+def test_preprocess_move_export_to_keyword():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "move", "X", "to", "Y"]) == ["ocman", "move", "X", "Y"]
+    assert preprocess_argv(["ocman", "export", "S", "to", "F.ocbox"]) == \
+        ["ocman", "export", "S", "F.ocbox"]
+
+
+def test_preprocess_search_scope_kind():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "search", "bug", "in", "session", "My", "Sess"]) == \
+        ["ocman", "search", "bug", "--scope-kind", "session", "--scope-name", "My Sess"]
+    assert preprocess_argv(["ocman", "search", "bug", "in", "proj"]) == \
+        ["ocman", "search", "bug", "--scope-name", "proj"]
+
+
+# ---- resolve_target (items 3, 4, 6) ---------------------------------------
+
+def _seed_target_db(db_path):
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/me/alpha', 'Alpha')")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/home/me/beta', 'Beta')")
+    cur.execute("""INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+                   VALUES ('sX', 'p1', 'the widget bug', 1000, 2000, '/home/me/alpha')""")
+    conn.commit()
+    conn.close()
+
+
+def test_resolve_target_project(temp_db):
+    from ocman import resolve_target
+    _seed_target_db(temp_db)
+    r = resolve_target("alpha")
+    assert r.kind == "project"
+    assert r.project["id"] == "p1"
+
+
+def test_resolve_target_session(temp_db):
+    from ocman import resolve_target
+    _seed_target_db(temp_db)
+    r = resolve_target("sX")
+    assert r.kind == "session"
+    assert r.session["id"] == "sX"
+
+
+def test_resolve_target_bare_number_is_ambiguous(temp_db):
+    from ocman import resolve_target
+    _seed_target_db(temp_db)
+    assert resolve_target("1").kind == "ambiguous"
+    # with a prefer, a number is allowed (list index)
+    assert resolve_target("1", prefer="project").kind == "project"
+
+
+def test_resolve_target_none(temp_db):
+    from ocman import resolve_target
+    _seed_target_db(temp_db)
+    assert resolve_target("does-not-exist-anywhere").kind == "none"
+
+
+# ---- verbose backup/restore progress helpers (item 1) ---------------------
+
+def test_copy_file_with_progress_roundtrip(tmp_path):
+    from ocman import copy_file_with_progress
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"hello world" * 1000)
+    dst = tmp_path / "dst.bin"
+    copy_file_with_progress(src, dst)
+    assert dst.read_bytes() == src.read_bytes()
+
+
+def test_zip_write_with_progress_roundtrip(tmp_path):
+    import zipfile
+    from ocman import zip_write_with_progress
+    src = tmp_path / "src.bin"
+    src.write_bytes(b"abc" * 5000)
+    zp = tmp_path / "a.zip"
+    with zipfile.ZipFile(zp, "w", zipfile.ZIP_DEFLATED) as zf:
+        zip_write_with_progress(zf, src, "src.bin")
+    with zipfile.ZipFile(zp) as zf:
+        assert zf.read("src.bin") == src.read_bytes()
 
 
 def test_db_delete_project_recursive_saves_history(temp_db, mock_history_path):
