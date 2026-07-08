@@ -6,6 +6,7 @@ import ocman
 from ocman import (
     db_list_projects,
     db_list_sessions,
+    db_search_sessions,
     db_delete_session_recursive,
     db_run_cleanup,
     db_show_info,
@@ -106,6 +107,104 @@ def test_db_list_projects_and_sessions(temp_db):
     assert len(sessions) == 2
     assert sessions[0]["id"] == "sess2"  # Sorted by time_updated DESC
     assert sessions[1]["id"] == "sess1"
+
+
+def _seed_search_db(db_path):
+    """Populate a temp_db with projects, sessions and part content for search tests."""
+    conn = sqlite3.connect(str(db_path))
+    cursor = conn.cursor()
+
+    # The temp_db fixture creates a stub `part` table without a `data` column.
+    # Recreate it to match the real opencode schema used by db_search_sessions.
+    cursor.execute("DROP TABLE IF EXISTS part")
+    cursor.execute("""
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY,
+            message_id TEXT,
+            session_id TEXT,
+            time_created INTEGER,
+            time_updated INTEGER,
+            data TEXT
+        )
+    """)
+
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj2', '/other/proj', 'Proj 2')")
+
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+        VALUES ('sess1', 'proj1', 'Fix the widget crash', 1000, 2000, '/path/to/proj')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sub1', 'proj1', 'explore subagent', 1050, 2050, '/path/to/proj', 'sess1')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+        VALUES ('sess2', 'proj2', 'Unrelated work', 1100, 2100, '/other/proj')
+    """)
+
+    # part.data holds JSON message text (as opencode stores it).
+    cursor.execute(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?,?)",
+        ("p1", "m1", "sess1", 1000, 1000, '{"type":"text","text":"Traceback: AttributeError on the widget"}'),
+    )
+    cursor.execute(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?,?)",
+        ("p2", "m2", "sub1", 1050, 1050, '{"type":"text","text":"child ran an AttributeError repro"}'),
+    )
+    cursor.execute(
+        "INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) VALUES (?,?,?,?,?,?)",
+        ("p3", "m3", "sess2", 1100, 1100, '{"type":"text","text":"totally different content"}'),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_db_search_sessions_content_match(temp_db):
+    _seed_search_db(temp_db)
+    # Content match, excluding subagents by default via the caller; the function
+    # itself returns all matches and lets callers filter.
+    results = db_search_sessions("AttributeError")
+    ids = {r["id"] for r in results}
+    assert "sess1" in ids  # matched on content
+    assert "sub1" in ids    # subagent also matched on content
+    assert "sess2" not in ids
+    sess1 = next(r for r in results if r["id"] == "sess1")
+    assert sess1["match_where"] == "content"
+    assert "AttributeError" in sess1["snippet"]
+
+
+def test_db_search_sessions_title_match(temp_db):
+    _seed_search_db(temp_db)
+    results = db_search_sessions("widget crash")
+    ids = {r["id"] for r in results}
+    assert "sess1" in ids
+    sess1 = next(r for r in results if r["id"] == "sess1")
+    assert sess1["match_where"] == "title"
+
+
+def test_db_search_sessions_project_scope(temp_db):
+    _seed_search_db(temp_db)
+    # Scoped to proj2 should not return proj1 sessions.
+    results = db_search_sessions("AttributeError", project_id="proj2")
+    assert results == []
+    results = db_search_sessions("content", project_id="proj2")
+    assert {r["id"] for r in results} == {"sess2"}
+
+
+def test_db_search_sessions_case_insensitive(temp_db):
+    _seed_search_db(temp_db)
+    lower = {r["id"] for r in db_search_sessions("attributeerror")}
+    upper = {r["id"] for r in db_search_sessions("ATTRIBUTEERROR")}
+    assert lower == upper
+    assert "sess1" in lower
+
+
+def test_db_search_sessions_empty_query(temp_db):
+    _seed_search_db(temp_db)
+    assert db_search_sessions("") == []
+    assert db_search_sessions("   ") == []
 
 
 def test_db_delete_session_recursive_dry_run(temp_db):
@@ -337,9 +436,86 @@ def test_parse_args_help(monkeypatch, capsys):
         
     assert excinfo.value.code == 0
     captured = capsys.readouterr()
-    # Argparse help output can be on stdout or stderr depending on python version/argparse implementation
+    # 'ocman help' now renders ocman's custom, verb-first help screen.
     output = captured.out + captured.err
-    assert "usage: ocman" in output
+    assert "ocman - OpenCode Manager" in output
+    assert "Usage" in output
+    # Verb syntax must be discoverable from help.
+    assert "list sessions" in output
+
+
+def test_build_help_overview_is_verb_first():
+    from ocman import build_help
+    text = build_help(None)
+    # No ANSI in non-tty test environment.
+    assert "\033[" not in text
+    # Verb syntax is the primary interface shown.
+    assert "ocman list sessions" in text
+    assert "ocman search" in text
+    assert "ocman info" in text
+    # It advertises focused topics and the full reference.
+    assert "help TOPIC" in text
+    assert "help all" in text
+    # It must be reasonably compact (not the old 190-line wall).
+    assert len(text.splitlines()) < 70
+
+
+def test_build_help_topics_render():
+    from ocman import build_help, HELP_TOPICS
+    for topic in HELP_TOPICS:
+        text = build_help(topic)
+        assert text.strip()
+        assert "ocman" in text
+
+
+def test_build_help_all_is_full_reference():
+    from ocman import build_help
+    text = build_help("all")
+    # Every long flag should appear in the full reference.
+    for flag in ("--list-projects", "--search", "--clean", "--backup-opencode",
+                 "--move-project", "--export-session", "--create-config"):
+        assert flag in text, flag
+
+
+def test_build_help_unknown_topic_falls_back_to_overview():
+    from ocman import build_help
+    assert build_help("does-not-exist") == build_help(None)
+
+
+def test_parse_args_help_topic(monkeypatch, capsys):
+    import sys
+    from ocman import parse_args
+
+    monkeypatch.setattr(sys, "argv", ["ocman.py", "help", "maintain"])
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args()
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "--clean" in out
+
+
+def test_parse_args_help_unknown_topic(monkeypatch, capsys):
+    import sys
+    from ocman import parse_args
+
+    monkeypatch.setattr(sys, "argv", ["ocman.py", "help", "bogus"])
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args()
+    assert excinfo.value.code == 2
+    err = capsys.readouterr().err
+    assert "Unknown help topic" in err
+
+
+def test_parse_args_dash_h(monkeypatch, capsys):
+    import sys
+    from ocman import parse_args
+
+    monkeypatch.setattr(sys, "argv", ["ocman.py", "-h"])
+    with pytest.raises(SystemExit) as excinfo:
+        parse_args()
+    assert excinfo.value.code == 0
+    out = capsys.readouterr().out
+    assert "ocman - OpenCode Manager" in out
 
 
 def test_parse_args_version(monkeypatch, capsys):
@@ -641,6 +817,28 @@ def test_preprocess_argv_show_logs():
     from ocman import preprocess_argv
     assert preprocess_argv(["ocman", "show", "logs"]) == ["ocman", "--show-logs"]
     assert preprocess_argv(["ocman", "SHOW", "loGs"]) == ["ocman", "--show-logs"]
+
+
+def test_preprocess_argv_search():
+    from ocman import preprocess_argv
+
+    # Single-word query.
+    assert preprocess_argv(["ocman", "search", "AttributeError"]) == ["ocman", "--search", "AttributeError"]
+
+    # Multi-word query (unquoted).
+    assert preprocess_argv(["ocman", "search", "widget", "crash"]) == ["ocman", "--search", "widget crash"]
+
+    # Query scoped to a project via "in".
+    assert preprocess_argv(["ocman", "search", "AttributeError", "in", "ocman"]) == \
+        ["ocman", "--search", "AttributeError", "--project", "ocman"]
+
+    # Query scoped via "in project".
+    assert preprocess_argv(["ocman", "search", "bug", "fix", "in", "project", "My", "Proj"]) == \
+        ["ocman", "--search", "bug fix", "--project", "My Proj"]
+
+    # Flags are preserved and passed through.
+    assert preprocess_argv(["ocman", "search", "AttributeError", "-A"]) == \
+        ["ocman", "--search", "AttributeError", "-A"]
 
 
 def test_cli_show_logs(mock_history_path, capsys):

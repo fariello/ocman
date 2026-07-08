@@ -144,11 +144,19 @@ The interactive terminal user interface organizes your workflow across several t
 
 ## CLI Command Usage & Examples
 
+### Getting help
+`ocman` renders a compact, verb-first help screen (not the raw argparse dump):
+*   `ocman help` (or `ocman -h`, `ocman --help`) shows the overview grouped by task (Browse, Recover & compact, Maintain, Backup).
+*   `ocman help TOPIC` shows a focused section. Topics: `browse`, `recover`, `maintain`, `backup`, `move`, `config`.
+*   `ocman help all` prints the complete flag reference (every option), with the verb equivalent noted for each.
+
 ### Command Preprocessing
 `ocman` intercepts natural subcommands at the CLI level for convenience. Positional commands are parsed and converted to internal flags:
 *   `ocman list projects` or `ocman list porjects` $\rightarrow$ `--list-projects`
 *   `ocman list sessions` $\rightarrow$ `--list-sessions`
 *   `ocman list sessions in [project] my-project` $\rightarrow$ `--list-sessions --project "my-project"`
+*   `ocman search my query` $\rightarrow$ `--search "my query"`
+*   `ocman search my query in [project] my-project` $\rightarrow$ `--search "my query" --project "my-project"`
 *   `ocman show logs` $\rightarrow$ `--show-logs`
 *   `ocman disk` or `ocman du` $\rightarrow$ `--info --by-project`
 *   `ocman delete project [name]` $\rightarrow$ `--delete-project [--project name]`
@@ -210,6 +218,8 @@ ocman --create-config
 | `-C [MODEL]`| `--compact [MODEL]` | Triggers LLM compaction. Prompted if MODEL is omitted |
 | `-lp` | `--list-projects` | List all projects in the database |
 | `-ls` | `--list-sessions` | List sessions (optionally for `-P/--project`) |
+| `-S QUERY` | `--search QUERY` | Search sessions by content and title (case-insensitive; scoped to `-P/--project` or CWD project, else all projects) |
+| `-L N` | `--limit N` | Maximum number of `--search` results (default: 50) |
 | `-P NAME` | `--project NAME` | Filter/select by project (name or ID) |
 | `-A` | `--all-sessions` | Include subagent/child sessions (hidden by default) |
 | `-D` | `--details` | Show detailed session metadata in listings |

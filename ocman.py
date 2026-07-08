@@ -3924,6 +3924,185 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 pass
 
 
+def _search_snippet(text: str, needle_lower: str, context: int = 60) -> str:
+    """
+    Return a single-line snippet of text centered on the first case-insensitive
+    match of needle_lower, with surrounding context characters. Whitespace is
+    collapsed so the snippet fits on one line.
+    """
+    if not text:
+        return ""
+    pos = text.lower().find(needle_lower)
+    if pos < 0:
+        # No direct match (e.g. matched via JSON escaping); fall back to the head.
+        snippet = text[: context * 2]
+        return " ".join(snippet.split())
+    start = max(0, pos - context)
+    end = min(len(text), pos + len(needle_lower) + context)
+    snippet = text[start:end]
+    snippet = " ".join(snippet.split())
+    prefix = "…" if start > 0 else ""
+    suffix = "…" if end < len(text) else ""
+    return f"{prefix}{snippet}{suffix}"
+
+
+def db_search_sessions(
+    query: str,
+    project_id: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """
+    Search sessions by content (message/tool text in the `part` table) and by
+    session title.
+
+    Matching is a case-insensitive substring search. Results are grouped by
+    session, ranked by most recently updated first, and include a snippet of
+    the first matching message part (or the title when only the title matched).
+
+    Args:
+        query: The substring to search for.
+        project_id: If given, restrict the search to a single project.
+        limit: Maximum number of sessions to return.
+
+    Returns:
+        A list of session dicts (same shape as db_list_sessions) with two extra
+        keys: "match_where" ("content" or "title") and "snippet".
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists() or not query.strip():
+        return []
+
+    needle = query.strip()
+    needle_lower = needle.lower()
+    like = f"%{needle}%"
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # 1) Find candidate session IDs whose message content matches.
+        if project_id:
+            cursor.execute(
+                """
+                SELECT DISTINCT pt.session_id
+                FROM part pt
+                JOIN session s ON s.id = pt.session_id
+                WHERE s.project_id = ? AND pt.data LIKE ? COLLATE NOCASE
+                """,
+                (project_id, like),
+            )
+        else:
+            cursor.execute(
+                """
+                SELECT DISTINCT session_id
+                FROM part
+                WHERE data LIKE ? COLLATE NOCASE
+                """,
+                (like,),
+            )
+        content_ids = {row[0] for row in cursor.fetchall()}
+
+        # 2) Find sessions whose title matches (scoped to project if given).
+        if project_id:
+            cursor.execute(
+                "SELECT id FROM session WHERE project_id = ? AND title LIKE ? COLLATE NOCASE",
+                (project_id, like),
+            )
+        else:
+            cursor.execute(
+                "SELECT id FROM session WHERE title LIKE ? COLLATE NOCASE",
+                (like,),
+            )
+        title_ids = {row[0] for row in cursor.fetchall()}
+
+        all_ids = content_ids | title_ids
+        if not all_ids:
+            return []
+
+        # 3) Fetch session metadata for the matches, newest first.
+        id_list = list(all_ids)
+        placeholders = ",".join("?" for _ in id_list)
+        cursor.execute(
+            f"""
+            SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                   s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                   s.summary_additions, s.summary_deletions, s.summary_files,
+                   s.slug, s.model, s.agent, p.worktree, s.parent_id
+            FROM session s
+            LEFT JOIN project p ON p.id = s.project_id
+            WHERE s.id IN ({placeholders})
+            ORDER BY s.time_updated DESC
+            LIMIT ?
+            """,
+            (*id_list, limit),
+        )
+        rows = cursor.fetchall()
+
+        results = []
+        for row in rows:
+            sid = row[0]
+            match_where = "content" if sid in content_ids else "title"
+            snippet = ""
+            if match_where == "content":
+                # Pull the earliest matching part for a representative snippet.
+                cursor.execute(
+                    """
+                    SELECT data FROM part
+                    WHERE session_id = ? AND data LIKE ? COLLATE NOCASE
+                    ORDER BY time_created ASC
+                    LIMIT 1
+                    """,
+                    (sid, like),
+                )
+                part_row = cursor.fetchone()
+                if part_row and part_row[0]:
+                    raw = part_row[0]
+                    text = raw
+                    # part.data is JSON; try to extract the human-readable text.
+                    try:
+                        import json as _json
+                        obj = _json.loads(raw)
+                        if isinstance(obj, dict):
+                            text = obj.get("text") or obj.get("output") or obj.get("content") or raw
+                            if not isinstance(text, str):
+                                text = raw
+                    except Exception:
+                        text = raw
+                    snippet = _search_snippet(text, needle_lower)
+            else:
+                snippet = _search_snippet(row[1] or "", needle_lower)
+
+            results.append({
+                "id": sid,
+                "title": row[1] or "(untitled)",
+                "created": row[2],
+                "updated": row[3],
+                "directory": row[4] or "",
+                "cost": row[5],
+                "tokens_input": row[6],
+                "tokens_output": row[7],
+                "tokens_cache_read": row[8],
+                "additions": row[9],
+                "deletions": row[10],
+                "files": row[11],
+                "slug": row[12] or "",
+                "model": row[13] or "",
+                "agent": row[14] or "",
+                "project_dir": row[15] or "",
+                "parent_id": row[16] or "",
+                "match_where": match_where,
+                "snippet": snippet,
+            })
+        return results
+    except Exception:
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
 
 def _fmt_ts(epoch_ms) -> str:
@@ -4071,6 +4250,293 @@ def resolve_session_spec(
     return None
 
 
+# ---------------------------------------------------------------------------
+# Help engine
+# ---------------------------------------------------------------------------
+#
+# ocman exposes two equivalent syntaxes: a friendly verb-based CLI
+# ("ocman list sessions", "ocman search X in Y") that preprocess_argv() rewrites
+# into flags, and the underlying flag CLI ("--list-sessions", "--search").
+# argparse only knows about the flags, so its auto-generated --help cannot show
+# the verb syntax and produces an unusable wall of text. We therefore render our
+# own help screen: verb-first, grouped into task sections, with a compact flag
+# reference. This is the single source of truth for help; see HELP_TOPICS below.
+
+HELP_TOPICS: tuple[str, ...] = (
+    "browse",
+    "recover",
+    "maintain",
+    "backup",
+    "move",
+    "config",
+    "all",
+)
+
+
+def _help_color_enabled() -> bool:
+    """
+    Whether to colorize help output. Help goes to stdout, so (unlike the
+    stderr-based _COLOR_SUPPORTED) we key off stdout being a TTY.
+    """
+    return (
+        hasattr(sys.stdout, "isatty")
+        and sys.stdout.isatty()
+        and os.environ.get("NO_COLOR") is None
+        and os.environ.get("TERM") != "dumb"
+    )
+
+
+def _h_head(text: str, enabled: bool) -> str:
+    """Section heading."""
+    return f"\033[1m{text}\033[0m" if enabled else text
+
+
+def _h_cmd(text: str, enabled: bool) -> str:
+    """A runnable command example (cyan)."""
+    return f"\033[36m{text}\033[0m" if enabled else text
+
+
+def _h_dim(text: str, enabled: bool) -> str:
+    """Muted/secondary text."""
+    return f"\033[2m{text}\033[0m" if enabled else text
+
+
+def _help_row(left: str, right: str, enabled: bool, left_width: int = 40) -> str:
+    """
+    Format a two-column help row. The left column is colorized as a command;
+    padding is computed on the uncolored text so alignment is correct even with
+    ANSI codes present.
+    """
+    pad = max(1, left_width - len(left))
+    return f"  {_h_cmd(left, enabled)}{' ' * pad}{_h_dim(right, enabled)}"
+
+
+def build_help(topic: str | None = None) -> str:
+    """
+    Build the ocman help screen.
+
+    Args:
+        topic: One of HELP_TOPICS to show a focused section, or None for the
+            overview. Unknown topics fall back to the overview.
+
+    Returns:
+        The rendered help text (with ANSI colors when stdout is an interactive
+        terminal).
+    """
+    c = _help_color_enabled()
+    prog = "ocman"
+
+    def section(title: str, rows: list[tuple[str, str]]) -> list[str]:
+        out = [_h_head(title, c)]
+        for left, right in rows:
+            out.append(_help_row(left, right, c))
+        out.append("")
+        return out
+
+    browse = [
+        (f"{prog} list projects", "List all known opencode projects"),
+        (f"{prog} list sessions", "List sessions (auto-detects project from CWD)"),
+        (f"{prog} list sessions in NAME", "List sessions in a named project"),
+        (f'{prog} search "some text"', "Search sessions by content + title (CWD project)"),
+        (f'{prog} search "text" in NAME', "Search within one project"),
+        (f"{prog} info", "Show database and storage usage"),
+        (f"{prog} disk", "Per-project on-disk usage breakdown"),
+        (f"{prog} show logs", "Show historical cleanup/recovery activity"),
+        (f"{prog} ui", "Launch the interactive terminal dashboard"),
+    ]
+
+    recover = [
+        (f"{prog} -s SESSION", "Recover a session to restart-ready Markdown"),
+        (f"{prog} -s SESSION -D", "Show session details"),
+        (f"{prog} -s SESSION -T 5", "Preview the last 5 exchanges"),
+        (f"{prog} -s SESSION -H 3 -T 3", "Preview first 3 + last 3 exchanges"),
+        (f"{prog} -s SESSION -mi 50", "Recover, keeping at most 50 interactions"),
+        (f"{prog} -s SESSION -C", "Recover + LLM-compact (pick model interactively)"),
+        (f"{prog} -s SESSION -C MODEL", "Recover + compact with a specific model"),
+        (f"{prog} -sm", "List available LLM models"),
+        (f"{prog} filter FILE.md --scope TEXT", "Re-scope a recovery doc via the LLM"),
+    ]
+
+    maintain = [
+        (f"{prog} --clean", "Delete sessions older than the retention window"),
+        (f"{prog} --clean --days 30", "Set the retention window (accepts fractions)"),
+        (f"{prog} --clean-orphans", "Remove orphaned DB records and sidecar diffs"),
+        (f"{prog} --clean-backups --days 30", "Prune old backup archives"),
+        (f"{prog} -s SESSION --delete", "Delete a single session (with confirmation)"),
+        (f"{prog} delete project NAME", "Delete a project and all its sessions"),
+        (f"{prog} --dry-run ...", "Preview any clean/delete without changing data"),
+    ]
+
+    backup = [
+        (f"{prog} --backup-opencode [DEST]", "Create a ZIP backup of all opencode state"),
+        (f"{prog} --restore PATH", "Restore state from a ZIP archive or directory"),
+    ]
+
+    move = [
+        (f"{prog} --move-project SRC --to DST", "Relocate a project (DB + disk)"),
+        (f"{prog} --move-session ID --to DST", "Relocate a single session"),
+        (f"{prog} --rebase-paths --from A --to B", "Bulk rebase path prefixes in the DB"),
+        (f"{prog} --export-session ID --to F.ocbox", "Export a session bundle"),
+        (f"{prog} --import-session F.ocbox", "Import a session bundle"),
+    ]
+
+    config = [
+        (f"{prog} --create-config", "Interactively generate ocman.toml"),
+        (f"{prog} --db PATH ...", "Use a non-default opencode database"),
+        (f"{prog} --clear-history", "Wipe the historical activity ledger"),
+        (f"{prog} info -v", "Add a SQLite integrity check to info"),
+    ]
+
+    # Focused single-topic screens.
+    topic_map: dict[str, tuple[str, list[tuple[str, str]]]] = {
+        "browse": ("Browsing projects & sessions", browse),
+        "recover": ("Recovering & compacting sessions", recover),
+        "maintain": ("Cleaning up & deleting", maintain),
+        "backup": ("Backup & restore", backup),
+        "move": ("Moving, rebasing, export/import", move),
+        "config": ("Configuration & database", config),
+    }
+
+    if topic and topic in topic_map:
+        title, rows = topic_map[topic]
+        lines = [f"{_h_head(prog, c)} {_h_dim('- ' + title, c)}", ""]
+        for left, right in rows:
+            lines.append(_help_row(left, right, c))
+        lines.append("")
+        lines.append(_h_dim(f"Run '{prog} help' for the full overview.", c))
+        return "\n".join(lines)
+
+    if topic == "all":
+        return build_help_reference()
+
+    # Overview screen.
+    lines: list[str] = []
+    lines.append(f"{_h_head(prog, c)} {_h_dim('- OpenCode Manager', c)}")
+    lines.append("")
+    lines.append(_h_dim("Administer the opencode database, sessions, and storage.", c))
+    lines.append("")
+
+    lines.append(_h_head("Usage", c))
+    lines.append(f"  {_h_cmd(prog + ' <command> [options]', c)}")
+    lines.append(f"  {_h_cmd(prog, c)}{_h_dim('   (no args: lists your projects)', c)}")
+    lines.append("")
+
+    lines += section("Browse", browse)
+    lines += section("Recover & compact", recover)
+    lines += section("Maintain", maintain)
+    lines += section("Backup", backup)
+
+    lines.append(_h_head("More", c))
+    lines.append(_help_row(f"{prog} help TOPIC", "browse | recover | maintain | backup | move | config", c))
+    lines.append(_help_row(f"{prog} help all", "Full flag reference (every option)", c))
+    lines.append(_help_row(f"{prog} ui", "Interactive terminal dashboard", c))
+    lines.append(_help_row("-v, -vv", "Increase verbosity", c))
+    lines.append("")
+    lines.append(_h_dim("Tip: most verbs have a flag equivalent (e.g. 'list sessions' == '--list-sessions').", c))
+    lines.append(_h_dim(f"See '{prog} help all' for the complete reference.", c))
+    return "\n".join(lines)
+
+
+def build_help_reference() -> str:
+    """
+    Build the full flag reference (equivalent of the old exhaustive --help), but
+    grouped by task and with the verb equivalents noted. Used by 'ocman help all'.
+    """
+    c = _help_color_enabled()
+    prog = "ocman"
+
+    groups: list[tuple[str, list[tuple[str, str]]]] = [
+        ("Browse & search", [
+            ("-lp, --list-projects", "List all projects (verb: 'list projects')"),
+            ("-ls, --list-sessions", "List sessions (verb: 'list sessions')"),
+            ("-P, --project NAME", "Select project by number, ID, path, or substring"),
+            ("-A, --all-sessions", "Include subagent/child sessions in listings"),
+            ("-S, --search QUERY", "Search content + titles (verb: 'search QUERY')"),
+            ("-L, --limit N", "Max --search results (default: 50)"),
+            ("-D, --details", "Show details for --session"),
+            ("-H, --head N", "Show the first N exchanges of --session"),
+            ("-T, --tail N", "Show the last N exchanges of --session"),
+            ("--info", "Database & storage info (verb: 'info')"),
+            ("--by-project", "With info: per-project breakdown (verb: 'disk')"),
+            ("--show-logs", "Historical activity (verb: 'show logs')"),
+        ]),
+        ("Recover & compact", [
+            ("-s, --session ID", "Session to recover (skips interactive pick)"),
+            ("-d, --session-dir DIR", "Working directory the session ran in"),
+            ("-o, --out DIR", "Output directory for recovery files"),
+            ("-C, --compact [MODEL]", "LLM-compact; prompts for model if omitted"),
+            ("-sm, --show-models", "List available LLM models"),
+            ("-mi, --max-interactions N", "Keep at most N user+assistant pairs"),
+            ("-ml, --max-lines N", "Keep at most N transcript lines"),
+            ("-t, --include-tools", "Include tool/function messages"),
+            ("--all-roles", "Write all roles, not just user/assistant"),
+            ("-ic, --input-compact FILE", "Prepend a prior compacted file (repeatable)"),
+            ("-ir, --input-restart FILE", "Prepend a prior restart file (repeatable)"),
+            ("-it, --input-transcript FILE", "Prepend a prior transcript (repeatable)"),
+            ("-oc, --output-compact FILE", "Output path for the compact prompt"),
+            ("-or, --output-restart FILE", "Output path for the restart file"),
+            ("-ot, --output-transcript FILE", "Output path for the transcript"),
+            ("-k, --keep-temp", "Keep the raw exported JSON for debugging"),
+            ("-cp, --clean-previous", "Remove prior recovery outputs first"),
+            ("-ct, --clean-tmp", "Prune leftover temp export files from /tmp"),
+            ("--show-compaction-prompt", "Print the compaction prompt template"),
+            ("filter FILE --scope TEXT", "Re-scope a recovery doc via the LLM"),
+            ("--scope TEXT", "Scope of content to keep (with 'filter')"),
+            ("--allow-secrets", "Bypass the pre-egress secret/PII scan"),
+        ]),
+        ("Maintain & delete", [
+            ("--clean", "Delete sessions older than --days"),
+            ("--days N", "Retention window in days (fractions ok; default: 5)"),
+            ("--clean-orphans", "Delete orphaned DB records"),
+            ("--clean-backups", "Prune old backups (pair with --days)"),
+            ("--delete", "Delete --session (verb: '-s ID --delete')"),
+            ("--delete-project", "Delete --project (verb: 'delete project NAME')"),
+            ("--dry-run", "Preview clean/delete without changing data"),
+            ("--force", "Bypass process-lock checks / size caps"),
+            ("--clear-history", "Wipe the historical activity ledger"),
+        ]),
+        ("Backup & restore", [
+            ("--backup-opencode [DEST]", "Create a ZIP backup of all opencode state"),
+            ("--restore PATH", "Restore from a ZIP archive or directory"),
+        ]),
+        ("Move / rebase / transfer", [
+            ("--move-project SRC", "Relocate a project (needs --to)"),
+            ("--move-session ID", "Relocate a session (needs --to)"),
+            ("--to PATH", "Destination for moves, rebases, and exports"),
+            ("--metadata-only", "Update DB paths only; do not move files"),
+            ("--rebase-paths", "Bulk rebase path prefixes (needs --from/--to)"),
+            ("--from PATH", "Source prefix for --rebase-paths"),
+            ("--export-session ID", "Export a session bundle to --to <file.ocbox>"),
+            ("--import-session PATH", "Import a session bundle"),
+            ("--to-project ID", "Remap imported session to an existing project"),
+            ("--new-project-path PATH", "Remap imported session to a new project"),
+        ]),
+        ("Configuration & global", [
+            ("--create-config", "Interactively generate ocman.toml"),
+            ("--db PATH", "Path to the opencode SQLite database"),
+            ("--no-project-prompt", "Do not copy compacted file into project prompts"),
+            ("-v, --verbose", "Increase verbosity (-v or -vv)"),
+            ("-V, --version", "Print version and exit"),
+            ("-h, --help", "Show help (verb: 'help [TOPIC]')"),
+        ]),
+    ]
+
+    lines: list[str] = [f"{_h_head(prog, c)} {_h_dim('- full reference', c)}", ""]
+    lines.append(_h_dim("Verbs and flags are equivalent; verbs are shown in parentheses.", c))
+    lines.append("")
+    for title, rows in groups:
+        lines.append(_h_head(title, c))
+        for left, right in rows:
+            lines.append(_help_row(left, right, c, left_width=32))
+        lines.append("")
+    return "\n".join(lines).rstrip() + "\n"
+
+
+def print_help(topic: str | None = None) -> None:
+    """Print the ocman help screen to stdout."""
+    print(build_help(topic))
+
+
 def preprocess_argv(argv: list[str]) -> list[str]:
     """
     Preprocess sys.argv to translate user-friendly commands like:
@@ -4117,6 +4583,38 @@ def preprocess_argv(argv: list[str]) -> list[str]:
         if arg.lower() in ("disk", "du"):
             new_args.extend(["--info", "--by-project"])
             i += 1
+            continue
+
+        # Check for "search QUERY... [in [project] NAME]"
+        if arg.lower() == "search" and i + 1 < len(args_to_process):
+            i += 1  # consume "search"
+            query_words: list[str] = []
+            project_words: list[str] = []
+            flags_after: list[str] = []
+            saw_in = False
+            while i < len(args_to_process):
+                sub_arg = args_to_process[i]
+                if sub_arg.startswith("-"):
+                    flags_after.append(sub_arg)
+                    i += 1
+                    continue
+                if not saw_in and sub_arg.lower() == "in":
+                    saw_in = True
+                    i += 1
+                    # Optionally consume a following "project" keyword.
+                    if i < len(args_to_process) and args_to_process[i].lower() == "project":
+                        i += 1
+                    continue
+                if saw_in:
+                    project_words.append(sub_arg)
+                else:
+                    query_words.append(sub_arg)
+                i += 1
+            if query_words:
+                new_args.extend(["--search", " ".join(query_words)])
+            if project_words:
+                new_args.extend(["--project", " ".join(project_words)])
+            new_args.extend(flags_after)
             continue
             
         # Check for "list"
@@ -4169,36 +4667,32 @@ def parse_args() -> argparse.Namespace:
     import sys
     sys.argv = preprocess_argv(sys.argv)
 
+    class _OcmanHelpAction(argparse.Action):
+        """Route -h/--help through ocman's custom, verb-first help renderer."""
+
+        def __init__(self, option_strings, dest=argparse.SUPPRESS,
+                     default=argparse.SUPPRESS, help=None):
+            super().__init__(
+                option_strings=option_strings, dest=dest, default=default,
+                nargs=0, help=help,
+            )
+
+        def __call__(self, parser, namespace, values, option_string=None):
+            print_help()
+            parser.exit()
+
     parser = argparse.ArgumentParser(
         prog="ocman",
-        description="Export and recover opencode sessions. Generates restart-ready Markdown files and optionally compacts them via an LLM.",
-        epilog="""\
-Short forms:
-  -lp  --list-projects       -ls  --list-sessions    -P   --project
-  -D   --details             -H   --head             -T   --tail
-  -C   --compact             -A   --all-sessions     -sm  --show-models
-  -s   --session             -d   --session-dir      -o   --out
-  -ct  --clean-tmp           -cp  --clean-previous   -k   --keep-temp
-  -ml  --max-lines           -mi  --max-interactions -t   --include-tools
-  -ic  --input-compact       -ir  --input-restart    -it  --input-transcript
-  -oc  --output-compact      -or  --output-restart   -ot  --output-transcript
-
-Examples:
-  %(prog)s -lp                                   List all projects
-  %(prog)s -P 3 -ls                              List sessions in project #3
-  %(prog)s -ls                                   List sessions (auto-detects project from CWD)
-  %(prog)s -s 1 -D                               Show details for session #1
-  %(prog)s -s 1 -T 5                             Show last 5 exchanges
-  %(prog)s -s 1 -H 3 -T 3                        Show first 3 + last 3 exchanges
-  %(prog)s -s SESSION_ID -mi 50                  Recover with max 50 interactions
-  %(prog)s -s SESSION_ID -C                       Recover + compact (interactive model pick)
-  %(prog)s -s SESSION_ID -C uri/its_direct/pt1-qwen3-32b-us   Recover + compact
-  %(prog)s -sm                                   List available LLM models
-  %(prog)s -s 1 --delete                         Delete session #1
-  %(prog)s filter FILE.md --scope "ocman only"    Re-scope a recovery doc to one project/scope
-  %(prog)s filter FILE.md -P ocman -C MODEL       Filter using a project + specific model
-""",
+        description="Administer the opencode database, sessions, and storage.",
+        usage="ocman <command> [options]   (run 'ocman help' for commands)",
+        add_help=False,
         formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+
+    parser.add_argument(
+        "-h", "--help",
+        action=_OcmanHelpAction,
+        help="Show help. Use 'ocman help TOPIC' for a focused section.",
     )
 
     parser.add_argument(
@@ -4365,6 +4859,26 @@ Examples:
         "-A", "--all-sessions",
         action="store_true",
         help="Include subagent/child sessions in --list-sessions (hidden by default).",
+    )
+
+    parser.add_argument(
+        "-S", "--search",
+        type=str,
+        default=None,
+        metavar="QUERY",
+        help=(
+            "Search sessions by content (message/tool text) and title, "
+            "case-insensitive. Scoped to --project or the current directory's "
+            "project if applicable; otherwise searches all projects."
+        ),
+    )
+
+    parser.add_argument(
+        "-L", "--limit",
+        type=int,
+        default=50,
+        metavar="N",
+        help="Maximum number of results for --search (default: %(default)s).",
     )
 
     parser.add_argument(
@@ -4641,7 +5155,15 @@ Examples:
 
     args = parser.parse_args()
     if args.command == "help":
-        parser.print_help()
+        topic = getattr(args, "command_arg", None)
+        if topic and topic not in HELP_TOPICS:
+            print(
+                f"Unknown help topic: {topic!r}. "
+                f"Choose one of: {', '.join(HELP_TOPICS)}.",
+                file=sys.stderr,
+            )
+            sys.exit(2)
+        print_help(topic)
         sys.exit(0)
     return args
 
@@ -8639,6 +9161,43 @@ def main() -> None:
             print(f"       ID: {sid}  Updated: {updated}")
         print()
         print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
+        return
+
+    # Handle --search early.
+    if args.search:
+        results = db_search_sessions(
+            args.search,
+            project_id=_project_id,
+            limit=args.limit,
+        )
+
+        # Filter child sessions unless --all-sessions.
+        if not args.all_sessions:
+            results = [s for s in results if not s["parent_id"]]
+
+        scope = f" in {_project_dir}" if _project_dir else " across all projects"
+        if not results:
+            print(color_bold(f"No sessions match {args.search!r}{scope}."))
+            if not args.all_sessions:
+                print("  (Subagent sessions were excluded. Use --all-sessions to include them.)")
+            return
+
+        print(color_bold(f"Search results for {args.search!r}{scope} ({len(results)} shown):"))
+        print()
+        for idx, s in enumerate(results, start=1):
+            title = s["title"]
+            if len(title) > 60:
+                title = title[:57] + "..."
+            updated = _fmt_ts(s["updated"])
+            project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
+            prefix = "⤷ " if s["parent_id"] else ""
+            where = color_dim(f"({s['match_where']})")
+            print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')} {where}{project_hint}")
+            print(f"       ID: {s['id']}  Updated: {updated}")
+            if s["snippet"]:
+                print(f"       {color_dim(s['snippet'])}")
+        print()
+        print("Use --session <id> with --details, --head, or --tail to view a session.")
         return
 
     # Handle --clean or --clean-orphans
