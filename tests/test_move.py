@@ -244,8 +244,8 @@ def test_cli_move_project_metadata_only(temp_db, monkeypatch):
     conn.commit()
     conn.close()
 
-    # Call main with --move-project and --metadata-only
-    monkeypatch.setattr("sys.argv", ["ocman", "--move-project", "p1", "--to", "/nonexistent/new", "--metadata-only"])
+    # Call main with 'project move ... --metadata-only'
+    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", "/nonexistent/new", "--metadata-only"])
     
     # Run main, should not raise SystemExit with failure code
     try:
@@ -270,7 +270,7 @@ def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
     conn.close()
 
     # Call main without --metadata-only, mock isatty and input
-    monkeypatch.setattr("sys.argv", ["ocman", "--move-project", "p1", "--to", "/nonexistent/new"])
+    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", "/nonexistent/new"])
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda prompt: "yes")
 

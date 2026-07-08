@@ -14,13 +14,17 @@ export/import).
 ## Entry points
 
 - **CLI (`ocman.py`)** (console script `ocman`, defined in `pyproject.toml`). A single,
-  self-contained module. Its `main()` parses arguments (`parse_args`), which first rewrites
-  natural-language commands (`preprocess_argv`, e.g. `ocman list projects` → `--list-projects`)
-  and then dispatches to the requested operation. The positional command accepts
-  `info`, `help`, `ui`, `gui`, and `filter` (`ocman filter <input.md>` re-scopes a recovery
-  document to one project/scope via the LLM); `preprocess_argv` additionally rewrites
-  natural-language commands (`disk`/`du`, `delete project`, `list projects`/`list sessions
-  [in …]`, `show logs`) into their equivalent flags.
+  self-contained module. It uses a noun-based, git/kubectl-style subcommand grammar:
+  `ocman <group> <action> [options]`, where the groups are `session`, `project`, `db`,
+  `backup`, `history`, and `config` (e.g. `ocman session recover ID`, `ocman db clean`).
+  A handful of top-level verbs are kept as aliases (`search`, `info`, `disk`, `logs`,
+  `models`, `compaction-prompt`, `filter`, `ui`/`gui`, `help`). `build_parser()` builds the
+  parser tree; `main()` parses arguments (`parse_args`) and `_normalize()` folds the parsed
+  subcommand namespace back into a flat namespace that `main()` dispatches on. Global options
+  (`--db`, `-v/--verbose`, `-V/--version`, `-h/--help`) work on any subcommand, before or
+  after it. `preprocess_argv` applies the one remaining bit of natural-language sugar: an
+  optional `in [project] NAME` phrase in `session list`, `session search`, and `search`, which
+  reduces to the trailing project `NAME` positional those parsers already accept.
 
   Recovery artifacts share a canonical local-time name `YYYYMMDD-HHMM-<session_id>.<kind>.md`
   (`kind` = transcript/restart/prompt/compacted); `canonical_recovery_name`/`parse_recovery_name`
@@ -74,8 +78,8 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   forceful "this will ... ALL N ..." warning when nothing is kept), and a `confirm_destructive()`
   I/O function that owns the typed-`yes` prompt and honors `dry_run`/`assume_yes`.   New destructive
   operations should build a `DestructivePreview` and call these rather than hand-rolling a prompt.
-  Adopters: `--clean-backups` (full KEEP/DELETE preview), session/project delete, the age-based
-  cleanup/orphan prune, and `--clear-history` (now confirmed; `--force` bypasses). The delete/prune
+  Adopters: `backup clean` (full KEEP/DELETE preview), session/project delete, the age-based
+  cleanup/orphan prune, and `history clear` (now confirmed; `--force` bypasses). The delete/prune
   ops keep printing their own detailed row/file listing and call `confirm_destructive(..., render=False)`
   so the seam owns only the dry-run/irreversible/typed-`yes` tail.
   Note: a `force` flag bypasses only the running-`opencode` process-lock, never the typed-`yes`
@@ -84,9 +88,10 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 
 ## Design principles
 
-- **Intuitive / self-documenting.** Rich `--help` (short forms + worked examples),
-  natural-language commands, `--create-config`, typed confirmations on destructive actions,
-  and actionable output. Users should learn it as they go.
+- **Intuitive / self-documenting.** A noun-based subcommand CLI (`ocman <group> <action>`,
+  git/kubectl-style) with a custom verb-first help renderer (`ocman help` and per-command
+  `-h`) instead of the raw argparse dump, `config create`, typed confirmations on destructive
+  actions, and actionable output. Users should learn it as they go.
 - **Configurable over hardcoded.** Paths, retention, and model selection come from
   `ocman.toml` with CLI overrides; the DB table model is centralized, not special-cased.
 - **KISS.** The CLI is intentionally one dependency-light module (standard library only for

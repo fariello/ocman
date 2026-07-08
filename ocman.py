@@ -4334,57 +4334,58 @@ def build_help(topic: str | None = None) -> str:
         return out
 
     browse = [
-        (f"{prog} list projects", "List all known opencode projects"),
-        (f"{prog} list sessions", "List sessions (auto-detects project from CWD)"),
-        (f"{prog} list sessions in NAME", "List sessions in a named project"),
-        (f'{prog} search "some text"', "Search sessions by content + title (CWD project)"),
+        (f"{prog} project list", "List all known opencode projects"),
+        (f"{prog} session list", "List sessions (auto-detects project from CWD)"),
+        (f"{prog} session list NAME", "List sessions in a named project"),
+        (f'{prog} search "some text"', "Search sessions by content + title"),
         (f'{prog} search "text" in NAME', "Search within one project"),
-        (f"{prog} info", "Show database and storage usage"),
+        (f"{prog} session show ID", "Show session details"),
+        (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
-        (f"{prog} show logs", "Show historical cleanup/recovery activity"),
+        (f"{prog} logs", "Show historical cleanup/recovery activity"),
         (f"{prog} ui", "Launch the interactive terminal dashboard"),
     ]
 
     recover = [
-        (f"{prog} -s SESSION", "Recover a session to restart-ready Markdown"),
-        (f"{prog} -s SESSION -D", "Show session details"),
-        (f"{prog} -s SESSION -T 5", "Preview the last 5 exchanges"),
-        (f"{prog} -s SESSION -H 3 -T 3", "Preview first 3 + last 3 exchanges"),
-        (f"{prog} -s SESSION -mi 50", "Recover, keeping at most 50 interactions"),
-        (f"{prog} -s SESSION -C", "Recover + LLM-compact (pick model interactively)"),
-        (f"{prog} -s SESSION -C MODEL", "Recover + compact with a specific model"),
-        (f"{prog} -sm", "List available LLM models"),
+        (f"{prog} session recover ID", "Recover a session to restart-ready Markdown"),
+        (f"{prog} session show ID -T 5", "Preview the last 5 exchanges"),
+        (f"{prog} session show ID -H 3 -T 3", "Preview first 3 + last 3 exchanges"),
+        (f"{prog} session recover ID -mi 50", "Recover, keeping at most 50 interactions"),
+        (f"{prog} session compact ID", "Recover + LLM-compact (pick model interactively)"),
+        (f"{prog} session compact ID MODEL", "Recover + compact with a specific model"),
+        (f"{prog} models", "List available LLM models"),
         (f"{prog} filter FILE.md --scope TEXT", "Re-scope a recovery doc via the LLM"),
     ]
 
     maintain = [
-        (f"{prog} --clean", "Delete sessions older than the retention window"),
-        (f"{prog} --clean --days 30", "Set the retention window (accepts fractions)"),
-        (f"{prog} --clean-orphans", "Remove orphaned DB records and sidecar diffs"),
-        (f"{prog} --clean-backups --days 30", "Prune old backup archives"),
-        (f"{prog} -s SESSION --delete", "Delete a single session (with confirmation)"),
-        (f"{prog} delete project NAME", "Delete a project and all its sessions"),
-        (f"{prog} --dry-run ...", "Preview any clean/delete without changing data"),
+        (f"{prog} db clean", "Delete sessions older than the retention window"),
+        (f"{prog} db clean --days 30", "Set the retention window (accepts fractions)"),
+        (f"{prog} db clean-orphans", "Remove orphaned DB records and sidecar diffs"),
+        (f"{prog} backup clean --days 30", "Prune old backup archives"),
+        (f"{prog} session delete ID", "Delete a single session (with confirmation)"),
+        (f"{prog} project delete NAME", "Delete a project and all its sessions"),
+        (f"{prog} db clean --dry-run", "Preview any clean/delete without changing data"),
     ]
 
     backup = [
-        (f"{prog} --backup-opencode [DEST]", "Create a ZIP backup of all opencode state"),
-        (f"{prog} --restore PATH", "Restore state from a ZIP archive or directory"),
+        (f"{prog} backup create [DEST]", "Create a ZIP backup of all opencode state"),
+        (f"{prog} backup restore PATH", "Restore state from a ZIP archive or directory"),
+        (f"{prog} backup clean --days 30", "Prune old backup archives"),
     ]
 
     move = [
-        (f"{prog} --move-project SRC --to DST", "Relocate a project (DB + disk)"),
-        (f"{prog} --move-session ID --to DST", "Relocate a single session"),
-        (f"{prog} --rebase-paths --from A --to B", "Bulk rebase path prefixes in the DB"),
-        (f"{prog} --export-session ID --to F.ocbox", "Export a session bundle"),
-        (f"{prog} --import-session F.ocbox", "Import a session bundle"),
+        (f"{prog} project move SRC --to DST", "Relocate a project (DB + disk)"),
+        (f"{prog} session move ID --to DST", "Relocate a single session"),
+        (f"{prog} db rebase --from A --to B", "Bulk rebase path prefixes in the DB"),
+        (f"{prog} session export ID --to F.ocbox", "Export a session bundle"),
+        (f"{prog} session import F.ocbox", "Import a session bundle"),
     ]
 
     config = [
-        (f"{prog} --create-config", "Interactively generate ocman.toml"),
-        (f"{prog} --db PATH ...", "Use a non-default opencode database"),
-        (f"{prog} --clear-history", "Wipe the historical activity ledger"),
-        (f"{prog} info -v", "Add a SQLite integrity check to info"),
+        (f"{prog} config create", "Interactively generate ocman.toml"),
+        (f"{prog} --db PATH <cmd>", "Use a non-default opencode database"),
+        (f"{prog} history clear", "Wipe the historical activity ledger"),
+        (f"{prog} db info -v", "Add a SQLite integrity check to info"),
     ]
 
     # Focused single-topic screens.
@@ -4428,106 +4429,96 @@ def build_help(topic: str | None = None) -> str:
 
     lines.append(_h_head("More", c))
     lines.append(_help_row(f"{prog} help TOPIC", "browse | recover | maintain | backup | move | config", c))
-    lines.append(_help_row(f"{prog} help all", "Full flag reference (every option)", c))
-    lines.append(_help_row(f"{prog} ui", "Interactive terminal dashboard", c))
+    lines.append(_help_row(f"{prog} help all", "Full command reference (every option)", c))
+    lines.append(_help_row(f"{prog} <command> -h", "Options for one command (e.g. 'db clean -h')", c))
     lines.append(_help_row("-v, -vv", "Increase verbosity", c))
     lines.append("")
-    lines.append(_h_dim("Tip: most verbs have a flag equivalent (e.g. 'list sessions' == '--list-sessions').", c))
+    lines.append(_h_dim("Commands are grouped: session, project, db, backup, history, config.", c))
     lines.append(_h_dim(f"See '{prog} help all' for the complete reference.", c))
     return "\n".join(lines)
 
 
 def build_help_reference() -> str:
     """
-    Build the full flag reference (equivalent of the old exhaustive --help), but
-    grouped by task and with the verb equivalents noted. Used by 'ocman help all'.
+    Build the full command reference: every subcommand and its options, grouped
+    by noun. Used by 'ocman help all'.
     """
     c = _help_color_enabled()
     prog = "ocman"
 
     groups: list[tuple[str, list[tuple[str, str]]]] = [
-        ("Browse & search", [
-            ("-lp, --list-projects", "List all projects (verb: 'list projects')"),
-            ("-ls, --list-sessions", "List sessions (verb: 'list sessions')"),
-            ("-P, --project NAME", "Select project by number, ID, path, or substring"),
-            ("-A, --all-sessions", "Include subagent/child sessions in listings"),
-            ("-S, --search QUERY", "Search content + titles (verb: 'search QUERY')"),
-            ("-L, --limit N", "Max --search results (default: 50)"),
-            ("-D, --details", "Show details for --session"),
-            ("-H, --head N", "Show the first N exchanges of --session"),
-            ("-T, --tail N", "Show the last N exchanges of --session"),
-            ("--info", "Database & storage info (verb: 'info')"),
-            ("--by-project", "With info: per-project breakdown (verb: 'disk')"),
-            ("--show-logs", "Historical activity (verb: 'show logs')"),
+        ("session <action>", [
+            ("list [NAME] [-A]", "List sessions (optionally scoped to a project)"),
+            ("search QUERY [NAME] [-L N] [-A]", "Search content + titles"),
+            ("show ID [-D] [-H N] [-T N]", "Details, or first/last N exchanges"),
+            ("recover ID [recovery opts]", "Recover to restart-ready Markdown"),
+            ("compact ID [MODEL] [opts]", "Recover + LLM-compact"),
+            ("delete ID [--dry-run --force]", "Delete a session (recursively)"),
+            ("export ID --to FILE", "Export a session bundle (.ocbox)"),
+            ("import FILE [--to-project ID]", "Import a session bundle"),
+            ("move ID --to DST [--metadata-only]", "Relocate a session"),
         ]),
-        ("Recover & compact", [
-            ("-s, --session ID", "Session to recover (skips interactive pick)"),
-            ("-d, --session-dir DIR", "Working directory the session ran in"),
+        ("project <action>", [
+            ("list", "List all projects"),
+            ("delete NAME [--dry-run --force]", "Delete a project and all its sessions"),
+            ("move SRC --to DST [--metadata-only]", "Relocate a project"),
+        ]),
+        ("db <action>", [
+            ("info [--by-project]", "Database & storage usage (alias: 'ocman info')"),
+            ("clean [NAME] [--days N] [--dry-run]", "Delete sessions older than the window"),
+            ("clean-orphans [--dry-run --force]", "Delete orphaned DB records"),
+            ("rebase --from A --to B", "Bulk rebase path prefixes"),
+        ]),
+        ("backup <action>", [
+            ("create [DEST]", "ZIP backup of all opencode state"),
+            ("restore PATH", "Restore from a ZIP archive or directory"),
+            ("clean [--days N] [--dry-run]", "Prune old backup archives"),
+        ]),
+        ("history / config", [
+            ("history show", "Historical activity (alias: 'ocman logs')"),
+            ("history clear [--force]", "Wipe the historical activity ledger"),
+            ("config create [--force]", "Interactively generate ocman.toml"),
+        ]),
+        ("recovery options (session recover|compact)", [
             ("-o, --out DIR", "Output directory for recovery files"),
-            ("-C, --compact [MODEL]", "LLM-compact; prompts for model if omitted"),
-            ("-sm, --show-models", "List available LLM models"),
+            ("-d, --session-dir DIR", "Working directory the session ran in"),
             ("-mi, --max-interactions N", "Keep at most N user+assistant pairs"),
             ("-ml, --max-lines N", "Keep at most N transcript lines"),
             ("-t, --include-tools", "Include tool/function messages"),
             ("--all-roles", "Write all roles, not just user/assistant"),
-            ("-ic, --input-compact FILE", "Prepend a prior compacted file (repeatable)"),
-            ("-ir, --input-restart FILE", "Prepend a prior restart file (repeatable)"),
-            ("-it, --input-transcript FILE", "Prepend a prior transcript (repeatable)"),
-            ("-oc, --output-compact FILE", "Output path for the compact prompt"),
-            ("-or, --output-restart FILE", "Output path for the restart file"),
-            ("-ot, --output-transcript FILE", "Output path for the transcript"),
+            ("-ic/-ir/-it FILE", "Prepend prior compact/restart/transcript (repeatable)"),
+            ("-oc/-or/-ot FILE", "Explicit output paths for compact/restart/transcript"),
             ("-k, --keep-temp", "Keep the raw exported JSON for debugging"),
             ("-cp, --clean-previous", "Remove prior recovery outputs first"),
             ("-ct, --clean-tmp", "Prune leftover temp export files from /tmp"),
-            ("--show-compaction-prompt", "Print the compaction prompt template"),
-            ("filter FILE --scope TEXT", "Re-scope a recovery doc via the LLM"),
-            ("--scope TEXT", "Scope of content to keep (with 'filter')"),
-            ("--allow-secrets", "Bypass the pre-egress secret/PII scan"),
-        ]),
-        ("Maintain & delete", [
-            ("--clean", "Delete sessions older than --days"),
-            ("--days N", "Retention window in days (fractions ok; default: 5)"),
-            ("--clean-orphans", "Delete orphaned DB records"),
-            ("--clean-backups", "Prune old backups (pair with --days)"),
-            ("--delete", "Delete --session (verb: '-s ID --delete')"),
-            ("--delete-project", "Delete --project (verb: 'delete project NAME')"),
-            ("--dry-run", "Preview clean/delete without changing data"),
-            ("--force", "Bypass process-lock checks / size caps"),
-            ("--clear-history", "Wipe the historical activity ledger"),
-        ]),
-        ("Backup & restore", [
-            ("--backup-opencode [DEST]", "Create a ZIP backup of all opencode state"),
-            ("--restore PATH", "Restore from a ZIP archive or directory"),
-        ]),
-        ("Move / rebase / transfer", [
-            ("--move-project SRC", "Relocate a project (needs --to)"),
-            ("--move-session ID", "Relocate a session (needs --to)"),
-            ("--to PATH", "Destination for moves, rebases, and exports"),
-            ("--metadata-only", "Update DB paths only; do not move files"),
-            ("--rebase-paths", "Bulk rebase path prefixes (needs --from/--to)"),
-            ("--from PATH", "Source prefix for --rebase-paths"),
-            ("--export-session ID", "Export a session bundle to --to <file.ocbox>"),
-            ("--import-session PATH", "Import a session bundle"),
-            ("--to-project ID", "Remap imported session to an existing project"),
-            ("--new-project-path PATH", "Remap imported session to a new project"),
-        ]),
-        ("Configuration & global", [
-            ("--create-config", "Interactively generate ocman.toml"),
-            ("--db PATH", "Path to the opencode SQLite database"),
             ("--no-project-prompt", "Do not copy compacted file into project prompts"),
+            ("--allow-secrets", "Bypass the pre-egress secret/PII scan (compact)"),
+        ]),
+        ("other verbs", [
+            ("search QUERY [in NAME]", "Alias of 'session search'"),
+            ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
+            ("logs", "Alias of 'history show'"),
+            ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
+            ("models", "List available LLM models"),
+            ("compaction-prompt", "Print the compaction prompt template"),
+            ("ui / gui", "Launch the interactive terminal dashboard"),
+            ("help [TOPIC]", "This help; TOPIC focuses one section"),
+        ]),
+        ("global options (any command)", [
+            ("--db PATH", "Path to the opencode SQLite database"),
             ("-v, --verbose", "Increase verbosity (-v or -vv)"),
             ("-V, --version", "Print version and exit"),
-            ("-h, --help", "Show help (verb: 'help [TOPIC]')"),
+            ("-h, --help", "Show help"),
         ]),
     ]
 
-    lines: list[str] = [f"{_h_head(prog, c)} {_h_dim('- full reference', c)}", ""]
-    lines.append(_h_dim("Verbs and flags are equivalent; verbs are shown in parentheses.", c))
+    lines: list[str] = [f"{_h_head(prog, c)} {_h_dim('- full command reference', c)}", ""]
+    lines.append(_h_dim("Usage: ocman <group> <action> [options]. Groups can be run with -h.", c))
     lines.append("")
     for title, rows in groups:
         lines.append(_h_head(title, c))
         for left, right in rows:
-            lines.append(_help_row(left, right, c, left_width=32))
+            lines.append(_help_row(left, right, c, left_width=36))
         lines.append("")
     return "\n".join(lines).rstrip() + "\n"
 
@@ -4539,633 +4530,660 @@ def print_help(topic: str | None = None) -> None:
 
 def preprocess_argv(argv: list[str]) -> list[str]:
     """
-    Preprocess sys.argv to translate user-friendly commands like:
-      - list projects / list porjects -> --list-projects
-      - list sessions -> --list-sessions
-      - list sessions in project XXXX -> --list-sessions --project XXXX
-      - list sessions in XXXX -> --list-sessions --project XXXX
-    into standard CLI flags.
+    Light natural-language sugar on top of the subcommand grammar.
+
+    The only rewrite is the optional "in [project]" phrasing so that
+    "ocman session list in NAME", "ocman session search TEXT in NAME", and
+    "ocman search TEXT in project NAME" all reduce to the positional NAME that
+    the parsers expect. A lone "in" (and an immediately following "project"
+    keyword) is dropped; the words after it are collapsed into a single NAME
+    token so multi-word project names survive without quoting.
+
+    Everything else (list/search/delete/info/disk/logs/...) is a real
+    subcommand, so no other rewriting happens here.
     """
-    new_args = [argv[0]]
-    args_to_process = argv[1:]
+    if len(argv) < 2:
+        return list(argv)
 
+    prog, rest = argv[0], argv[1:]
+
+    # Only the browse/search/clean argument lists use a project NAME positional.
+    sugar_groups = {"session", "search", "db", "list", "sessions"}
+    if rest[0].lower() not in sugar_groups:
+        return list(argv)
+
+    out: list[str] = []
     i = 0
-    while i < len(args_to_process):
-        arg = args_to_process[i]
-        
-        # Check for "delete project"
-        if arg.lower() == "delete" and i + 1 < len(args_to_process) and args_to_process[i + 1].lower() == "project":
-            new_args.append("--delete-project")
-            i += 2
-            # Gather subsequent non-flag words as project identifier
-            project_words = []
-            flags_after = []
-            while i < len(args_to_process):
-                sub_arg = args_to_process[i]
-                if sub_arg.startswith("-"):
-                    flags_after.append(sub_arg)
+    n = len(rest)
+    while i < n:
+        tok = rest[i]
+        if tok.lower() == "in" and i + 1 < n and not rest[i + 1].startswith("-"):
+            i += 1  # drop "in"
+            if i < n and rest[i].lower() == "project":
+                i += 1  # drop optional "project"
+            # Collapse the remaining non-flag words into one NAME token.
+            name_words: list[str] = []
+            trailing_flags: list[str] = []
+            while i < n:
+                w = rest[i]
+                if w.startswith("-"):
+                    trailing_flags.append(w)
                 else:
-                    project_words.append(sub_arg)
+                    name_words.append(w)
                 i += 1
-            if project_words:
-                project_spec = " ".join(project_words)
-                new_args.extend(["--project", project_spec])
-            new_args.extend(flags_after)
-            continue
-
-        # Check for "show logs"
-        if arg.lower() == "show" and i + 1 < len(args_to_process) and args_to_process[i + 1].lower() == "logs":
-            new_args.append("--show-logs")
-            i += 2
-            continue
-
-        # Check for "disk" / "du" -> info with per-project breakdown
-        if arg.lower() in ("disk", "du"):
-            new_args.extend(["--info", "--by-project"])
-            i += 1
-            continue
-
-        # Check for "search QUERY... [in [project] NAME]"
-        if arg.lower() == "search" and i + 1 < len(args_to_process):
-            i += 1  # consume "search"
-            query_words: list[str] = []
-            project_words: list[str] = []
-            flags_after: list[str] = []
-            saw_in = False
-            while i < len(args_to_process):
-                sub_arg = args_to_process[i]
-                if sub_arg.startswith("-"):
-                    flags_after.append(sub_arg)
-                    i += 1
-                    continue
-                if not saw_in and sub_arg.lower() == "in":
-                    saw_in = True
-                    i += 1
-                    # Optionally consume a following "project" keyword.
-                    if i < len(args_to_process) and args_to_process[i].lower() == "project":
-                        i += 1
-                    continue
-                if saw_in:
-                    project_words.append(sub_arg)
-                else:
-                    query_words.append(sub_arg)
-                i += 1
-            if query_words:
-                new_args.extend(["--search", " ".join(query_words)])
-            if project_words:
-                new_args.extend(["--project", " ".join(project_words)])
-            new_args.extend(flags_after)
-            continue
-            
-        # Check for "list"
-        if arg.lower() == "list" and i + 1 < len(args_to_process):
-            next_arg = args_to_process[i + 1].lower()
-            if next_arg in ("projects", "porjects"):
-                new_args.append("--list-projects")
-                i += 2
-                continue
-            elif next_arg == "sessions":
-                new_args.append("--list-sessions")
-                i += 2
-                
-                # Check if followed by "in [project] XXXX"
-                if i < len(args_to_process) and args_to_process[i].lower() == "in":
-                    i += 1  # consume "in"
-                    if i < len(args_to_process) and args_to_process[i].lower() == "project":
-                        i += 1  # consume "project"
-                    
-                    # Gather all subsequent non-flag arguments as the project specifier
-                    project_words = []
-                    flags_after = []
-                    while i < len(args_to_process):
-                        sub_arg = args_to_process[i]
-                        if sub_arg.startswith("-"):
-                            flags_after.append(sub_arg)
-                        else:
-                            project_words.append(sub_arg)
-                        i += 1
-                    
-                    if project_words:
-                        project_spec = " ".join(project_words)
-                        new_args.extend(["--project", project_spec])
-                    new_args.extend(flags_after)
-                continue
-
-        new_args.append(arg)
+            if name_words:
+                out.append(" ".join(name_words))
+            out.extend(trailing_flags)
+            break
+        out.append(tok)
         i += 1
 
-    return new_args
+    return [prog, *out]
 
 
-def parse_args() -> argparse.Namespace:
+def _legacy_defaults(config: dict) -> dict:
     """
-    Parse command-line arguments.
-
-    Returns:
-        Parsed arguments.
+    Every attribute the main() dispatch reads, at its default value. The
+    subcommand parsers below populate a small sub-namespace; _normalize() then
+    overlays those onto a copy of these defaults so main() keeps working against
+    a single, stable namespace shape.
     """
-    import sys
-    sys.argv = preprocess_argv(sys.argv)
+    return {
+        # session / recovery
+        "session": None,
+        "session_dir": None,
+        "out": Path(config["default_out_dir"]),
+        "keep_temp": config["keep_temp"],
+        "clean_tmp": False,
+        "clean_previous": False,
+        "include_tools": config["include_tools"],
+        "all_roles": config["all_roles"],
+        "max_lines": None,
+        "max_interactions": None,
+        "input_compact": [],
+        "input_restart": [],
+        "input_transcript": [],
+        "output_compact": None,
+        "output_restart": None,
+        "output_transcript": None,
+        "compact": None,
+        "use_model": None,
+        "no_project_prompt": False,
+        "allow_secrets": False,
+        # browse / search
+        "list_projects": False,
+        "project": None,
+        "list_sessions": False,
+        "all_sessions": False,
+        "search": None,
+        "limit": 50,
+        "details": False,
+        "head": None,
+        "tail": None,
+        "info": False,
+        "by_project": False,
+        "show_logs": False,
+        # maintain / delete
+        "delete": False,
+        "delete_project": False,
+        "clean": False,
+        "days": config["default_retention_days"],
+        "clean_backups": False,
+        "clean_orphans": False,
+        "dry_run": False,
+        "force": False,
+        "clear_history": False,
+        # models / prompt
+        "show_models": False,
+        "show_compaction_prompt": False,
+        # move / rebase / transfer
+        "move_project": None,
+        "move_session": None,
+        "to": None,
+        "rebase_paths": False,
+        "from_prefix": None,
+        "metadata_only": False,
+        "export_session": None,
+        "import_session": None,
+        "to_project": None,
+        "new_project_path": None,
+        # backup / restore / config
+        "backup_opencode": None,
+        "restore": None,
+        "create_config": False,
+        # filter
+        "scope": None,
+        # global
+        "db": OPENCODE_DB_PATH,
+        "verbose": 0,
+        # positional command surface (set by _normalize for ui/gui/info/filter/help)
+        "command": None,
+        "command_arg": None,
+    }
 
-    class _OcmanHelpAction(argparse.Action):
-        """Route -h/--help through ocman's custom, verb-first help renderer."""
 
-        def __init__(self, option_strings, dest=argparse.SUPPRESS,
-                     default=argparse.SUPPRESS, help=None):
-            super().__init__(
-                option_strings=option_strings, dest=dest, default=default,
-                nargs=0, help=help,
-            )
+class _OcmanHelpAction(argparse.Action):
+    """Route -h/--help through ocman's custom, verb-first help renderer."""
 
-        def __call__(self, parser, namespace, values, option_string=None):
-            print_help()
-            parser.exit()
+    def __init__(self, option_strings, dest=argparse.SUPPRESS,
+                 default=argparse.SUPPRESS, help=None):
+        super().__init__(
+            option_strings=option_strings, dest=dest, default=default,
+            nargs=0, help=help,
+        )
 
+    def __call__(self, parser, namespace, values, option_string=None):
+        # A subparser's -h shows that subcommand's usage; the root shows ours.
+        topic = getattr(parser, "_ocman_help_topic", None)
+        print_help(topic)
+        parser.exit()
+
+
+def _add_global_opts(p: argparse.ArgumentParser, is_root: bool = False) -> None:
+    """
+    Options available on every (sub)parser.
+
+    On subparsers the defaults are SUPPRESS so that a value supplied before the
+    subcommand (on the root parser) is not clobbered by the subparser's own
+    default when the option is absent. parse_args() falls back to the legacy
+    defaults for anything left unset.
+    """
+    default_db = None if is_root else argparse.SUPPRESS
+    default_verbose = 0 if is_root else argparse.SUPPRESS
+    p.add_argument("-h", "--help", action=_OcmanHelpAction,
+                   help="Show help for this command.")
+    p.add_argument("--db", type=Path, default=default_db,
+                   help="Path to the opencode SQLite database.")
+    p.add_argument("-v", "--verbose", action="count", default=default_verbose,
+                   help="Increase verbosity (-v or -vv).")
+
+
+def _add_recovery_opts(p: argparse.ArgumentParser) -> None:
+    """Recovery/compaction tuning options shared by 'session recover|compact'."""
+    p.add_argument("-o", "--out", type=Path, default=None,
+                   help="Output directory for recovery files.")
+    p.add_argument("-d", "--session-dir", type=Path, default=None,
+                   help="Directory the session originally ran in.")
+    p.add_argument("-mi", "--max-interactions", type=int, default=None, metavar="N",
+                   help="Keep at most N user+assistant pairs.")
+    p.add_argument("-ml", "--max-lines", type=int, default=None, metavar="N",
+                   help="Keep at most N transcript lines.")
+    p.add_argument("-t", "--include-tools",
+                   action=argparse.BooleanOptionalAction, default=None,
+                   help="Include tool/function messages.")
+    p.add_argument("--all-roles",
+                   action=argparse.BooleanOptionalAction, default=None,
+                   help="Write all roles, not just user/assistant.")
+    p.add_argument("-ic", "--input-compact", type=Path, action="append", default=None,
+                   metavar="FILE", help="Prepend a prior compacted file (repeatable).")
+    p.add_argument("-ir", "--input-restart", type=Path, action="append", default=None,
+                   metavar="FILE", help="Prepend a prior restart file (repeatable).")
+    p.add_argument("-it", "--input-transcript", type=Path, action="append", default=None,
+                   metavar="FILE", help="Prepend a prior transcript (repeatable).")
+    p.add_argument("-oc", "--output-compact", type=Path, default=None, metavar="FILE",
+                   help="Output path for the compact prompt.")
+    p.add_argument("-or", "--output-restart", type=Path, default=None, metavar="FILE",
+                   help="Output path for the restart file.")
+    p.add_argument("-ot", "--output-transcript", type=Path, default=None, metavar="FILE",
+                   help="Output path for the transcript.")
+    p.add_argument("-k", "--keep-temp",
+                   action=argparse.BooleanOptionalAction, default=None,
+                   help="Keep the raw exported JSON for debugging.")
+    p.add_argument("-cp", "--clean-previous", action="store_true", default=False,
+                   help="Remove prior recovery outputs first.")
+    p.add_argument("-ct", "--clean-tmp", action="store_true", default=False,
+                   help="Prune leftover temp export files from /tmp.")
+
+
+def build_parser() -> argparse.ArgumentParser:
+    """
+    Build the noun-based subcommand parser tree.
+
+    ocman uses git/kubectl-style subcommands: `ocman <group> <action> [options]`
+    (e.g. `ocman session list`, `ocman db clean`). A handful of top-level verbs
+    (`search`, `info`, `disk`, `logs`, `filter`, `models`, `ui`, `help`) are kept
+    as convenient aliases. parse_args() normalizes the result back into the flat
+    namespace that main() dispatches on.
+    """
     parser = argparse.ArgumentParser(
         prog="ocman",
         description="Administer the opencode database, sessions, and storage.",
         usage="ocman <command> [options]   (run 'ocman help' for commands)",
         add_help=False,
-        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    _add_global_opts(parser, is_root=True)
+    parser.add_argument("-V", "--version", action="version",
+                        version=f"%(prog)s {__version__}",
+                        help="Show version and exit.")
 
-    parser.add_argument(
-        "-h", "--help",
-        action=_OcmanHelpAction,
-        help="Show help. Use 'ocman help TOPIC' for a focused section.",
-    )
+    sub = parser.add_subparsers(dest="_group", metavar="<command>")
 
-    parser.add_argument(
-        "-s", "--session",
-        help="Known opencode session ID. Skips interactive selection.",
-    )
+    def new_sub(name, **kw):
+        sp = sub.add_parser(name, add_help=False, **kw)
+        _add_global_opts(sp)
+        return sp
 
-    parser.add_argument(
-        "-d", "--session-dir",
-        type=Path,
-        default=None,
-        help=(
-            "Directory where the opencode session was originally run. "
-            "opencode commands will be executed with this as the working directory. "
-            "Defaults to the resolved project directory."
-        ),
-    )
+    def new_action(group_parser, action_sub, name, **kw):
+        sp = action_sub.add_parser(name, add_help=False, **kw)
+        _add_global_opts(sp)
+        return sp
+
+    # ---- session -----------------------------------------------------------
+    p_session = new_sub("session", help="Work with sessions.")
+    s_sub = p_session.add_subparsers(dest="_action", metavar="<action>")
+
+    sp = new_action(p_session, s_sub, "list", help="List sessions.")
+    sp.add_argument("name", nargs="?", default=None,
+                    help="Project name/number to scope to (default: CWD project).")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions.")
+
+    sp = new_action(p_session, s_sub, "search", help="Search session content and titles.")
+    sp.add_argument("query", help="Text to search for.")
+    sp.add_argument("name", nargs="?", default=None,
+                    help="Project name/number to scope to.")
+    sp.add_argument("-L", "--limit", type=int, default=50, metavar="N",
+                    help="Max results (default: 50).")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions.")
+
+    sp = new_action(p_session, s_sub, "show", help="Show session details or a transcript preview.")
+    sp.add_argument("session", help="Session ID, list number, or title substring.")
+    sp.add_argument("-D", "--details", action="store_true", help="Show session details.")
+    sp.add_argument("-H", "--head", type=int, default=None, metavar="N",
+                    help="Show the first N exchanges.")
+    sp.add_argument("-T", "--tail", type=int, default=None, metavar="N",
+                    help="Show the last N exchanges.")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions when resolving.")
+
+    sp = new_action(p_session, s_sub, "recover", help="Recover a session to restart-ready Markdown.")
+    sp.add_argument("session", nargs="?", default=None,
+                    help="Session to recover (omit to pick interactively).")
+    _add_recovery_opts(sp)
+
+    sp = new_action(p_session, s_sub, "compact", help="Recover and LLM-compact a session.")
+    sp.add_argument("session", nargs="?", default=None, help="Session to compact.")
+    sp.add_argument("model", nargs="?", default="",
+                    help="Model to use (omit to pick interactively).")
+    _add_recovery_opts(sp)
+    sp.add_argument("--no-project-prompt", action="store_true",
+                    help="Do not copy the compacted file into the project's prompts.")
+    sp.add_argument("--allow-secrets", action="store_true",
+                    help="Bypass the pre-egress secret/PII scan.")
+    sp.add_argument("--force", action="store_true",
+                    help="Override the input size cap.")
+
+    sp = new_action(p_session, s_sub, "delete", help="Delete a session (recursively).")
+    sp.add_argument("session", help="Session to delete.")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagents when resolving.")
+    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+
+    sp = new_action(p_session, s_sub, "export", help="Export a session bundle (.ocbox).")
+    sp.add_argument("session", help="Session to export.")
+    sp.add_argument("--to", required=True, metavar="FILE",
+                    help="Destination .ocbox file.")
+
+    sp = new_action(p_session, s_sub, "import", help="Import a session bundle (.ocbox).")
+    sp.add_argument("path", help="The .ocbox file to import.")
+    sp.add_argument("--to-project", default=None, metavar="ID",
+                    help="Remap to an existing project ID.")
+    sp.add_argument("--new-project-path", default=None, metavar="PATH",
+                    help="Remap to a newly created project worktree.")
+
+    sp = new_action(p_session, s_sub, "move", help="Relocate a session.")
+    sp.add_argument("session", help="Session ID to move.")
+    sp.add_argument("--to", required=True, metavar="DST", help="Destination path.")
+    sp.add_argument("--metadata-only", action="store_true",
+                    help="Update DB paths only; do not move files.")
+
+    # ---- project -----------------------------------------------------------
+    p_project = new_sub("project", help="Work with projects.")
+    pr_sub = p_project.add_subparsers(dest="_action", metavar="<action>")
+
+    new_action(p_project, pr_sub, "list", help="List all projects.")
+
+    sp = new_action(p_project, pr_sub, "delete", help="Delete a project and all its sessions.")
+    sp.add_argument("name", help="Project name, number, ID, or path.")
+    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+
+    sp = new_action(p_project, pr_sub, "move", help="Relocate a project.")
+    sp.add_argument("src", help="Project ID or current path.")
+    sp.add_argument("--to", required=True, metavar="DST", help="Destination path.")
+    sp.add_argument("--metadata-only", action="store_true",
+                    help="Update DB paths only; do not move files.")
+
+    # ---- db ----------------------------------------------------------------
+    p_db = new_sub("db", help="Database info and maintenance.")
+    db_sub = p_db.add_subparsers(dest="_action", metavar="<action>")
+
+    sp = new_action(p_db, db_sub, "info", help="Show database and storage usage.")
+    sp.add_argument("--by-project", action="store_true",
+                    help="Add a per-project on-disk breakdown.")
+
+    sp = new_action(p_db, db_sub, "clean", help="Delete sessions older than the retention window.")
+    sp.add_argument("name", nargs="?", default=None,
+                    help="Project to scope the cleanup to.")
+    sp.add_argument("--days", type=float, default=None, metavar="N",
+                    help="Retention window in days (fractions ok).")
+    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+
+    sp = new_action(p_db, db_sub, "clean-orphans", help="Delete orphaned DB records.")
+    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+
+    sp = new_action(p_db, db_sub, "rebase", help="Bulk rebase path prefixes in the database.")
+    sp.add_argument("--from", dest="from_prefix", required=True, metavar="PREFIX",
+                    help="Source path prefix.")
+    sp.add_argument("--to", required=True, metavar="PREFIX", help="Destination path prefix.")
+
+    # ---- backup ------------------------------------------------------------
+    p_backup = new_sub("backup", help="Backup and restore opencode state.")
+    b_sub = p_backup.add_subparsers(dest="_action", metavar="<action>")
+
+    sp = new_action(p_backup, b_sub, "create", help="Create a ZIP backup of all opencode state.")
+    sp.add_argument("dest", nargs="?", default="",
+                    help="Destination directory or file (default: config).")
+
+    sp = new_action(p_backup, b_sub, "restore", help="Restore from a ZIP archive or directory.")
+    sp.add_argument("path", help="Archive or directory to restore from.")
+
+    sp = new_action(p_backup, b_sub, "clean", help="Prune old backup archives.")
+    sp.add_argument("--days", type=float, default=None, metavar="N",
+                    help="Retention window in days.")
+    sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
+
+    # ---- history / config --------------------------------------------------
+    p_history = new_sub("history", help="Historical activity ledger.")
+    h_sub = p_history.add_subparsers(dest="_action", metavar="<action>")
+    new_action(p_history, h_sub, "show", help="Show historical activity (alias: 'ocman logs').")
+    sp = new_action(p_history, h_sub, "clear", help="Wipe the historical activity ledger.")
+    sp.add_argument("--force", action="store_true", help="Skip the confirmation prompt.")
+
+    p_config = new_sub("config", help="Configuration file management.")
+    cfg_sub = p_config.add_subparsers(dest="_action", metavar="<action>")
+    sp = new_action(p_config, cfg_sub, "create", help="Interactively generate ocman.toml.")
+    sp.add_argument("--force", action="store_true", help="Overwrite an existing config.")
+
+    # ---- top-level verbs / aliases ----------------------------------------
+    sp = new_sub("search", help="Search session content and titles (alias of 'session search').")
+    sp.add_argument("query", help="Text to search for.")
+    sp.add_argument("name", nargs="?", default=None, help="Project to scope to.")
+    sp.add_argument("-L", "--limit", type=int, default=50, metavar="N",
+                    help="Max results (default: 50).")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions.")
+
+    sp = new_sub("info", help="Show database and storage usage (alias of 'db info').")
+    sp.add_argument("--by-project", action="store_true",
+                    help="Add a per-project on-disk breakdown.")
+
+    new_sub("disk", help="Per-project on-disk usage (alias of 'db info --by-project').")
+
+    new_sub("logs", help="Show historical activity (alias of 'history show').")
+
+    sp = new_sub("filter", help="Re-scope a recovery/compacted document via the LLM.")
+    sp.add_argument("file", help="Input Markdown file.")
+    sp.add_argument("-P", "--project", default=None, help="Project to scope to.")
+    sp.add_argument("--scope", default=None, metavar="TEXT",
+                    help="Free-text scope of content to keep.")
+    sp.add_argument("-C", "--compact", dest="model", nargs="?", const="", default="",
+                    metavar="MODEL", help="Model to use.")
+    sp.add_argument("-oc", "--output-compact", type=Path, default=None, metavar="FILE",
+                    help="Output path.")
+    sp.add_argument("--allow-secrets", action="store_true",
+                    help="Bypass the pre-egress secret/PII scan.")
+    sp.add_argument("--force", action="store_true", help="Override the input size cap.")
+
+    new_sub("models", help="List available LLM models (was --show-models).")
+    new_sub("compaction-prompt", help="Print the compaction prompt template.")
+    new_sub("ui", help="Launch the interactive terminal dashboard.")
+    new_sub("gui", help="Alias of 'ui'.")
+
+    sp = new_sub("help", help="Show help. Optionally pass a TOPIC.")
+    sp.add_argument("topic", nargs="?", default=None,
+                    help="One of: " + ", ".join(HELP_TOPICS))
+
+    return parser
+
+
+def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
+    """
+    Fold a parsed subcommand namespace into the flat legacy namespace that
+    main() dispatches on. Only attributes actually supplied by the chosen
+    subcommand are overlaid; everything else keeps its default.
+    """
+    out = _legacy_defaults(config)
+
+    # Global options are on whichever (sub)parser saw them.
+    out["verbose"] = getattr(ns, "verbose", 0) or 0
+    db = getattr(ns, "db", None)
+    if db is not None:
+        out["db"] = db
+
+    group = getattr(ns, "_group", None)
+    action = getattr(ns, "_action", None)
+    g = lambda k, d=None: getattr(ns, k, d)
+
+    def carry(*names):
+        for n in names:
+            v = getattr(ns, n, None)
+            if v is not None:
+                out[n] = v
+
+    def carry_recovery():
+        carry("session_dir", "max_lines", "max_interactions",
+              "output_compact", "output_restart", "output_transcript")
+        if g("out") is not None:
+            out["out"] = g("out")
+        if g("include_tools") is not None:
+            out["include_tools"] = g("include_tools")
+        if g("all_roles") is not None:
+            out["all_roles"] = g("all_roles")
+        if g("keep_temp") is not None:
+            out["keep_temp"] = g("keep_temp")
+        for n in ("input_compact", "input_restart", "input_transcript"):
+            if getattr(ns, n, None):
+                out[n] = getattr(ns, n)
+        out["clean_previous"] = bool(g("clean_previous", False))
+        out["clean_tmp"] = bool(g("clean_tmp", False))
+
+    if group in (None,) and action is None:
+        # No subcommand: behave like the old no-arg default (list projects
+        # via the no-project-context path in main()).
+        return argparse.Namespace(**out)
+
+    if group == "session":
+        if action == "list":
+            out["list_sessions"] = True
+            out["project"] = g("name")
+            out["all_sessions"] = bool(g("all_sessions", False))
+        elif action == "search":
+            out["search"] = g("query")
+            out["project"] = g("name")
+            out["limit"] = g("limit", 50)
+            out["all_sessions"] = bool(g("all_sessions", False))
+        elif action == "show":
+            out["session"] = g("session")
+            out["details"] = bool(g("details", False))
+            out["head"] = g("head")
+            out["tail"] = g("tail")
+            out["all_sessions"] = bool(g("all_sessions", False))
+            if not (out["details"] or out["head"] is not None or out["tail"] is not None):
+                out["details"] = True  # bare 'session show ID' -> details
+        elif action == "recover":
+            out["session"] = g("session")
+            carry_recovery()
+        elif action == "compact":
+            out["session"] = g("session")
+            model = g("model", "")
+            out["compact"] = model if model else ""
+            out["no_project_prompt"] = bool(g("no_project_prompt", False))
+            out["allow_secrets"] = bool(g("allow_secrets", False))
+            out["force"] = bool(g("force", False))
+            carry_recovery()
+        elif action == "delete":
+            out["delete"] = True
+            out["session"] = g("session")
+            out["all_sessions"] = bool(g("all_sessions", False))
+            out["dry_run"] = bool(g("dry_run", False))
+            out["force"] = bool(g("force", False))
+        elif action == "export":
+            out["export_session"] = g("session")
+            out["to"] = g("to")
+        elif action == "import":
+            out["import_session"] = g("path")
+            out["to_project"] = g("to_project")
+            out["new_project_path"] = g("new_project_path")
+        elif action == "move":
+            out["move_session"] = g("session")
+            out["to"] = g("to")
+            out["metadata_only"] = bool(g("metadata_only", False))
+        else:
+            _no_action_error("session")
+
+    elif group == "project":
+        if action == "list":
+            out["list_projects"] = True
+        elif action == "delete":
+            out["delete_project"] = True
+            out["project"] = g("name")
+            out["dry_run"] = bool(g("dry_run", False))
+            out["force"] = bool(g("force", False))
+        elif action == "move":
+            out["move_project"] = g("src")
+            out["to"] = g("to")
+            out["metadata_only"] = bool(g("metadata_only", False))
+        else:
+            _no_action_error("project")
+
+    elif group == "db":
+        if action == "info":
+            out["info"] = True
+            out["by_project"] = bool(g("by_project", False))
+        elif action == "clean":
+            out["clean"] = True
+            out["project"] = g("name")
+            if g("days") is not None:
+                out["days"] = g("days")
+            out["dry_run"] = bool(g("dry_run", False))
+            out["force"] = bool(g("force", False))
+        elif action == "clean-orphans":
+            out["clean_orphans"] = True
+            out["dry_run"] = bool(g("dry_run", False))
+            out["force"] = bool(g("force", False))
+        elif action == "rebase":
+            out["rebase_paths"] = True
+            out["from_prefix"] = g("from_prefix")
+            out["to"] = g("to")
+        else:
+            _no_action_error("db")
+
+    elif group == "backup":
+        if action == "create":
+            out["backup_opencode"] = g("dest", "")
+        elif action == "restore":
+            out["restore"] = g("path")
+        elif action == "clean":
+            out["clean_backups"] = True
+            if g("days") is not None:
+                out["days"] = g("days")
+            out["dry_run"] = bool(g("dry_run", False))
+        else:
+            _no_action_error("backup")
+
+    elif group == "history":
+        if action == "show":
+            out["show_logs"] = True
+        elif action == "clear":
+            out["clear_history"] = True
+            out["force"] = bool(g("force", False))
+        else:
+            _no_action_error("history")
+
+    elif group == "config":
+        if action == "create":
+            out["create_config"] = True
+            out["force"] = bool(g("force", False))
+        else:
+            _no_action_error("config")
+
+    elif group == "search":
+        out["search"] = g("query")
+        out["project"] = g("name")
+        out["limit"] = g("limit", 50)
+        out["all_sessions"] = bool(g("all_sessions", False))
+
+    elif group == "info":
+        out["info"] = True
+        out["by_project"] = bool(g("by_project", False))
+
+    elif group == "disk":
+        out["info"] = True
+        out["by_project"] = True
+
+    elif group == "logs":
+        out["show_logs"] = True
+
+    elif group == "filter":
+        out["command"] = "filter"
+        out["command_arg"] = g("file")
+        out["project"] = g("project")
+        out["scope"] = g("scope")
+        model = g("model", "")
+        out["compact"] = model if model else None
+        out["output_compact"] = g("output_compact")
+        out["allow_secrets"] = bool(g("allow_secrets", False))
+        out["force"] = bool(g("force", False))
+
+    elif group == "models":
+        out["show_models"] = True
+
+    elif group == "compaction-prompt":
+        out["show_compaction_prompt"] = True
+
+    elif group in ("ui", "gui"):
+        out["command"] = group
+
+    return argparse.Namespace(**out)
+
+
+def _no_action_error(group: str) -> None:
+    """A group was given without a required sub-action."""
+    print(f"ocman: '{group}' needs an action. Try 'ocman help' or 'ocman {group} -h'.",
+          file=sys.stderr)
+    sys.exit(2)
+
+
+def parse_args() -> argparse.Namespace:
+    """
+    Parse command-line arguments into the flat namespace main() dispatches on.
+
+    ocman's public CLI is noun-based subcommands (see build_parser); this
+    function parses them and normalizes the result via _normalize().
+    """
+    import sys
+    sys.argv = preprocess_argv(sys.argv)
 
     config = load_ocman_config()
+    parser = build_parser()
+    ns = parser.parse_args()
 
-    parser.add_argument(
-        "-o", "--out",
-        type=Path,
-        default=Path(config["default_out_dir"]),
-        help="Output directory (default: %(default)s).",
-    )
-
-    parser.add_argument(
-        "-k", "--keep-temp",
-        action=argparse.BooleanOptionalAction if sys.version_info >= (3, 9) else "store_true",
-        default=config["keep_temp"],
-        help="Keep the temporary exported JSON file for debugging.",
-    )
-
-    parser.add_argument(
-        "-ct", "--clean-tmp",
-        action="store_true",
-        help="Remove leftover temporary export files from /tmp.",
-    )
-
-    parser.add_argument(
-        "-cp", "--clean-previous",
-        action="store_true",
-        help="Remove previous persisted recovery files for the selected session before generating new ones.",
-    )
-
-    parser.add_argument(
-        "-t", "--include-tools",
-        action=argparse.BooleanOptionalAction if sys.version_info >= (3, 9) else "store_true",
-        default=config["include_tools"],
-        help="Include tool and function messages during extraction.",
-    )
-
-    parser.add_argument(
-        "--all-roles",
-        action=argparse.BooleanOptionalAction if sys.version_info >= (3, 9) else "store_true",
-        default=config["all_roles"],
-        help="Write all extracted roles instead of only user and assistant turns.",
-    )
-
-    parser.add_argument(
-        "-ml", "--max-lines",
-        type=int,
-        default=None,
-        help=(
-            "Maximum number of transcript lines to include. "
-            "When exceeded, only the most recent turns are kept. "
-            "No limit by default."
-        ),
-    )
-
-    parser.add_argument(
-        "-mi", "--max-interactions",
-        type=int,
-        default=None,
-        help=(
-            "Maximum number of back-and-forth interactions (user+assistant pairs) to include. "
-            "When exceeded, only the most recent interactions are kept. "
-            "No limit by default."
-        ),
-    )
-
-    parser.add_argument(
-        "-ic", "--input-compact",
-        type=Path,
-        action="append",
-        default=[],
-        help=(
-            "Prior compacted recovery file to include as context. "
-            "Content is prepended to the transcript when generating the compact prompt. "
-            "Can be specified multiple times for chained recoveries."
-        ),
-    )
-
-    parser.add_argument(
-        "-ir", "--input-restart",
-        type=Path,
-        action="append",
-        default=[],
-        help=(
-            "Prior restart file to include as context. "
-            "Content is prepended to the transcript when generating the compact prompt. "
-            "Can be specified multiple times."
-        ),
-    )
-
-    parser.add_argument(
-        "-it", "--input-transcript",
-        type=Path,
-        action="append",
-        default=[],
-        help=(
-            "Prior transcript file to include as context. "
-            "Content is prepended to the transcript when generating the compact prompt. "
-            "Can be specified multiple times."
-        ),
-    )
-
-    parser.add_argument(
-        "-oc", "--output-compact",
-        type=Path,
-        default=None,
-        help="Explicit output path for the compact prompt file. Directory created if needed.",
-    )
-
-    parser.add_argument(
-        "-or", "--output-restart",
-        type=Path,
-        default=None,
-        help="Explicit output path for the restart context file. Directory created if needed.",
-    )
-
-    parser.add_argument(
-        "-ot", "--output-transcript",
-        type=Path,
-        default=None,
-        help="Explicit output path for the transcript file. Directory created if needed.",
-    )
-
-    parser.add_argument(
-        "-lp", "--list-projects",
-        action="store_true",
-        help="List all known opencode projects and exit.",
-    )
-
-    parser.add_argument(
-        "-P", "--project",
-        type=str,
-        default=None,
-        help=(
-            "Specify a project by number (from --list-projects), ID, directory path, "
-            "or substring. If not specified and the current directory is a known project, "
-            "that project is used automatically."
-        ),
-    )
-
-    parser.add_argument(
-        "-ls", "--list-sessions",
-        action="store_true",
-        help="List sessions for the current project context and exit.",
-    )
-
-    parser.add_argument(
-        "-A", "--all-sessions",
-        action="store_true",
-        help="Include subagent/child sessions in --list-sessions (hidden by default).",
-    )
-
-    parser.add_argument(
-        "-S", "--search",
-        type=str,
-        default=None,
-        metavar="QUERY",
-        help=(
-            "Search sessions by content (message/tool text) and title, "
-            "case-insensitive. Scoped to --project or the current directory's "
-            "project if applicable; otherwise searches all projects."
-        ),
-    )
-
-    parser.add_argument(
-        "-L", "--limit",
-        type=int,
-        default=50,
-        metavar="N",
-        help="Maximum number of results for --search (default: %(default)s).",
-    )
-
-    parser.add_argument(
-        "-D", "--details",
-        action="store_true",
-        help="Show details about the session specified by --session.",
-    )
-
-    parser.add_argument(
-        "-H", "--head",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Show the first (oldest) N exchanges. Requires --session.",
-    )
-
-    parser.add_argument(
-        "-T", "--tail",
-        type=int,
-        default=None,
-        metavar="N",
-        help="Show the last (newest) N exchanges. Requires --session.",
-    )
-
-    parser.add_argument(
-        "-C", "--compact",
-        type=str,
-        nargs="?",
-        const="",
-        default=None,
-        metavar="MODEL",
-        help=(
-            "Generate an LLM-compacted restart summary. Optionally specify a model "
-            "(e.g., uri/its_direct/pt1-qwen3-32b-us). If no model is given, "
-            "prompts for selection. Use --show-models to see available options."
-        ),
-    )
-
-    parser.add_argument(
-        "--delete",
-        action="store_true",
-        help="Delete the session specified by --session. Shows details and asks for confirmation.",
-    )
-
-    parser.add_argument(
-        "--delete-project",
-        action="store_true",
-        help="Delete the project specified by --project (including all sessions, files, and DB rows). Shows details and asks for confirmation.",
-    )
-
-    parser.add_argument(
-        "--clean",
-        action="store_true",
-        help="Clean up sessions older than --days retention window.",
-    )
-
-    parser.add_argument(
-        "--days",
-        type=float,
-        default=config["default_retention_days"],
-        metavar="N",
-        help="Retention window in days for --clean and --clean-backups; accepts fractions, e.g. 0.25 = 6 hours (default: %(default)s).",
-    )
-
-    parser.add_argument(
-        "--clean-backups",
-        action="store_true",
-        help="Prune backup files and directories in the backups folder older than --days retention window.",
-    )
-
-    parser.add_argument(
-        "--clean-orphans",
-        action="store_true",
-        help="Scan and delete all orphaned database records that have no matching session.",
-    )
-
-    parser.add_argument(
-        "--db",
-        type=Path,
-        default=OPENCODE_DB_PATH,
-        help="Path to the opencode SQLite database (default: %(default)s).",
-    )
-
-    parser.add_argument(
-        "--dry-run",
-        action="store_true",
-        help="Perform a dry-run of --clean, --clean-orphans, or --delete to show what would be done.",
-    )
-
-    parser.add_argument(
-        "--force",
-        action="store_true",
-        help=(
-            "Bypass active process lock checks during deletion or cleanup, and override the "
-            "input size cap (filter_max_bytes) for 'filter' and --compact."
-        ),
-    )
-
-    parser.add_argument(
-        "-sm", "--show-models",
-        action="store_true",
-        help="Show available models from opencode config and exit.",
-    )
-
-    parser.add_argument(
-        "--show-compaction-prompt",
-        action="store_true",
-        help="Display the compaction prompt template and exit.",
-    )
-
-    parser.add_argument(
-        "-m", "--use-model",
-        type=str,
-        default=None,
-        help=argparse.SUPPRESS,  # Deprecated: use --compact instead.
-    )
-
-    parser.add_argument(
-        "-v", "--verbose",
-        action="count",
-        default=0,
-        help="Increase verbosity. Use -v or -vv.",
-    )
-
-    parser.add_argument(
-        "-V", "--version",
-        action="version",
-        version=f"%(prog)s {__version__}",
-        help="Show program's version number and exit.",
-    )
-
-    parser.add_argument(
-        "--info",
-        action="store_true",
-        help="Show database and storage info.",
-    )
-
-    parser.add_argument(
-        "--by-project",
-        action="store_true",
-        help="With info: add a per-project on-disk session-diff usage breakdown.",
-    )
-
-    parser.add_argument(
-        "--no-project-prompt",
-        action="store_true",
-        help=(
-            "Do not copy the compacted file (from --compact) into the project's "
-            ".agents/prompts/pending/ (overrides the copy_restart_to_project_prompts config)."
-        ),
-    )
-
-    parser.add_argument(
-        "--clear-history",
-        action="store_true",
-        help="Clear historical metrics and activity log.",
-    )
-
-    parser.add_argument(
-        "--show-logs",
-        action="store_true",
-        help="Show the historical action logs (deleted sessions, totals reclaimed, and grand totals).",
-    )
-
-    parser.add_argument(
-        "--create-config",
-        action="store_true",
-        help="Create the ~/.config/opencode/ocman.toml file interactively.",
-    )
-
-    parser.add_argument(
-        "--move-project",
-        help="Move a project specified by its ID or current path to the path specified by --to.",
-    )
-
-    parser.add_argument(
-        "--move-session",
-        help="Move a session specified by its ID to the path specified by --to.",
-    )
-
-    parser.add_argument(
-        "--to",
-        help="Destination directory path for --move-project or --move-session.",
-    )
-
-    parser.add_argument(
-        "--rebase-paths",
-        action="store_true",
-        help="Bulk rebase path prefixes in database. Requires --from and --to.",
-    )
-
-    parser.add_argument(
-        "--from",
-        dest="from_prefix",
-        help="Source path prefix for --rebase-paths.",
-    )
-
-    parser.add_argument(
-        "--metadata-only",
-        action="store_true",
-        help="Update the database metadata only without attempting to move files on disk.",
-    )
-
-    parser.add_argument(
-        "--export-session",
-        help="Export a session and all its descendants to a portable .ocbox file specified by --to.",
-    )
-
-    parser.add_argument(
-        "--import-session",
-        help="Import a session from a portable .ocbox file.",
-    )
-
-    parser.add_argument(
-        "--to-project",
-        help="Remap the imported session to an existing project specified by its ID.",
-    )
-
-    parser.add_argument(
-        "--new-project-path",
-        help="Remap the imported session to a newly created project with the specified local worktree path.",
-    )
-
-    parser.add_argument(
-        "--backup-opencode",
-        type=str,
-        nargs="?",
-        const="",
-        default=None,
-        metavar="DEST",
-        help="Create a ZIP backup of all opencode files to the specified destination directory or file.",
-    )
-
-    parser.add_argument(
-        "--restore",
-        type=str,
-        default=None,
-        metavar="PATH",
-        help="Restore system state from a ZIP archive or directory.",
-    )
-
-    parser.add_argument(
-        "--scope",
-        type=str,
-        default=None,
-        help=(
-            "With the 'filter' command: free-text scope of content to keep "
-            "(e.g. \"ocman only\"). Combine with --project. At least one is required."
-        ),
-    )
-
-    parser.add_argument(
-        "--allow-secrets",
-        action="store_true",
-        help=(
-            "Bypass the pre-egress secret/PII scan for 'filter' and --compact "
-            "(send content even if a likely secret/PII is detected)."
-        ),
-    )
-
-    parser.add_argument(
-        "command",
-        nargs="?",
-        choices=["info", "help", "ui", "gui", "filter"],
-        help="Optional command to execute (e.g. 'info', 'help', 'ui', 'gui', 'filter <input.md>').",
-    )
-
-    parser.add_argument(
-        "command_arg",
-        nargs="?",
-        default=None,
-        help="Positional argument for a command (e.g. the input file for 'filter').",
-    )
-
-    args = parser.parse_args()
-    if args.command == "help":
-        topic = getattr(args, "command_arg", None)
+    # 'help [TOPIC]' is handled here so it works before any dispatch.
+    if getattr(ns, "_group", None) == "help":
+        topic = getattr(ns, "topic", None)
         if topic and topic not in HELP_TOPICS:
-            print(
-                f"Unknown help topic: {topic!r}. "
-                f"Choose one of: {', '.join(HELP_TOPICS)}.",
-                file=sys.stderr,
-            )
+            print(f"Unknown help topic: {topic!r}. "
+                  f"Choose one of: {', '.join(HELP_TOPICS)}.", file=sys.stderr)
             sys.exit(2)
         print_help(topic)
         sys.exit(0)
-    return args
+
+    return _normalize(ns, config)
 
 
 def find_session_by_id(sessions: list[SessionInfo], session_id: str) -> SessionInfo:

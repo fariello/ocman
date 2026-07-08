@@ -305,12 +305,13 @@ def test_db_run_cleanup_fractional_days(temp_db, monkeypatch, mock_history_path)
 
 
 def test_parse_args_days_accepts_float(monkeypatch):
-    """--days parses as float (0.25)."""
+    """'db clean --days' parses as float (0.25) and normalizes to args.days."""
     import sys
     from ocman import parse_args
-    monkeypatch.setattr(sys, "argv", ["ocman", "--clean", "--days", "0.25"])
+    monkeypatch.setattr(sys, "argv", ["ocman", "db", "clean", "--days", "0.25"])
     args = parse_args()
     assert args.days == 0.25
+    assert args.clean is True
 
 
 def test_db_show_info(temp_db, capsys):
@@ -418,10 +419,14 @@ def test_db_show_info_by_project(temp_db, capsys, monkeypatch, tmp_path):
     assert "Sessions: 1" in out
 
 
-def test_preprocess_argv_disk_alias():
-    from ocman import preprocess_argv
-    assert preprocess_argv(["ocman", "disk"]) == ["ocman", "--info", "--by-project"]
-    assert preprocess_argv(["ocman", "du"]) == ["ocman", "--info", "--by-project"]
+def test_disk_alias_parses_to_info_by_project(monkeypatch):
+    """'disk' is a subcommand that normalizes to info + by-project."""
+    import sys
+    from ocman import parse_args
+    monkeypatch.setattr(sys, "argv", ["ocman", "disk"])
+    args = parse_args()
+    assert args.info is True
+    assert args.by_project is True
 
 
 def test_parse_args_help(monkeypatch, capsys):
@@ -440,8 +445,8 @@ def test_parse_args_help(monkeypatch, capsys):
     output = captured.out + captured.err
     assert "ocman - OpenCode Manager" in output
     assert "Usage" in output
-    # Verb syntax must be discoverable from help.
-    assert "list sessions" in output
+    # Subcommand syntax must be discoverable from help.
+    assert "session list" in output
 
 
 def test_build_help_overview_is_verb_first():
@@ -449,10 +454,10 @@ def test_build_help_overview_is_verb_first():
     text = build_help(None)
     # No ANSI in non-tty test environment.
     assert "\033[" not in text
-    # Verb syntax is the primary interface shown.
-    assert "ocman list sessions" in text
+    # Subcommand syntax is the primary interface shown.
+    assert "ocman session list" in text
     assert "ocman search" in text
-    assert "ocman info" in text
+    assert "ocman db info" in text
     # It advertises focused topics and the full reference.
     assert "help TOPIC" in text
     assert "help all" in text
@@ -471,10 +476,11 @@ def test_build_help_topics_render():
 def test_build_help_all_is_full_reference():
     from ocman import build_help
     text = build_help("all")
-    # Every long flag should appear in the full reference.
-    for flag in ("--list-projects", "--search", "--clean", "--backup-opencode",
-                 "--move-project", "--export-session", "--create-config"):
-        assert flag in text, flag
+    # Every command group and key action should appear in the full reference.
+    for token in ("session <action>", "project <action>", "db <action>",
+                  "backup <action>", "clean-orphans", "rebase", "compact",
+                  "config create", "recovery options"):
+        assert token in text, token
 
 
 def test_build_help_unknown_topic_falls_back_to_overview():
@@ -491,7 +497,7 @@ def test_parse_args_help_topic(monkeypatch, capsys):
         parse_args()
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
-    assert "--clean" in out
+    assert "db clean" in out
 
 
 def test_parse_args_help_unknown_topic(monkeypatch, capsys):
@@ -778,7 +784,7 @@ def test_clear_history_force_bypasses_prompt(mock_history_path, monkeypatch):
     def _no_input(_):
         raise AssertionError("--force must not prompt")
     monkeypatch.setattr("builtins.input", _no_input)
-    monkeypatch.setattr(sys, "argv", ["ocman", "--clear-history", "--force"])
+    monkeypatch.setattr(sys, "argv", ["ocman", "history", "clear", "--force"])
     try:
         ocman.main()
     except SystemExit:
@@ -788,57 +794,43 @@ def test_clear_history_force_bypasses_prompt(mock_history_path, monkeypatch):
     assert hist["runs"] == []
 
 
-def test_preprocess_argv():
-    """Test CLI subcommand translation/preprocessing logic."""
+def test_preprocess_argv_passthrough():
+    """Commands without 'in NAME' sugar are passed through unchanged."""
     from ocman import preprocess_argv
 
-    # Test list projects and list porjects
-    assert preprocess_argv(["ocman", "list", "projects"]) == ["ocman", "--list-projects"]
-    assert preprocess_argv(["ocman", "list", "porjects"]) == ["ocman", "--list-projects"]
-
-    # Test list sessions
-    assert preprocess_argv(["ocman", "list", "sessions"]) == ["ocman", "--list-sessions"]
-
-    # Test list sessions in project XXXX
-    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "my-proj"]) == ["ocman", "--list-sessions", "--project", "my-proj"]
-    
-    # Test list sessions in XXXX
-    assert preprocess_argv(["ocman", "list", "sessions", "in", "my-proj"]) == ["ocman", "--list-sessions", "--project", "my-proj"]
-
-    # Test list sessions in project My Project Name (unquoted multi-word)
-    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name"]) == ["ocman", "--list-sessions", "--project", "My Project Name"]
-
-    # Test list sessions in project My Project Name with flags
-    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name", "--all-sessions"]) == ["ocman", "--list-sessions", "--project", "My Project Name", "--all-sessions"]
-    assert preprocess_argv(["ocman", "list", "sessions", "in", "project", "My", "Project", "Name", "-A"]) == ["ocman", "--list-sessions", "--project", "My Project Name", "-A"]
+    for argv in (
+        ["ocman", "project", "list"],
+        ["ocman", "session", "list"],
+        ["ocman", "session", "list", "my-proj"],
+        ["ocman", "disk"],
+        ["ocman", "logs"],
+        ["ocman", "search", "AttributeError"],
+        ["ocman", "search", "AttributeError", "-A"],
+        ["ocman", "db", "clean"],
+        ["ocman", "help", "maintain"],
+    ):
+        assert preprocess_argv(argv) == argv
 
 
-def test_preprocess_argv_show_logs():
-    from ocman import preprocess_argv
-    assert preprocess_argv(["ocman", "show", "logs"]) == ["ocman", "--show-logs"]
-    assert preprocess_argv(["ocman", "SHOW", "loGs"]) == ["ocman", "--show-logs"]
-
-
-def test_preprocess_argv_search():
+def test_preprocess_argv_in_sugar():
+    """'in [project] NAME' collapses to a single NAME positional token."""
     from ocman import preprocess_argv
 
-    # Single-word query.
-    assert preprocess_argv(["ocman", "search", "AttributeError"]) == ["ocman", "--search", "AttributeError"]
+    # session list in NAME
+    assert preprocess_argv(["ocman", "session", "list", "in", "my-proj"]) == \
+        ["ocman", "session", "list", "my-proj"]
 
-    # Multi-word query (unquoted).
-    assert preprocess_argv(["ocman", "search", "widget", "crash"]) == ["ocman", "--search", "widget crash"]
+    # session search TEXT in project NAME
+    assert preprocess_argv(["ocman", "session", "search", "bug", "in", "project", "my-proj"]) == \
+        ["ocman", "session", "search", "bug", "my-proj"]
 
-    # Query scoped to a project via "in".
-    assert preprocess_argv(["ocman", "search", "AttributeError", "in", "ocman"]) == \
-        ["ocman", "--search", "AttributeError", "--project", "ocman"]
+    # multi-word project name (unquoted) is joined
+    assert preprocess_argv(["ocman", "search", "bug", "in", "My", "Project", "Name"]) == \
+        ["ocman", "search", "bug", "My Project Name"]
 
-    # Query scoped via "in project".
-    assert preprocess_argv(["ocman", "search", "bug", "fix", "in", "project", "My", "Proj"]) == \
-        ["ocman", "--search", "bug fix", "--project", "My Proj"]
-
-    # Flags are preserved and passed through.
-    assert preprocess_argv(["ocman", "search", "AttributeError", "-A"]) == \
-        ["ocman", "--search", "AttributeError", "-A"]
+    # trailing flags survive
+    assert preprocess_argv(["ocman", "session", "list", "in", "my-proj", "-A"]) == \
+        ["ocman", "session", "list", "my-proj", "-A"]
 
 
 def test_cli_show_logs(mock_history_path, capsys):
@@ -905,10 +897,177 @@ def test_save_deletion_metrics_accumulates_space_saved(mock_history_path):
     assert history["cumulative"]["space_saved_deleted"] == 8192
 
 
-def test_preprocess_argv_delete_project():
-    from ocman import preprocess_argv
-    assert preprocess_argv(["ocman", "delete", "project", "my-proj"]) == ["ocman", "--delete-project", "--project", "my-proj"]
-    assert preprocess_argv(["ocman", "delete", "project", "My", "Project", "Name", "--force"]) == ["ocman", "--delete-project", "--project", "My Project Name", "--force"]
+def test_project_delete_parses(monkeypatch):
+    """'project delete NAME' normalizes to delete_project + project."""
+    import sys
+    from ocman import parse_args
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "my-proj", "--force"])
+    args = parse_args()
+    assert args.delete_project is True
+    assert args.project == "my-proj"
+    assert args.force is True
+
+
+def _parse(monkeypatch, argv):
+    import sys
+    from ocman import parse_args
+    monkeypatch.setattr(sys, "argv", ["ocman", *argv])
+    return parse_args()
+
+
+def test_subcommand_session_list(monkeypatch):
+    a = _parse(monkeypatch, ["session", "list", "my-proj", "-A"])
+    assert a.list_sessions is True
+    assert a.project == "my-proj"
+    assert a.all_sessions is True
+
+
+def test_subcommand_session_search(monkeypatch):
+    a = _parse(monkeypatch, ["session", "search", "needle", "my-proj", "-L", "10"])
+    assert a.search == "needle"
+    assert a.project == "my-proj"
+    assert a.limit == 10
+
+
+def test_subcommand_top_level_search_alias(monkeypatch):
+    a = _parse(monkeypatch, ["search", "needle"])
+    assert a.search == "needle"
+    assert a.project is None
+
+
+def test_subcommand_session_show_defaults_to_details(monkeypatch):
+    a = _parse(monkeypatch, ["session", "show", "SID"])
+    assert a.session == "SID"
+    assert a.details is True
+
+
+def test_subcommand_session_show_head_tail(monkeypatch):
+    a = _parse(monkeypatch, ["session", "show", "SID", "-H", "3", "-T", "2"])
+    assert a.session == "SID"
+    assert a.head == 3
+    assert a.tail == 2
+    assert a.details is False
+
+
+def test_subcommand_session_recover(monkeypatch):
+    a = _parse(monkeypatch, ["session", "recover", "SID", "-mi", "50"])
+    assert a.session == "SID"
+    assert a.max_interactions == 50
+    assert a.compact is None
+
+
+def test_subcommand_session_compact_with_model(monkeypatch):
+    a = _parse(monkeypatch, ["session", "compact", "SID", "some/model", "--allow-secrets"])
+    assert a.session == "SID"
+    assert a.compact == "some/model"
+    assert a.allow_secrets is True
+
+
+def test_subcommand_session_compact_interactive(monkeypatch):
+    a = _parse(monkeypatch, ["session", "compact", "SID"])
+    assert a.compact == ""  # empty -> interactive model pick
+
+
+def test_subcommand_session_delete(monkeypatch):
+    a = _parse(monkeypatch, ["session", "delete", "SID", "--dry-run"])
+    assert a.delete is True
+    assert a.session == "SID"
+    assert a.dry_run is True
+
+
+def test_subcommand_session_export(monkeypatch):
+    a = _parse(monkeypatch, ["session", "export", "SID", "--to", "/tmp/x.ocbox"])
+    assert a.export_session == "SID"
+    assert a.to == "/tmp/x.ocbox"
+
+
+def test_subcommand_session_import(monkeypatch):
+    a = _parse(monkeypatch, ["session", "import", "/tmp/x.ocbox", "--to-project", "P1"])
+    assert a.import_session == "/tmp/x.ocbox"
+    assert a.to_project == "P1"
+
+
+def test_subcommand_session_move(monkeypatch):
+    a = _parse(monkeypatch, ["session", "move", "SID", "--to", "/new", "--metadata-only"])
+    assert a.move_session == "SID"
+    assert a.to == "/new"
+    assert a.metadata_only is True
+
+
+def test_subcommand_project_list(monkeypatch):
+    a = _parse(monkeypatch, ["project", "list"])
+    assert a.list_projects is True
+
+
+def test_subcommand_project_move(monkeypatch):
+    a = _parse(monkeypatch, ["project", "move", "p1", "--to", "/new"])
+    assert a.move_project == "p1"
+    assert a.to == "/new"
+
+
+def test_subcommand_db_info(monkeypatch):
+    a = _parse(monkeypatch, ["db", "info", "--by-project"])
+    assert a.info is True
+    assert a.by_project is True
+
+
+def test_subcommand_db_clean_orphans(monkeypatch):
+    a = _parse(monkeypatch, ["db", "clean-orphans", "--force"])
+    assert a.clean_orphans is True
+    assert a.force is True
+
+
+def test_subcommand_db_rebase(monkeypatch):
+    a = _parse(monkeypatch, ["db", "rebase", "--from", "/a", "--to", "/b"])
+    assert a.rebase_paths is True
+    assert a.from_prefix == "/a"
+    assert a.to == "/b"
+
+
+def test_subcommand_backup_create_restore_clean(monkeypatch):
+    a = _parse(monkeypatch, ["backup", "create", "/tmp/dest"])
+    assert a.backup_opencode == "/tmp/dest"
+    a = _parse(monkeypatch, ["backup", "create"])
+    assert a.backup_opencode == ""  # default destination
+    a = _parse(monkeypatch, ["backup", "restore", "/tmp/x.zip"])
+    assert a.restore == "/tmp/x.zip"
+    a = _parse(monkeypatch, ["backup", "clean", "--days", "30"])
+    assert a.clean_backups is True
+    assert a.days == 30
+
+
+def test_subcommand_history_and_config(monkeypatch):
+    a = _parse(monkeypatch, ["history", "show"])
+    assert a.show_logs is True
+    a = _parse(monkeypatch, ["logs"])
+    assert a.show_logs is True
+    a = _parse(monkeypatch, ["history", "clear", "--force"])
+    assert a.clear_history is True
+    assert a.force is True
+    a = _parse(monkeypatch, ["config", "create"])
+    assert a.create_config is True
+
+
+def test_subcommand_filter(monkeypatch):
+    a = _parse(monkeypatch, ["filter", "doc.md", "--scope", "x only", "-P", "proj"])
+    assert a.command == "filter"
+    assert a.command_arg == "doc.md"
+    assert a.scope == "x only"
+    assert a.project == "proj"
+
+
+def test_subcommand_models_and_prompt_and_ui(monkeypatch):
+    assert _parse(monkeypatch, ["models"]).show_models is True
+    assert _parse(monkeypatch, ["compaction-prompt"]).show_compaction_prompt is True
+    assert _parse(monkeypatch, ["ui"]).command == "ui"
+    assert _parse(monkeypatch, ["gui"]).command == "gui"
+
+
+def test_subcommand_global_db_flag(monkeypatch):
+    from pathlib import Path
+    a = _parse(monkeypatch, ["--db", "/tmp/other.db", "project", "list"])
+    assert a.db == Path("/tmp/other.db")
+    assert a.list_projects is True
 
 
 def test_db_delete_project_recursive_saves_history(temp_db, mock_history_path):
