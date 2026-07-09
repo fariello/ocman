@@ -3946,28 +3946,104 @@ def _search_snippet(text: str, needle_lower: str, context: int = 60) -> str:
     return f"{prefix}{snippet}{suffix}"
 
 
+def _part_text(raw: str) -> str:
+    """
+    Extract the human-readable text from a `part.data` JSON blob.
+
+    Handles the common opencode part shapes:
+      - text parts: top-level "text"/"output"/"content";
+      - tool parts: nested "state.output" and "state.input" (e.g. a bash
+        command and its output).
+    Multiple extracted pieces are joined with newlines so line-level matching
+    works. Falls back to the raw string when nothing recognizable is found.
+    """
+    if not raw:
+        return ""
+    try:
+        import json as _json
+        obj = _json.loads(raw)
+    except Exception:
+        return raw
+    if not isinstance(obj, dict):
+        return raw
+
+    pieces: list[str] = []
+
+    def _add(val):
+        if isinstance(val, str) and val:
+            pieces.append(val)
+
+    for key in ("text", "output", "content"):
+        _add(obj.get(key))
+
+    state = obj.get("state")
+    if isinstance(state, dict):
+        _add(state.get("output"))
+        inp = state.get("input")
+        if isinstance(inp, dict):
+            for k in ("command", "content", "filePath", "description", "prompt"):
+                _add(inp.get(k))
+        elif isinstance(inp, str):
+            _add(inp)
+
+    if pieces:
+        return "\n".join(pieces)
+    return raw
+
+
+def _matching_lines(text: str, needle_lower: str, max_lines: int, context: int = 60) -> list[str]:
+    """
+    Return up to `max_lines` trimmed one-line snippets, one per line of `text`
+    that contains the needle (case-insensitive). Each line is centered on the
+    match and whitespace-collapsed like _search_snippet.
+    """
+    if not text or max_lines <= 0:
+        return []
+    out: list[str] = []
+    for line in text.split("\n"):
+        if needle_lower in line.lower():
+            out.append(_search_snippet(line, needle_lower, context=context))
+            if len(out) >= max_lines:
+                break
+    return out
+
+
+def _count_matching_lines(text: str, needle_lower: str) -> int:
+    """Count how many lines of `text` contain the needle (case-insensitive)."""
+    if not text:
+        return 0
+    return sum(1 for line in text.split("\n") if needle_lower in line.lower())
+
+
 def db_search_sessions(
     query: str,
     project_id: str | None = None,
-    limit: int = 50,
+    lines_per_session: int = 10,
     session_id: str | None = None,
+    max_sessions: int = 500,
 ) -> list[dict[str, Any]]:
     """
     Search sessions by content (message/tool text in the `part` table) and by
     session title.
 
     Matching is a case-insensitive substring search. Results are grouped by
-    session, ranked by most recently updated first, and include a snippet of
-    the first matching message part (or the title when only the title matched).
+    session, ranked by most recently updated first. For each session up to
+    `lines_per_session` matching lines are returned (a "line" is a newline-
+    delimited line of the extracted message/tool text), along with the total
+    number of matching lines so callers can show a "+K more" indicator.
 
     Args:
         query: The substring to search for.
         project_id: If given, restrict the search to a single project.
-        limit: Maximum number of sessions to return.
+        lines_per_session: Max matching lines to collect per session.
+        session_id: If given, restrict to a single session.
+        max_sessions: Safety cap on the number of sessions returned.
 
     Returns:
-        A list of session dicts (same shape as db_list_sessions) with two extra
-        keys: "match_where" ("content" or "title") and "snippet".
+        A list of session dicts (same shape as db_list_sessions) with extra keys:
+        "match_where" ("content" or "title"), "snippet" (first matching line,
+        kept for back-compat), "snippets" (list of up to lines_per_session
+        matching lines), and "match_count" (total matching lines in the session).
     """
     sqlite3 = _get_sqlite()
     if sqlite3 is None or not OPENCODE_DB_PATH.exists() or not query.strip():
@@ -4041,7 +4117,7 @@ def db_search_sessions(
             ORDER BY s.time_updated DESC
             LIMIT ?
             """,
-            (*id_list, limit),
+            (*id_list, max_sessions),
         )
         rows = cursor.fetchall()
 
@@ -4049,35 +4125,31 @@ def db_search_sessions(
         for row in rows:
             sid = row[0]
             match_where = "content" if sid in content_ids else "title"
-            snippet = ""
+            snippets: list[str] = []
+            match_count = 0
             if match_where == "content":
-                # Pull the earliest matching part for a representative snippet.
+                # Walk this session's matching parts (oldest first), collecting
+                # matching lines up to the per-session cap and counting the rest.
                 cursor.execute(
                     """
                     SELECT data FROM part
                     WHERE session_id = ? AND data LIKE ? COLLATE NOCASE
                     ORDER BY time_created ASC
-                    LIMIT 1
                     """,
                     (sid, like),
                 )
-                part_row = cursor.fetchone()
-                if part_row and part_row[0]:
-                    raw = part_row[0]
-                    text = raw
-                    # part.data is JSON; try to extract the human-readable text.
-                    try:
-                        import json as _json
-                        obj = _json.loads(raw)
-                        if isinstance(obj, dict):
-                            text = obj.get("text") or obj.get("output") or obj.get("content") or raw
-                            if not isinstance(text, str):
-                                text = raw
-                    except Exception:
-                        text = raw
-                    snippet = _search_snippet(text, needle_lower)
+                for (raw,) in cursor.fetchall():
+                    if not raw:
+                        continue
+                    text = _part_text(raw)
+                    match_count += _count_matching_lines(text, needle_lower)
+                    if len(snippets) < lines_per_session:
+                        need = lines_per_session - len(snippets)
+                        snippets.extend(_matching_lines(text, needle_lower, need))
             else:
-                snippet = _search_snippet(row[1] or "", needle_lower)
+                line = _search_snippet(row[1] or "", needle_lower)
+                snippets = [line] if line else []
+                match_count = 1
 
             results.append({
                 "id": sid,
@@ -4098,7 +4170,9 @@ def db_search_sessions(
                 "project_dir": row[15] or "",
                 "parent_id": row[16] or "",
                 "match_where": match_where,
-                "snippet": snippet,
+                "snippet": snippets[0] if snippets else "",
+                "snippets": snippets,
+                "match_count": match_count,
             })
         return results
     except Exception:
@@ -4480,8 +4554,8 @@ def build_help(topic: str | None = None) -> str:
     browse = [
         (f"{prog} list projects", "List all known opencode projects"),
         (f"{prog} list sessions [NAME]", "List sessions (word order also: 'session list')"),
-        (f'{prog} search "some text"', "Search sessions by content + title (first 10)"),
-        (f'{prog} search "text" in NAME', "Search within a project or session (-n to change count)"),
+        (f'{prog} search "some text"', "Search content + title (up to 10 lines/session)"),
+        (f'{prog} search "text" in NAME', "Search within a project or session (-n = lines/session)"),
         (f"{prog} session show ID", "Show session details"),
         (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
@@ -4592,7 +4666,7 @@ def build_help_reference() -> str:
     groups: list[tuple[str, list[tuple[str, str]]]] = [
         ("session <action>", [
             ("list [NAME] [-A]", "List sessions (optionally scoped to a project)"),
-            ("search QUERY [NAME] [-n N] [-A]", "Search content + titles (default 10)"),
+            ("search QUERY [NAME] [-n N] [-A]", "Search content + titles (up to N lines/session, N=10)"),
             ("show ID [-D] [-H N] [-T N]", "Details, or first/last N exchanges"),
             ("recover ID [recovery opts]", "Recover to restart-ready Markdown"),
             ("compact ID [MODEL] [opts]", "Recover + LLM-compact"),
@@ -4975,7 +5049,7 @@ def _add_search_opts(p: argparse.ArgumentParser) -> None:
                    choices=["project", "session"], help=argparse.SUPPRESS)
     p.add_argument("--scope-name", dest="scope_name", default=None, help=argparse.SUPPRESS)
     p.add_argument("-n", "--limit", type=int, default=10, metavar="N",
-                   help="Max results to show (default: 10).")
+                   help="Max matching lines to show per session (default: 10).")
     p.add_argument("-A", "--all-sessions", action="store_true",
                    help="Include subagent/child sessions.")
 
@@ -9671,7 +9745,7 @@ def main() -> None:
         results = db_search_sessions(
             args.search,
             project_id=_project_id,
-            limit=args.limit,
+            lines_per_session=args.limit,
             session_id=_search_session_id,
         )
 
@@ -9703,8 +9777,13 @@ def main() -> None:
             where = color_dim(f"({s['match_where']})")
             print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')} {where}{project_hint}")
             print(f"       ID: {s['id']}  Updated: {updated}")
-            if s["snippet"]:
-                print(f"       {color_dim(s['snippet'])}")
+            shown = s.get("snippets") or ([s["snippet"]] if s.get("snippet") else [])
+            for line in shown:
+                print(f"       {color_dim(line)}")
+            extra = s.get("match_count", len(shown)) - len(shown)
+            if extra > 0:
+                print(color_dim(f"       … +{extra} more matching line(s)"
+                                f" (use -n to show more)"))
         print()
         print("Use 'ocman session show <id>' to view details, or add -H/-T for a preview.")
         return

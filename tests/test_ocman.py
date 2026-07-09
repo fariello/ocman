@@ -207,6 +207,52 @@ def test_db_search_sessions_empty_query(temp_db):
     assert db_search_sessions("   ") == []
 
 
+def test_db_search_lines_per_session(temp_db):
+    """A session with many matching lines returns up to lines_per_session of them
+    and reports the true total via match_count."""
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    conn.execute("DROP TABLE IF EXISTS part")
+    cur.execute("CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, "
+                "time_created INTEGER, time_updated INTEGER, data TEXT)")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/p', 'P')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+                "VALUES ('s1', 'p1', 'many hits', 1, 2, '/p')")
+    # 8 matching lines in one text part.
+    body = "\\n".join(f"line {i} needle here" for i in range(8))
+    import json as _json
+    cur.execute("INSERT INTO part (id, message_id, session_id, time_created, time_updated, data) "
+                "VALUES ('p1','m1','s1',1,1,?)",
+                (_json.dumps({"type": "text", "text": body.replace("\\n", "\n")}),))
+    conn.commit()
+    conn.close()
+
+    r = db_search_sessions("needle", lines_per_session=3)
+    s = next(x for x in r if x["id"] == "s1")
+    assert len(s["snippets"]) == 3          # capped
+    assert s["match_count"] == 8            # true total
+    assert s["snippet"] == s["snippets"][0]  # back-compat
+
+    r = db_search_sessions("needle", lines_per_session=100)
+    s = next(x for x in r if x["id"] == "s1")
+    assert len(s["snippets"]) == 8          # all shown when cap is high
+
+
+def test_part_text_extracts_tool_output():
+    """_part_text digs into tool parts (state.output / state.input.command)."""
+    import json as _json
+    from ocman import _part_text, _count_matching_lines
+    tool = _json.dumps({
+        "type": "tool", "tool": "bash",
+        "state": {"status": "completed",
+                  "input": {"command": "grep speedtest x"},
+                  "output": "a\nspeedtest line 1\nb\nspeedtest line 2\n"},
+    })
+    text = _part_text(tool)
+    assert "\n" in text
+    assert _count_matching_lines(text, "speedtest") == 3  # command + 2 output lines
+
+
 def test_db_delete_session_recursive_dry_run(temp_db):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
