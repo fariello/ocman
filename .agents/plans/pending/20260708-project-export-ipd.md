@@ -102,7 +102,7 @@ open would let the implementation inherit surprising or unsafe defaults.
 
    | User input (up front) | Project collision? | Behavior |
    |---|---|---|
-   | `--to-project ID` | n/a | Import into project `ID` (explicit merge). `dest_proj_id = ID`. |
+   | `--to-project ID` | n/a | Import into project `ID` (explicit merge). `dest_proj_id = ID`. On merge, do NOT overwrite the target's own `project`/`project_directory`/`workspace` rows: import only the sessions + session-scoped tables. (The bundle's `project` row uses `INSERT OR REPLACE`, `ocman.py:7505`, which would otherwise clobber the target's metadata.) |
    | `--new-project-path PATH` | n/a | Create a fresh project row (new generated id) with worktree `PATH`. `dest_proj_id = new id`. |
    | neither | no | Create the project from the bundle's own row/id. `dest_proj_id = bundle id`. |
    | neither | yes, TTY | Prompt with the menu below (default: back up existing, then import in place). |
@@ -120,7 +120,9 @@ open would let the implementation inherit surprising or unsafe defaults.
         reuse the `project move` path), then import the bundle in place.
      4. Merge into the existing project (explicit "this may create duplicate or
         conflicting sessions" warning + typed confirm via `confirm_destructive`,
-        `ocman.py:8209`). `dest_proj_id = existing id`.
+        `ocman.py:8209`). `dest_proj_id = existing id`; import sessions only and
+        leave the target's `project`/`project_directory`/`workspace` rows intact
+        (do not overwrite metadata; see the `--to-project` note above).
      5. Import as a new project at a different worktree (prompt for path; same as
         `--new-project-path`).
      6. Abort (no changes).
@@ -216,18 +218,50 @@ review; re-verify before editing since line numbers drift.
    - **Phase 2 - resolve Axis A destructive step (each with its own safety).**
      If the chosen action is back-up / delete / move existing, perform it via the
      existing safe helpers (`bundle_project_data` for backup;
-     `db_delete_project_recursive` for delete, which takes its own rollback
-     backup; the `project move` metadata path for move) BEFORE opening the import
-     transaction. Abort short-circuits here with no changes.
+     `db_delete_project_recursive` for delete; `db_move_project_metadata`
+     for move) BEFORE opening the import transaction. Abort short-circuits here
+     with no changes.
+     - **Cross-transaction data-loss window (must address).**
+       `db_delete_project_recursive` (`ocman.py:6637`) and
+       `db_move_project_metadata` (`ocman.py:7041`) each open their OWN
+       connection and COMMIT in a separate transaction from the Phase-3 import.
+       So a Phase-3 failure AFTER a Phase-2 delete leaves the existing project
+       gone and the new one not imported. Mitigation (required): for the
+       delete AND move branches (options 2 and 3), take a full
+       `bundle_project_data` backup of the existing project first (the same
+       artifact option 1 makes), report its path, and on Phase-3 failure tell the
+       user exactly how to restore it. Only the default (option 1) is safe by
+       construction; options 2 and 3 must not run without that backup.
+     - **Process lock.** `db_delete_project_recursive` enforces the
+       running-opencode lock (`check_opencode_process_lock`, `ocman.py:6651`);
+       plain import does not. The delete/move branches therefore inherit that
+       check. Thread the import command's `--force` to it (it bypasses only the
+       lock, never a typed confirm), and document that project import can be
+       blocked by a running opencode when a delete/move branch is chosen.
    - **Phase 3 - import transaction.** Take a rollback backup
-     (`db_create_rollback_backup`), `BEGIN`, `PRAGMA foreign_keys=OFF`, then:
-     insert the project-scoped rows (`project`, `project_directory`, `workspace`)
-     with `project_id`/`id` remapped to `dest_proj_id`, then the session-scoped
-     rows with the Axis B `id_map` applied and `session.project_id =
-     dest_proj_id` (reuse the existing `process_and_insert_row` logic,
-     `ocman.py:7481-7507`, extended to the project-scoped tables), then restore
-     the diff files. Commit; on any error rollback + restore backup + clean
-     written diffs (as the session importer already does, `ocman.py:7584-7600`).
+     (`db_create_rollback_backup`), `BEGIN`, `PRAGMA foreign_keys=OFF`, then
+     insert in FK-safe order: project-scoped rows first, then session-scoped
+     rows, then restore diffs. Commit; on any error rollback + restore backup +
+     clean written diffs (as the session importer already does,
+     `ocman.py:7584-7600`).
+     - **Do NOT feed project-scoped tables through the session
+       `process_and_insert_row`** (`ocman.py:7481-7507`). That helper remaps any
+       `id`/`parent_id`/`session_id`/`aggregate_id` found in the session
+       `id_map` and only sets `project_id` for `table == "session"`. Applied to
+       `project`/`workspace` it would wrongly run their own ids through the
+       *session* id_map and would not set `project_id` for
+       `project_directory`/`workspace`. Use a SEPARATE project-scoped insert
+       helper that: sets the project PK (`project.id`) and every
+       `project_directory.project_id` / `workspace.project_id` to
+       `dest_proj_id`; applies the Axis B `id_map` ONLY to genuine session-id
+       columns (e.g. a `workspace` row referencing a session id), never to
+       project/workspace own ids; and keeps the existing column-name validation
+       (`isidentifier()`, `ocman.py:7501-7502`).
+     - **Route by table, explicitly.** Import iterates
+       `PROJECT_RELATIONAL_TABLES` through the project-scoped inserter and
+       `SESSION_RELATIONAL_TABLES` through the (shared) session inserter; a table
+       present in the bundle but in neither allowlist is rejected (extends the
+       existing unauthorized-table guard, `ocman.py:7545-7546`).
    - **Transaction integrity (required).** The current session importer INSERTs
      the project row BEFORE `BEGIN TRANSACTION` (`ocman.py:7440-7443` vs `7476`),
      risking an orphan project row on failure. In the project importer the
@@ -291,6 +325,16 @@ meaningful. Keep the change additive so existing tests are unaffected.
   menu selects each branch (backup-then-import, delete, move-existing, merge with
   warning, new-project, abort) with prompts mocked; and `--to-project` /
   `--new-project-path` still work up front without prompting.
+- **Merge does not clobber metadata:** merging (`--to-project`) into a project
+  with distinct `name`/`vcs`/`icon_*` leaves those target columns unchanged and
+  imports only the sessions (guards F12 / the `INSERT OR REPLACE` clobber).
+- **Project-scoped remap correctness:** after import, `project_directory` and
+  `workspace` rows point at `dest_proj_id` (not the source id), and a
+  `workspace`/`project` own id is NOT rewritten by the session id_map (guards
+  F10).
+- **Delete/move branch safety:** choosing "delete existing" or "move existing"
+  writes the pre-op `.ocbox` backup first; simulate a Phase-3 failure after the
+  delete and assert the backup exists and the error names it (guards F11).
 - **Directory rebasing:** import with `--new-project-path` different from the
   source worktree rebases each `session.directory` correctly
   (mirrors `ocman.py:7490-7498`).
