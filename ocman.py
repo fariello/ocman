@@ -4686,11 +4686,39 @@ def preprocess_argv(argv: list[str]) -> list[str]:
          it need not be quoted. Applies to 'search' and 'session search'.
 
     Anything not matching these forms is passed through unchanged.
+
+    Global options given before the verb (e.g. "ocman --db X list projects") are
+    peeled off first so the natural-language rewrites still fire, then
+    re-prepended unchanged.
     """
     if len(argv) < 2:
         return list(argv)
 
-    prog, rest = argv[0], list(argv[1:])
+    prog, after = argv[0], list(argv[1:])
+
+    # Peel leading global options so the verb-matching below sees the verb even
+    # when globals precede it. --db takes a value; -v/-h/-V are flags.
+    leading: list[str] = []
+    rest = after
+    i = 0
+    _val_globals = {"--db"}
+    _flag_globals = {"-v", "--verbose", "-h", "--help", "-V", "--version"}
+    while i < len(rest):
+        tok = rest[i]
+        if tok in _val_globals and i + 1 < len(rest):
+            leading.extend(rest[i:i + 2])
+            i += 2
+            continue
+        if tok.startswith("--db="):
+            leading.append(tok)
+            i += 1
+            continue
+        if tok in _flag_globals or (tok.startswith("-v") and set(tok[1:]) == {"v"}):
+            leading.append(tok)
+            i += 1
+            continue
+        break
+    rest = rest[i:]
 
     # (1) word-order: "list projects|sessions ..."
     if rest and rest[0].lower() == "list" and len(rest) >= 2:
@@ -4766,7 +4794,7 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             i += 1
         rest = out
 
-    return [prog, *rest]
+    return [prog, *leading, *rest]
 
 
 def _legacy_defaults(config: dict) -> dict:

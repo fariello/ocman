@@ -1483,3 +1483,111 @@ def test_startup_timestamps():
     assert ts_local1[8] == "-"
 
 
+# ---------------------------------------------------------------------------
+# End-to-end CLI smoke tests
+#
+# The parse/normalize tests above import ocman in-process, so they validate the
+# grammar logic but NOT the actual runnable entry point. These run ocman.py as a
+# real subprocess (and the installed `ocman` console script when available) so
+# that packaging/sys.path-shadowing regressions (e.g. a stale ocman.py in
+# site-packages winning over the editable install) are caught by the suite.
+# ---------------------------------------------------------------------------
+
+import subprocess
+import sys as _sys
+import shutil as _shutil
+
+
+_OCMAN_PY = str(Path(__file__).resolve().parent.parent / "ocman.py")
+
+
+def _make_empty_db(tmp_path):
+    """A minimal, valid opencode DB with one project so CLI runs are deterministic."""
+    db = tmp_path / "e2e.db"
+    conn = sqlite3.connect(str(db))
+    cur = conn.cursor()
+    cur.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+    cur.execute(
+        "CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, "
+        "time_created INTEGER, time_updated INTEGER, directory TEXT, parent_id TEXT)"
+    )
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/proj', 'Proj')")
+    cur.execute(
+        "INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+        "VALUES ('s1', 'p1', 'Sess', 1000, 2000, '/tmp/proj')"
+    )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _run_ocman_py(args, tmp_path):
+    """
+    Run the repo ocman.py as a subprocess against a temp DB.
+
+    Runs from tmp_path (not the repo dir) so the current directory cannot mask a
+    site-packages shadow copy of ocman via sys.path[0].
+    """
+    db = _make_empty_db(tmp_path)
+    return subprocess.run(
+        [_sys.executable, _OCMAN_PY, "--db", str(db), *args],
+        capture_output=True, text=True, cwd=str(tmp_path),
+    )
+
+
+def test_e2e_list_projects_word_order(tmp_path):
+    """'ocman list projects' must be accepted by the real entry point."""
+    r = _run_ocman_py(["list", "projects"], tmp_path)
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, combined
+    assert "invalid choice" not in combined
+
+
+def test_e2e_list_project_singular(tmp_path):
+    r = _run_ocman_py(["list", "project"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_e2e_list_sessions_word_order(tmp_path):
+    # We assert the grammar is accepted (no argparse rejection), not the exit
+    # code: "no sessions" is a legitimate non-zero outcome for some DB states.
+    r = _run_ocman_py(["list", "sessions"], tmp_path)
+    assert "invalid choice" not in (r.stdout + r.stderr), r.stdout + r.stderr
+
+
+def test_e2e_help_runs(tmp_path):
+    r = _run_ocman_py(["help"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "OpenCode Manager" in r.stdout
+
+
+def test_e2e_db_info_runs(tmp_path):
+    r = _run_ocman_py(["db", "info"], tmp_path)
+    assert r.returncode == 0, r.stdout + r.stderr
+
+
+def test_e2e_unknown_command_errors(tmp_path):
+    r = _run_ocman_py(["frobnicate"], tmp_path)
+    assert r.returncode != 0
+    assert "invalid choice" in (r.stdout + r.stderr)
+
+
+def test_e2e_installed_console_script_matches(tmp_path):
+    """
+    If an `ocman` console script is installed, it must run the SAME grammar as
+    the repo (guards against a stale shadow copy in site-packages winning over
+    the editable install). Skipped when no console script is on PATH.
+    """
+    exe = _shutil.which("ocman")
+    if not exe:
+        pytest.skip("no 'ocman' console script on PATH")
+    db = _make_empty_db(tmp_path)
+    # Run from tmp_path so cwd cannot mask a site-packages shadow copy.
+    r = subprocess.run([exe, "--db", str(db), "list", "projects"],
+                       capture_output=True, text=True, cwd=str(tmp_path))
+    combined = r.stdout + r.stderr
+    assert r.returncode == 0, (
+        "Installed 'ocman' rejected 'list projects'. Likely a stale ocman.py "
+        "shadowing the editable install in site-packages.\n" + combined
+    )
+    assert "invalid choice" not in combined
