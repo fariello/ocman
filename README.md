@@ -182,7 +182,7 @@ project or a session, so you rarely need to say which:
 *   `ocman export SPEC to FILE` exports the session `SPEC` names to a `.ocbox` bundle (`to` optional;
     `--to FILE` also works). Whole-project export is not yet supported: `ocman export project SPEC`
     prints a clear "not yet supported" error. It is planned (see
-    `.agents/plans/20260708-project-export-ipd.md`) but not yet available.
+    `.agents/plans/pending/20260708-project-export-ipd.md`) but not yet available.
 
 The remaining natural-language sugar is an optional `in [project|session] NAME` phrase, accepted by
 `ocman session list`, `ocman session search`, and `ocman search`. For `session list` it is
