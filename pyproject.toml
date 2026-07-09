@@ -36,6 +36,15 @@ packages = [
 "ocman.py" = "ocman.py"
 "scripts/migrate_recovery_names.py" = "scripts/migrate_recovery_names.py"
 
+# NOTE (editable installs): hatchling honors the force-include above even in
+# editable mode, so `pip install -e .` copies ocman.py into site-packages in
+# addition to writing the redirect .pth. That copy shadows the .pth and goes
+# stale on every edit. After an editable install, remove the copy so the .pth
+# serves the working tree:  rm -f "$(python -c 'import site;print(site.getsitepackages()[0])')/ocman.py"
+# (see scripts/dev-editable-install.sh).
+[tool.hatch.build.targets.editable]
+dev-mode-dirs = ["."]
+
 [tool.hatch.build.targets.sdist]
 exclude = [
     "opencode.json",

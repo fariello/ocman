@@ -196,6 +196,19 @@ For search, `in NAME` accepts a **project or a session** and auto-detects which.
 ambiguous NAME with `ocman search "text" in project NAME` or `ocman search "text" in session NAME`;
 an ambiguous or unmatched NAME errors.
 
+### Current-directory scoping and the "global (/)" project
+When you run `ocman list sessions` or `ocman search` without an explicit `--project`, ocman scopes to
+your current directory. It first matches a known project worktree; if none matches, it falls back to
+**directory scoping**: sessions whose working directory is your current directory or a subdirectory of
+it, regardless of which project owns them.
+
+This matters because OpenCode files sessions started in your home directory (or without a project) under
+a catch-all project whose worktree is `/`. ocman labels that project **`global (/)`** to avoid confusing
+it with the filesystem root, and does not treat `/` as a normal parent directory (it would match
+everything). Directory scoping is what lets `ocman list sessions` run from `~` still find those
+home-directory sessions; ocman prints a one-line note when results include sessions from the
+`global (/)` project.
+
 ### Database & Storage Status (`ocman db info`)
 Prints a breakdown of your current database state on disk, including the SQLite database
 family size, session-diff file storage, and a **Backups (Disk Storage)** section showing

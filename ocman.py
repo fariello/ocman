@@ -3924,6 +3924,69 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 pass
 
 
+def db_list_sessions_under_dir(directory: str) -> list[dict[str, Any]]:
+    """
+    Query sessions whose working directory is `directory` or a subdirectory of
+    it, regardless of which project owns them.
+
+    This is how ocman answers "what ran in (or under) this directory?" for
+    directories that are not a project worktree, notably home-directory sessions
+    that OpenCode files under the catch-all "global" project (worktree "/").
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists() or not directory:
+        return []
+
+    d = directory.rstrip("/") or "/"
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        # Exact directory, or a subdirectory (prefix + "/"). Escape LIKE wildcards
+        # in the prefix so paths containing % or _ do not misbehave.
+        like_prefix = d.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+        cursor.execute("""
+            SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                   s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                   s.summary_additions, s.summary_deletions, s.summary_files,
+                   s.slug, s.model, s.agent, p.worktree, s.parent_id
+            FROM session s
+            LEFT JOIN project p ON p.id = s.project_id
+            WHERE s.directory = ? OR s.directory LIKE ? ESCAPE '\\'
+            ORDER BY s.time_updated DESC
+        """, (d, like_prefix))
+        sessions = []
+        for row in cursor.fetchall():
+            sessions.append({
+                "id": row[0],
+                "title": row[1] or "(untitled)",
+                "created": row[2],
+                "updated": row[3],
+                "directory": row[4] or "",
+                "cost": row[5],
+                "tokens_input": row[6],
+                "tokens_output": row[7],
+                "tokens_cache_read": row[8],
+                "additions": row[9],
+                "deletions": row[10],
+                "files": row[11],
+                "slug": row[12] or "",
+                "model": row[13] or "",
+                "agent": row[14] or "",
+                "project_dir": row[15] or "",
+                "parent_id": row[16] or "",
+            })
+        return sessions
+    except Exception:
+        return []
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def _search_snippet(text: str, needle_lower: str, context: int = 60) -> str:
     """
     Return a single-line snippet of text centered on the first case-insensitive
@@ -4198,6 +4261,19 @@ def _fmt_ts(epoch_ms) -> str:
         return str(epoch_ms)
 
 
+def _display_worktree(worktree: str) -> str:
+    """
+    Human-friendly label for a project worktree.
+
+    OpenCode anchors home-directory / rootless sessions under a catch-all
+    project whose worktree is "/". Displaying a bare "/" is ambiguous (is it the
+    filesystem root or the home dir?), so label it "global (/)".
+    """
+    if worktree in ("/", "", None):
+        return "global (/)"
+    return worktree
+
+
 def print_projects(
     projects: list[dict[str, Any]],
     *,
@@ -4211,7 +4287,7 @@ def print_projects(
     if blank_after_title:
         print()
     for idx, p in enumerate(projects, start=1):
-        directory = p["directory"]
+        directory = _display_worktree(p["directory"])
         if len(directory) > 70:
             directory = "..." + directory[-67:]
         updated = _fmt_ts(p["last_updated"])
@@ -9634,6 +9710,10 @@ def main() -> None:
     # If --project specified, resolve it. Otherwise, auto-detect from CWD.
     _project_id: str | None = None
     _project_dir: str | None = None
+    # Directory scope: set when CWD is not a real project worktree but sessions
+    # ran in/under it (e.g. home-directory sessions filed under the global "/"
+    # project). Scoping then keys off session.directory instead of project_id.
+    _dir_scope: str | None = None
 
     if args.project:
         proj = resolve_project(args.project)
@@ -9653,6 +9733,8 @@ def main() -> None:
                 _project_dir = p["directory"]
                 break
         # Then try parent directory match (CWD is a subdirectory of a project).
+        # "/" is deliberately excluded: it is the catch-all global project and
+        # would match every directory. Directory scoping (below) handles it.
         if not _project_id:
             for p in projects:
                 proj_path = p["directory"]
@@ -9660,6 +9742,11 @@ def main() -> None:
                     _project_id = p["id"]
                     _project_dir = p["directory"]
                     break
+        # No worktree match: fall back to directory-based scoping so sessions
+        # that actually ran in/under CWD are still found (this is what surfaces
+        # home-directory sessions living under the global "/" project).
+        if not _project_id and db_list_sessions_under_dir(cwd_str):
+            _dir_scope = cwd_str
 
         if not _project_id and args.session:
             all_db_sessions = db_list_sessions(None)
@@ -9698,7 +9785,10 @@ def main() -> None:
 
     # Handle --list-sessions early.
     if args.list_sessions:
-        all_sessions = db_list_sessions(_project_id)
+        if _dir_scope:
+            all_sessions = db_list_sessions_under_dir(_dir_scope)
+        else:
+            all_sessions = db_list_sessions(_project_id)
         if not all_sessions:
             if _project_id:
                 die(f"No sessions found for project: {_project_dir}")
@@ -9717,7 +9807,11 @@ def main() -> None:
         top_count = sum(1 for s in all_sessions if not s["parent_id"])
         child_count = sum(1 for s in all_sessions if s["parent_id"])
 
-        if _project_dir:
+        if _dir_scope:
+            print(color_bold(f"Sessions in {_dir_scope} ({top_count} sessions, {child_count} subagent):"))
+            if any(s["project_dir"] in ("/", "", None) for s in all_sessions):
+                print(color_dim("  (Some ran under OpenCode's global project, worktree 'global (/)'.)"))
+        elif _project_dir:
             print(color_bold(f"Sessions for {_project_dir} ({top_count} sessions, {child_count} subagent):"))
         else:
             print(color_bold(f"All sessions ({top_count} sessions, {child_count} subagent):"))
@@ -9749,12 +9843,19 @@ def main() -> None:
             session_id=_search_session_id,
         )
 
+        # Directory scope: restrict to sessions that ran in/under CWD.
+        if _dir_scope:
+            allowed = {s["id"] for s in db_list_sessions_under_dir(_dir_scope)}
+            results = [s for s in results if s["id"] in allowed]
+
         # Filter child sessions unless --all-sessions (skip when scoped to one session).
         if not args.all_sessions and not _search_session_id:
             results = [s for s in results if not s["parent_id"]]
 
         if _search_session_id:
             scope = f" in session {_search_session_id}"
+        elif _dir_scope:
+            scope = f" in {_dir_scope}"
         elif _project_dir:
             scope = f" in {_project_dir}"
         else:

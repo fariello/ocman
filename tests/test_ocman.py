@@ -238,6 +238,57 @@ def test_db_search_lines_per_session(temp_db):
     assert len(s["snippets"]) == 8          # all shown when cap is high
 
 
+def test_display_worktree_global_label():
+    from ocman import _display_worktree
+    assert _display_worktree("/") == "global (/)"
+    assert _display_worktree("") == "global (/)"
+    assert _display_worktree("/home/me/proj") == "/home/me/proj"
+
+
+def test_db_list_sessions_under_dir(temp_db):
+    """Directory scoping finds sessions in/under a dir regardless of project,
+    including home-dir sessions filed under the global '/' project."""
+    from ocman import db_list_sessions_under_dir
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('global', '/', NULL)")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/home/me/other', 'O')")
+    # session in home dir, filed under the global project
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+                "VALUES ('home1', 'global', 'home work', 1, 2, '/home/me')")
+    # session in a subdir of home
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+                "VALUES ('sub1', 'global', 'sub work', 1, 3, '/home/me/scratch')")
+    # unrelated session elsewhere
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+                "VALUES ('other1', 'p2', 'other', 1, 4, '/home/me/other')")
+    conn.commit()
+    conn.close()
+
+    got = {s["id"] for s in db_list_sessions_under_dir("/home/me")}
+    assert got == {"home1", "sub1", "other1"}   # everything under /home/me
+
+    got = {s["id"] for s in db_list_sessions_under_dir("/home/me/scratch")}
+    assert got == {"sub1"}                       # only the subdir
+
+    # trailing slash normalized
+    got = {s["id"] for s in db_list_sessions_under_dir("/home/me/")}
+    assert "home1" in got
+
+
+def test_db_list_sessions_under_dir_no_false_prefix(temp_db):
+    """'/home/me' must not match '/home/meadow' (prefix boundary safety)."""
+    from ocman import db_list_sessions_under_dir
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('g', '/', NULL)")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+                "VALUES ('a', 'g', 't', 1, 2, '/home/meadow/x')")
+    conn.commit()
+    conn.close()
+    assert db_list_sessions_under_dir("/home/me") == []
+
+
 def test_part_text_extracts_tool_output():
     """_part_text digs into tool parts (state.output / state.input.command)."""
     import json as _json
