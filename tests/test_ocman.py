@@ -1719,3 +1719,154 @@ def test_e2e_installed_console_script_matches(tmp_path):
         "shadowing the editable install in site-packages.\n" + combined
     )
     assert "invalid choice" not in combined
+
+
+def test_preprocess_argv_list_models():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "list", "models"]) == ["ocman", "models"]
+    assert preprocess_argv(["ocman", "list", "model"]) == ["ocman", "models"]
+    assert preprocess_argv(["ocman", "models"]) == ["ocman", "models"]
+
+
+def test_resolve_model_spec():
+    from ocman import ModelInfo, resolve_model_spec
+    models = [
+        ModelInfo(
+            provider_id="prov1",
+            model_id="id1",
+            name="Model One",
+            base_url="http://base1",
+            api_key="key1",
+            cost_input=0.1,
+            cost_output=0.2,
+            compatible=True
+        ),
+        ModelInfo(
+            provider_id="prov2",
+            model_id="id2",
+            name="Model Two",
+            base_url="http://base2",
+            api_key="key2",
+            cost_input=0.3,
+            cost_output=0.4,
+            compatible=True
+        ),
+        ModelInfo(
+            provider_id="prov2",
+            model_id="id2-other",
+            name="Model Two Other",
+            base_url="http://base3",
+            api_key="key3",
+            cost_input=0.5,
+            cost_output=0.6,
+            compatible=True
+        ),
+    ]
+
+    # Exact matches
+    assert resolve_model_spec("prov1/id1", models) == models[0]
+    assert resolve_model_spec("Model One", models) == models[0]
+    
+    # Case-insensitive exact matches
+    assert resolve_model_spec("PROV1/ID1", models) == models[0]
+    assert resolve_model_spec("model one", models) == models[0]
+
+    # Substring match (unique)
+    assert resolve_model_spec("One", models) == models[0]
+    assert resolve_model_spec("id2-other", models) == models[2]
+
+    # Substring match (ambiguous)
+    assert resolve_model_spec("Two", models) == "ambiguous"
+    assert resolve_model_spec("Model Two", models) == models[1]
+
+    # No match
+    assert resolve_model_spec("nonexistent", models) is None
+
+
+def test_list_sessions_approximate_stats(temp_db, capsys):
+    import ocman
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+
+    # Recreate message table with 'data' column
+    cursor.execute("DROP TABLE IF EXISTS message")
+    cursor.execute("""
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY,
+            session_id TEXT,
+            data TEXT
+        )
+    """)
+
+    # Recreate part table with correct schema
+    cursor.execute("DROP TABLE IF EXISTS part")
+    cursor.execute("""
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY,
+            message_id TEXT,
+            session_id TEXT,
+            time_created INTEGER,
+            time_updated INTEGER,
+            data TEXT
+        )
+    """)
+
+    # Clear existing messages/parts
+    cursor.execute("DELETE FROM message")
+    cursor.execute("DELETE FROM part")
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+
+    # Insert a project
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+
+    # Insert a session
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Test Session', 1000, 2000, '/path/to/proj', '')
+    """)
+
+    # Insert some messages with role data
+    import json as _json
+    cursor.execute(
+        "INSERT INTO message (id, session_id, data) VALUES ('msg1', 'sess1', ?)",
+        (_json.dumps({"role": "user"}),)
+    )
+    cursor.execute(
+        "INSERT INTO message (id, session_id, data) VALUES ('msg2', 'sess1', ?)",
+        (_json.dumps({"role": "assistant"}),)
+    )
+
+    # Insert some parts
+    cursor.execute("INSERT INTO part (id, message_id, session_id) VALUES ('part1', 'msg1', 'sess1')")
+    cursor.execute("INSERT INTO part (id, message_id, session_id) VALUES ('part2', 'msg2', 'sess1')")
+    cursor.execute("INSERT INTO part (id, message_id, session_id) VALUES ('part3', 'msg2', 'sess1')")
+
+    conn.commit()
+    conn.close()
+
+    # Call main with the args to list sessions
+    import sys
+    orig_argv = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "list", "sessions"]
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    finally:
+        sys.argv = orig_argv
+
+    captured = capsys.readouterr()
+    assert "Test Session" in captured.out
+    assert "~msgs: 2" in captured.out
+    assert "~interactions: 1" in captured.out
+    assert "~parts: 3" in captured.out
+    assert "Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts." in captured.out
+
+
+def test_e2e_list_models_word_order(tmp_path):
+    r = _run_ocman_py(["list", "models"], tmp_path)
+    combined = r.stdout + r.stderr
+    assert "invalid choice" not in combined
+

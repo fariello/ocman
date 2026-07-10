@@ -710,6 +710,51 @@ def display_models(models: list[ModelInfo]) -> None:
     print()
 
 
+def resolve_model_spec(spec: str, models: list[ModelInfo]) -> ModelInfo | None | str:
+    """
+    Resolve a model specifier.
+
+    Matches exact provider/model_id, exact name, or unique case-insensitive substring
+    over all models. Returns "ambiguous" if multiple substring matches occur,
+    or None if no match is found.
+    """
+    # 1. Exact match on provider/model_id (case-sensitive)
+    for m in models:
+        full_id = f"{m.provider_id}/{m.model_id}"
+        if full_id == spec:
+            return m
+
+    # 2. Exact match on name (case-sensitive)
+    for m in models:
+        if m.name == spec:
+            return m
+
+    # 3. Case-insensitive exact match on provider/model_id
+    for m in models:
+        full_id = f"{m.provider_id}/{m.model_id}"
+        if full_id.lower() == spec.lower():
+            return m
+
+    # 4. Case-insensitive exact match on name
+    for m in models:
+        if m.name.lower() == spec.lower():
+            return m
+
+    # 5. Case-insensitive substring match
+    matches = []
+    for m in models:
+        full_id = f"{m.provider_id}/{m.model_id}"
+        if spec.lower() in full_id.lower() or spec.lower() in m.name.lower():
+            matches.append(m)
+
+    if len(matches) == 1:
+        return matches[0]
+    elif len(matches) > 1:
+        return "ambiguous"
+
+    return None
+
+
 def resolve_model(models: list[ModelInfo], model_spec: str) -> ModelInfo:
     """
     Resolve a --use-model specification to a ModelInfo.
@@ -731,49 +776,35 @@ def resolve_model(models: list[ModelInfo], model_spec: str) -> ModelInfo:
             If the model is not found, ambiguous, or not compatible.
     """
 
-    # Try exact match first.
-    for m in models:
-        full_id = f"{m.provider_id}/{m.model_id}"
-        if full_id == model_spec:
-            if not m.compatible:
-                raise RecoveryError(
-                    f"Model {model_spec} uses a non-OpenAI-compatible API and cannot be used for compaction."
-                )
-            if not m.api_key:
-                raise RecoveryError(f"Model {model_spec} has no API key configured.")
-            if not m.base_url:
-                raise RecoveryError(f"Model {model_spec} has no base URL configured.")
-            return m
-
-    # Try substring match.
-    matches = [
-        m for m in models
-        if model_spec.lower() in f"{m.provider_id}/{m.model_id}".lower() or model_spec.lower() in m.name.lower()
-    ]
-
-    if not matches:
+    res = resolve_model_spec(model_spec, models)
+    if res is None:
         raise RecoveryError(
             f"Model not found: {model_spec!r}\n"
             "Use --show-models to see available models."
         )
 
-    if len(matches) > 1:
+    if res == "ambiguous":
+        # Gather matching models for the error message
+        matches = [
+            m for m in models
+            if model_spec.lower() in f"{m.provider_id}/{m.model_id}".lower() or model_spec.lower() in m.name.lower()
+        ]
         match_names = [f"  {m.provider_id}/{m.model_id} ({m.name})" for m in matches[:10]]
         raise RecoveryError(
             f"Ambiguous model spec {model_spec!r}. Matches:\n" + "\n".join(match_names)
         )
 
-    matched = matches[0]
-    if not matched.compatible:
+    # res is ModelInfo
+    if not res.compatible:
         raise RecoveryError(
-            f"Model {matched.provider_id}/{matched.model_id} uses a non-OpenAI-compatible API."
+            f"Model {res.provider_id}/{res.model_id} uses a non-OpenAI-compatible API."
         )
-    if not matched.api_key:
-        raise RecoveryError(f"Model {matched.provider_id}/{matched.model_id} has no API key configured.")
-    if not matched.base_url:
-        raise RecoveryError(f"Model {matched.provider_id}/{matched.model_id} has no base URL configured.")
+    if not res.api_key:
+        raise RecoveryError(f"Model {res.provider_id}/{res.model_id} has no API key configured.")
+    if not res.base_url:
+        raise RecoveryError(f"Model {res.provider_id}/{res.model_id} has no base URL configured.")
 
-    return matched
+    return res
 
 
 def estimate_tokens(text: str) -> int:
@@ -3935,6 +3966,99 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
                 pass
 
 
+def db_get_session_stats() -> dict[str, dict[str, Any]]:
+    """
+    Query message and part counts for all sessions in a single aggregate pass.
+    Returns a dict mapping session_id to a dict of stats:
+        {"msgs": msg_count, "interactions": interaction_count, "parts": part_count, "has_interactions": bool}
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return {}
+
+    conn = None
+    stats: dict[str, dict[str, Any]] = {}
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # Query messages and user interactions.
+        # Fallback cascade: json_extract -> LIKE -> COUNT-only.
+        msg_rows = []
+        has_interactions = True
+        try:
+            cursor.execute("""
+                SELECT session_id, COUNT(*), SUM(CASE WHEN json_extract(data, '$.role') = 'user' THEN 1 ELSE 0 END)
+                FROM message
+                GROUP BY session_id
+            """)
+            msg_rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            try:
+                cursor.execute("""
+                    SELECT session_id, COUNT(*), SUM(CASE WHEN data LIKE '%"role":"user"%' THEN 1 ELSE 0 END)
+                    FROM message
+                    GROUP BY session_id
+                """)
+                msg_rows = cursor.fetchall()
+            except sqlite3.OperationalError:
+                has_interactions = False
+                try:
+                    cursor.execute("""
+                        SELECT session_id, COUNT(*)
+                        FROM message
+                        GROUP BY session_id
+                    """)
+                    msg_rows = [(row[0], row[1], None) for row in cursor.fetchall()]
+                except sqlite3.OperationalError:
+                    pass
+
+        for row in msg_rows:
+            if not row or not row[0]:
+                continue
+            sid = row[0]
+            msg_cnt = row[1]
+            interact_cnt = row[2] if len(row) > 2 else None
+            stats[sid] = {
+                "msgs": msg_cnt,
+                "interactions": interact_cnt if interact_cnt is not None else 0,
+                "parts": 0,
+                "has_interactions": has_interactions
+            }
+
+        # Query parts.
+        try:
+            cursor.execute("""
+                SELECT session_id, COUNT(*)
+                FROM part
+                GROUP BY session_id
+            """)
+            for sid, part_cnt in cursor.fetchall():
+                if not sid:
+                    continue
+                if sid not in stats:
+                    stats[sid] = {
+                        "msgs": 0,
+                        "interactions": 0,
+                        "parts": part_cnt,
+                        "has_interactions": False
+                    }
+                else:
+                    stats[sid]["parts"] = part_cnt
+        except sqlite3.OperationalError:
+            pass
+
+        return stats
+    except Exception:
+        return {}
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def db_list_sessions_under_dir(directory: str) -> list[dict[str, Any]]:
     """
     Query sessions whose working directory is `directory` or a subdirectory of
@@ -4657,7 +4781,7 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} session recover ID -mi 50", "Recover, keeping at most 50 interactions"),
         (f"{prog} session compact ID", "Recover + LLM-compact (pick model interactively)"),
         (f"{prog} session compact ID MODEL", "Recover + compact with a specific model"),
-        (f"{prog} models", "List available LLM models"),
+        (f"{prog} list models", "List available LLM models"),
         (f"{prog} filter FILE.md --scope TEXT", "Re-scope a recovery doc via the LLM"),
     ]
 
@@ -4802,11 +4926,11 @@ def build_help_reference() -> str:
             ("search QUERY [in [project|session] NAME]", "Alias of 'session search'"),
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
-            ("list projects | list sessions [NAME]", "Word-order aliases"),
+            ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
             ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
-            ("models / compaction-prompt", "List models / print the compaction prompt"),
+            ("list models / compaction-prompt", "List models / print the compaction prompt"),
             ("ui / gui", "Launch the interactive terminal dashboard"),
             ("help [TOPIC]", "This help; TOPIC focuses one section"),
         ]),
@@ -4888,6 +5012,8 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             rest = ["project", "list", *rest[2:]]
         elif second in ("sessions", "session"):
             rest = ["session", "list", *rest[2:]]
+        elif second in ("models", "model"):
+            rest = ["models", *rest[2:]]
 
     # "session list in [project] NAME" -> "session list NAME" (drop the sugar
     # words and collapse a multi-word NAME).
@@ -10324,7 +10450,10 @@ def main() -> None:
             print("  (No project context. Use --project to filter, or run from a project directory.)")
         if not show_all and child_count:
             print(f"  ({child_count} subagent sessions hidden. Use --all-sessions to show them.)")
+        print(color_dim("  (Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts.)"))
         print()
+        
+        session_stats = db_get_session_stats()
         for idx, s in enumerate(sessions, start=1):
             title = s["title"]
             if len(title) > 60:
@@ -10334,7 +10463,16 @@ def main() -> None:
             prefix = "⤷ " if s["parent_id"] else ""
             print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')}{project_hint}")
             sid = s["id"]
-            print(f"       ID: {sid}  Updated: {updated}")
+            stat = session_stats.get(sid, {})
+            msgs = stat.get("msgs", 0)
+            interactions = stat.get("interactions", 0)
+            parts = stat.get("parts", 0)
+            has_interactions = stat.get("has_interactions", True)
+            if has_interactions:
+                stats_str = f"~msgs: {msgs}  ~interactions: {interactions}  ~parts: {parts}"
+            else:
+                stats_str = f"~msgs: {msgs}  ~parts: {parts}"
+            print(f"       ID: {sid}  Updated: {updated}  {color_dim(stats_str)}")
         print()
         print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
         return

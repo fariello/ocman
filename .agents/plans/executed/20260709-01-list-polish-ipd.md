@@ -1,6 +1,6 @@
 # Implementation Plan 01 - list polish: `list models` & session stats columns
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 Small consistency/UX improvements. Provides `resolve_model_spec` used by IPD 02
 (batch target resolver). This is IPD 01 in the execution order.
