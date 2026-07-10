@@ -1,6 +1,6 @@
 # Implementation Plan 03 - Multi-session actions & project expansion
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 IPD 03 in the execution order. Depends on IPD 02 (batch resolver). Lets
 `compact`, `recover`, `show`, `delete`,

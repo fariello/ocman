@@ -76,7 +76,10 @@ ocman session recover
 ocman session recover SESSION_ID -mi 50
 
 # Recover, truncate, and compact using an LLM gateway model
-ocman session compact SESSION_ID uri/its_direct/pt1-qwen3-32b-us -mi 50
+ocman session compact SESSION_ID model:uri/its_direct/pt1-qwen3-32b-us -mi 50
+
+# Compact multiple sessions in one batch with a single confirmation
+ocman session compact sess1 sess2 project:myproj model:gpt-4
 ```
 
 > [!TIP]
@@ -264,10 +267,10 @@ Global options work on any subcommand and may appear before or after it.
 |:---|:---|
 | `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Also `session list in NAME`. Add `-A/--all-sessions` to include subagents. |
 | `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents. Also `search QUERY in [project\|session] NAME`. |
-| `ocman session show ID` | Show details for a session (bare form shows details). `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
-| `ocman session recover [ID]` | Recover a session to restart-ready Markdown (omit `ID` to pick interactively). Accepts the recovery options below. |
-| `ocman session compact [ID] [MODEL]` | Recover and LLM-compact a session. Accepts the recovery options below plus `--no-project-prompt`, `--allow-secrets`, and `--force` (override the input size cap). |
-| `ocman session delete ID` | Recursively delete a session. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
+| `ocman session show [specs...]` | Show details for sessions (bare form shows details). Accepts multiple target specs. `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
+| `ocman session recover [specs...]` | Recover sessions to restart-ready Markdown (omit specs to pick interactively). Accepts multiple target specs. |
+| `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). |
+| `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
 | `ocman session export ID --to FILE` | Export a session and its subagents to a portable `.ocbox` bundle. |
 | `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree. |
 | `ocman session move ID --to DST` | Relocate a single session. `--metadata-only` updates DB paths only, bypassing the disk move. |
@@ -313,7 +316,7 @@ Global options work on any subcommand and may appear before or after it.
 
 | Command | Description |
 |:---|:---|
-| `ocman backup create [DEST]` | Create a system backup archive ZIP (default destination from config). Streams progress as it runs (per-file lines and a byte-level progress bar for large files on an interactive terminal). |
+| `ocman backup create [specs...] [--to DIR]` | Create a system backup archive ZIP (default destination from config), or write per-target `.ocbox` bundles to a directory when targeting projects/sessions with `--to DIR`. Streams progress as it runs. |
 | `ocman backup restore PATH` | Restore configuration, database, and diffs from a backup archive or directory (with rollback safety). Streams the same per-file and byte-level progress as it runs. |
 | `ocman backup clean [AGE]` | Prune old backups; previews a KEEP/DELETE table before deleting (see Pruning Backups). `--older-than AGE` sets the window (compact `2h`/`5d`/`6w`/`6mo`/`1y`, `"90 days"`, or a bare number of days); a positional duration also works (`ocman backup clean 90 days`). `--days N` is a deprecated alias. `--dry-run` previews. |
 

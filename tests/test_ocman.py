@@ -2038,3 +2038,140 @@ def test_resolve_targets_project_expansion(temp_db):
     assert len(res.sessions) == 2
     assert {s["id"] for s in res.sessions} == {"sess1", "child1"}
 
+
+def test_multi_session_show(temp_db, capsys):
+    import sqlite3
+    import ocman
+    import sys
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess2', 'proj1', 'Sess 2', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "show", "sess1", "sess2"]
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    finally:
+        sys.argv = orig
+        
+    captured = capsys.readouterr()
+    assert "Sess 1" in captured.out
+    assert "Sess 2" in captured.out
+    assert "ID:        sess1" in captured.out
+    assert "ID:        sess2" in captured.out
+
+
+def test_multi_session_delete(temp_db, monkeypatch):
+    import sqlite3
+    import ocman
+    import sys
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess2', 'proj1', 'Sess 2', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    # Mock confirmation to return "yes"
+    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+    
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "delete", "sess1", "sess2"]
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    finally:
+        sys.argv = orig
+        
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM session")
+    rows = cursor.fetchall()
+    assert len(rows) == 0
+    conn.close()
+
+
+def test_compact_two_models_errors(temp_db, capsys):
+    import sqlite3
+    import ocman
+    import sys
+    import pytest
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact", "sess1", "model:gpt-4", "model:claude-3"]
+    try:
+        with pytest.raises(SystemExit) as exc:
+            ocman.main()
+        assert exc.value.code != 0
+    finally:
+        sys.argv = orig
+
+
+def test_backup_create_scoped(temp_db, tmp_path, capsys):
+    import sqlite3
+    import ocman
+    import sys
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    out_dir = tmp_path / "backups"
+    
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "backup", "create", "sess1", "to", str(out_dir)]
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    finally:
+        sys.argv = orig
+        
+    assert (out_dir / "sess1.ocbox").exists()
+

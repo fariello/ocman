@@ -37,8 +37,7 @@ export/import).
   `resolve_target()` remains as a single-target legacy wrapper. `resolve_model_spec()` resolves model specifiers.
   `parse_duration_to_days()` parses `--older-than`/positional durations (`2h`, `5d`, `6w`,
   `6mo`, `1y`, or spelled-out `"30 days"`; `mo`/`y` are approximate). The legacy `--days` is a
-  hidden alias of `--older-than`. `backup create`/`backup restore` stream byte-level progress
-  for large files (the multi-GB database) via `copy_file_with_progress`/`zip_write_with_progress`.
+  hidden alias of `--older-than`.  `backup create` supports writing per-target `.ocbox` bundles to a directory with `--to DIR`, in addition to streaming progress for full ZIP backups. `backup restore` streams the same progress during configuration and database restore.
 
   Recovery artifacts share a canonical local-time name `YYYYMMDD-HHMM-<session_id>.<kind>.md`
   (`kind` = transcript/restart/prompt/compacted); `canonical_recovery_name`/`parse_recovery_name`

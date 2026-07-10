@@ -854,7 +854,7 @@ def call_compaction_api(
     model: ModelInfo,
     prompt: str,
     verbosity: int,
-) -> str:
+) -> tuple[str, dict[str, Any] | None]:
     """
     Call an OpenAI-compatible chat completions API for session compaction.
 
@@ -945,17 +945,24 @@ def call_compaction_api(
         raise RecoveryError("API returned an empty response.")
 
     # Report actual usage if available.
+    usage_info = None
     usage = response_data.get("usage", {})
     if usage:
         actual_input = usage.get("prompt_tokens", 0)
         actual_output = usage.get("completion_tokens", 0)
         print(f"  Actual tokens: input {actual_input:,}, output {actual_output:,}")
+        actual_cost = None
         if model.cost_input is not None and model.cost_output is not None:
             actual_cost = estimate_cost(actual_input, actual_output, model)
             if actual_cost is not None:
                 print(f"  Actual cost:  {color_bold(f'${actual_cost:.4f}')}")
+        usage_info = {
+            "prompt_tokens": actual_input,
+            "completion_tokens": actual_output,
+            "cost": actual_cost
+        }
 
-    return content
+    return content, usage_info
 
 
 @dataclass
@@ -5392,6 +5399,17 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     # (2) "to" keyword for move/export (drop a standalone 'to' before the dst).
     if rest and rest[0].lower() in ("move", "export"):
         rest = [tok for tok in rest if tok.lower() != "to"]
+    elif len(rest) >= 2 and rest[0].lower() == "backup" and rest[1].lower() == "create":
+        new_rest = []
+        i = 0
+        while i < len(rest):
+            if rest[i].lower() == "to" and i + 1 < len(rest) and not rest[i + 1].startswith("-"):
+                new_rest.extend(["--to", rest[i+1]])
+                i += 2
+            else:
+                new_rest.append(rest[i])
+                i += 1
+        rest = new_rest
 
     # (3) search scope sugar: only within a search command.
     is_search = (rest and rest[0].lower() == "search") or (
@@ -5460,6 +5478,8 @@ def _legacy_defaults(config: dict) -> dict:
         "use_model": None,
         "no_project_prompt": False,
         "allow_secrets": False,
+        "specs": None,
+        "yes": False,
         # browse / search
         "list_projects": False,
         "project": None,
@@ -5687,7 +5707,7 @@ def build_parser() -> argparse.ArgumentParser:
     _add_search_opts(sp)
 
     sp = new_action(p_session, s_sub, "show", help="Show session details or a transcript preview.")
-    sp.add_argument("session", help="Session ID, list number, or title substring.")
+    sp.add_argument("specs", nargs="+", help="Session or project specifiers to show.")
     sp.add_argument("-D", "--details", action="store_true", help="Show session details.")
     sp.add_argument("-H", "--head", type=int, default=None, metavar="N",
                     help="Show the first N exchanges.")
@@ -5696,15 +5716,18 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagent/child sessions when resolving.")
 
-    sp = new_action(p_session, s_sub, "recover", help="Recover a session to restart-ready Markdown.")
-    sp.add_argument("session", nargs="?", default=None,
-                    help="Session to recover (omit to pick interactively).")
+    sp = new_action(p_session, s_sub, "recover", help="Recover sessions to restart-ready Markdown.")
+    sp.add_argument("specs", nargs="*", default=[],
+                    help="Sessions or projects to recover (omit to pick interactively).")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions when resolving project targets.")
     _add_recovery_opts(sp)
 
-    sp = new_action(p_session, s_sub, "compact", help="Recover and LLM-compact a session.")
-    sp.add_argument("session", nargs="?", default=None, help="Session to compact.")
-    sp.add_argument("model", nargs="?", default="",
-                    help="Model to use (omit to pick interactively).")
+    sp = new_action(p_session, s_sub, "compact", help="Recover and LLM-compact sessions.")
+    sp.add_argument("specs", nargs="*", default=[],
+                    help="Sessions, projects, or model to compact (omit to pick interactively).")
+    sp.add_argument("-A", "--all-sessions", action="store_true",
+                    help="Include subagent/child sessions when resolving project targets.")
     _add_recovery_opts(sp)
     sp.add_argument("--no-project-prompt", action="store_true",
                     help="Do not copy the compacted file into the project's prompts.")
@@ -5712,13 +5735,16 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Bypass the pre-egress secret/PII scan.")
     sp.add_argument("--force", action="store_true",
                     help="Override the input size cap.")
+    sp.add_argument("-y", "--yes", action="store_true",
+                    help="Skip confirmation prompt.")
 
-    sp = new_action(p_session, s_sub, "delete", help="Delete a session (recursively).")
-    sp.add_argument("session", help="Session to delete.")
+    sp = new_action(p_session, s_sub, "delete", help="Delete sessions recursively.")
+    sp.add_argument("specs", nargs="+", help="Sessions or projects to delete.")
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagents when resolving.")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt.")
 
     sp = new_action(p_session, s_sub, "export", help="Export a session bundle (.ocbox).")
     sp.add_argument("session", help="Session to export.")
@@ -5779,9 +5805,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup = new_sub("backup", help="Backup and restore opencode state.")
     b_sub = p_backup.add_subparsers(dest="_action", metavar="<action>")
 
-    sp = new_action(p_backup, b_sub, "create", help="Create a ZIP backup of all opencode state.")
-    sp.add_argument("dest", nargs="?", default="",
-                    help="Destination directory or file (default: config).")
+    sp = new_action(p_backup, b_sub, "create", help="Create a ZIP backup or target bundles.")
+    sp.add_argument("specs", nargs="*", default=[],
+                    help="Optional sessions/projects to back up, or destination directory/file.")
+    sp.add_argument("--to", dest="to_flag", default=None,
+                    help="Destination directory (required if specs are provided).")
 
     sp = new_action(p_backup, b_sub, "restore", help="Restore from a ZIP archive or directory.")
     sp.add_argument("path", help="Archive or directory to restore from.")
@@ -6011,7 +6039,9 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         elif action == "search":
             _apply_search(out, ns, g)
         elif action == "show":
-            out["session"] = g("session")
+            out["specs"] = g("specs")
+            if out["specs"]:
+                out["session"] = out["specs"][0]
             out["details"] = bool(g("details", False))
             out["head"] = g("head")
             out["tail"] = g("tail")
@@ -6019,22 +6049,40 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             if not (out["details"] or out["head"] is not None or out["tail"] is not None):
                 out["details"] = True  # bare 'session show ID' -> details
         elif action == "recover":
-            out["session"] = g("session")
+            out["specs"] = g("specs")
+            if out["specs"]:
+                out["session"] = out["specs"][0]
+            out["all_sessions"] = bool(g("all_sessions", False))
             carry_recovery()
         elif action == "compact":
-            out["session"] = g("session")
-            model = g("model", "")
-            out["compact"] = model if model else ""
+            specs = g("specs") or []
+            session_spec = None
+            model_spec = ""
+            for spec in specs:
+                if "/" in spec or spec.startswith("model:"):
+                    model_spec = spec
+                else:
+                    if session_spec is None:
+                        session_spec = spec
+            out["specs"] = specs
+            if session_spec is not None:
+                out["session"] = session_spec
+            out["compact"] = model_spec
+            out["all_sessions"] = bool(g("all_sessions", False))
             out["no_project_prompt"] = bool(g("no_project_prompt", False))
             out["allow_secrets"] = bool(g("allow_secrets", False))
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
             carry_recovery()
         elif action == "delete":
             out["delete"] = True
-            out["session"] = g("session")
+            out["specs"] = g("specs")
+            if out["specs"]:
+                out["session"] = out["specs"][0]
             out["all_sessions"] = bool(g("all_sessions", False))
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         elif action == "export":
             out["export_session"] = g("session")
             out["to"] = g("to")
@@ -6088,7 +6136,15 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
 
     elif group == "backup":
         if action == "create":
-            out["backup_opencode"] = g("dest", "")
+            out["specs"] = g("specs")
+            out["to"] = g("to_flag")
+            if out["to"] is None:
+                if out["specs"] and len(out["specs"]) == 1:
+                    out["backup_opencode"] = out["specs"][0]
+                elif not out["specs"]:
+                    out["backup_opencode"] = ""
+            else:
+                out["backup_opencode"] = ""
         elif action == "restore":
             out["restore"] = g("path")
         elif action == "clean":
@@ -6326,44 +6382,16 @@ def run_compaction(
     compact_prompt_path: Path,
     output_dir: Path,
     session: SessionInfo,
-    model_spec: str,
+    model: ModelInfo,
     verbosity: int,
     force: bool = False,
     allow_secrets: bool = False,
-) -> Path | None:
+) -> tuple[Path | None, dict[str, Any] | None]:
     """
     Run LLM-based compaction on the recovery transcript.
 
-    Loads the compact prompt, resolves the model, estimates cost, asks for
-    confirmation, calls the API, and writes the compacted result.
-
-    Args:
-        compact_prompt_path:
-            Path to the .prompt.md compaction-prompt file.
-
-        output_dir:
-            Directory for output files.
-
-        session:
-            Session metadata.
-
-        model_spec:
-            User-provided model specification for --use-model.
-
-        verbosity:
-            Current verbosity level.
-
-    Returns:
-        Path to the compacted output file, or None if the user cancelled.
+    Loads the compact prompt, calls the API, and writes the compacted result.
     """
-
-    print(color_bold("LLM Compaction"))
-
-    # Load config and resolve model.
-    config = load_opencode_config(verbosity=verbosity)
-    models = extract_models_from_config(config)
-    model = resolve_model(models, model_spec)
-
     # Load the compact prompt content.
     try:
         prompt_content = compact_prompt_path.read_text(encoding="utf-8")
@@ -6379,31 +6407,7 @@ def run_compaction(
         allow_secrets=allow_secrets,
     )
 
-    # Estimate tokens and cost (includes system message + full user prompt).
-    input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
-    output_tokens_est = max(500, input_tokens // 5)
-    cost = estimate_cost(input_tokens, output_tokens_est, model)
-
-    print(f"  Model:    {color_cyan(f'{model.provider_id}/{model.model_id}')} ({model.name})")
-    print(f"  Endpoint: {model.base_url}")
-    cost_str = f"${cost:.4f}" if cost is not None else "unknown"
-    print(f"  Input:    ~{input_tokens:,} tokens (estimated)  Output: ~{output_tokens_est:,} tokens (estimated)")
-    print(f"  Est cost: {cost_str}")
-    print(f"  Note: The session transcript will be sent to the API endpoint above.")
-
-    # Ask for confirmation if interactive.
-    print()
-    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
-        answer = input("Proceed with compaction? [Y/n]: ").strip().lower()
-        if answer in {"n", "no"}:
-            print("  Compaction cancelled.")
-            return None
-    else:
-        log("Non-interactive mode: proceeding with compaction.", verbosity)
-
-    print("  Calling API (this may take a minute)...")
-
-    response_text = call_compaction_api(
+    response_text, usage_info = call_compaction_api(
         model=model,
         prompt=prompt_content,
         verbosity=verbosity,
@@ -6433,7 +6437,7 @@ def run_compaction(
         for line in major_issue_lines:
             print(f"  {color_yellow(line)}")
 
-    return compacted_path
+    return compacted_path, usage_info
 
 
 import dataclasses
@@ -6688,7 +6692,7 @@ def cli_filter(
         log("Non-interactive mode: proceeding with filter.", verbosity)
 
     print("  Calling API (this may take a minute)...")
-    response_text = call_compaction_api(model=model, prompt=user_prompt, verbosity=verbosity)
+    response_text, _ = call_compaction_api(model=model, prompt=user_prompt, verbosity=verbosity)
 
     # Determine output name/location. Recover the session id + timestamp from the source name;
     # fall back to "unknown" + source mtime (local) when unparseable so the name is deterministic.
@@ -10267,6 +10271,7 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
 
 
 def main() -> None:
+    import sys
     """
     Run the interactive opencode recovery workflow.
 
@@ -10297,7 +10302,51 @@ def main() -> None:
     # Handle --backup-opencode early.
     if args.backup_opencode is not None:
         try:
-            cli_backup(dest=args.backup_opencode)
+            if args.backup_opencode != "":
+                # Legacy flag or pre-resolved single destination
+                cli_backup(dest=args.backup_opencode)
+            else:
+                # Subcommand: backup create
+                specs = getattr(args, "specs", []) or []
+                to_dir = getattr(args, "to", None)
+                
+                if to_dir is not None:
+                    to_path = Path(to_dir)
+                    if specs:
+                        # Target-scoped bundles
+                        to_path.mkdir(parents=True, exist_ok=True)
+                        res = resolve_and_expand_targets(
+                            specs,
+                            kinds={"session", "project"},
+                            allow_project_expansion=False,
+                            filter_subagents=False
+                        )
+                        
+                        # Bundle projects
+                        for proj in res.projects:
+                            dest_file = to_path / f"{proj['id']}.ocbox"
+                            print(f"{info_prefix()} Backing up project '{proj['id']}' to '{dest_file}'...")
+                            bundle_project_data(proj["id"], dest_file, progress_callback=print)
+                            print(color_green(f"[+] Successfully backed up project '{proj['id']}'"))
+                            
+                        # Bundle sessions
+                        for sess in res.sessions:
+                            dest_file = to_path / f"{sess['id']}.ocbox"
+                            print(f"{info_prefix()} Backing up session '{sess['id']}' to '{dest_file}'...")
+                            bundle_session_data(sess["id"], dest_file, progress_callback=print)
+                            print(color_green(f"[+] Successfully backed up session '{sess['id']}'"))
+                    else:
+                        # Whole-state backup to to_dir
+                        cli_backup(dest=to_dir)
+                else:
+                    if len(specs) == 1:
+                        # Legacy dest positional
+                        cli_backup(dest=specs[0])
+                    elif not specs:
+                        # Default dest
+                        cli_backup(dest="")
+                    else:
+                        die("Error: Destination directory is required when backing up specific targets. Use '--to <dir>'.")
         except Exception as e:
             die(str(e))
         return
@@ -10948,150 +10997,179 @@ def main() -> None:
             die(str(e))
         return
 
-    # Handle --delete (requires --session).
+    # Handle --delete.
     if args.delete:
-        session_spec = args.session
-        if not session_spec:
-            die("--delete requires --session (or -s) to identify the session.\n"
-                "Use --list-sessions to see available sessions.")
+        delete_specs = args.specs or ([args.session] if args.session else [])
+        if not delete_specs:
+            die("--delete requires a session ID/number/title or project specifier.")
 
         all_sessions = db_list_sessions(_project_id)
         if not all_sessions:
             die("No sessions found. Try --list-projects first.")
 
         res = resolve_and_expand_targets(
-            [session_spec],
-            kinds={"session"},
+            delete_specs,
+            kinds={"session", "project"},
+            allow_project_expansion=True,
             filter_subagents=not args.all_sessions,
+            all_sessions=args.all_sessions,
             project_id=_project_id
         )
-        session_data = res.sessions[0]
+
+        remove_items = []
+        for s in res.sessions:
+            remove_items.append(
+                PreviewItem(
+                    label=s["id"],
+                    detail=s.get("title") or "(untitled)"
+                )
+            )
+
+        preview = DestructivePreview(
+            remove=remove_items,
+            keep=[],
+            action_verb="delete",
+            noun="sessions",
+            detail_header="Title",
+            irreversible=True,
+            warn_if_all_removed=False
+        )
+
+        if not confirm_destructive(
+            preview,
+            dry_run=args.dry_run,
+            assume_yes=args.yes,
+            interactive=sys.stdout.isatty(),
+            action_verb="delete"
+        ):
+            return
 
         try:
-            db_delete_session_recursive(
-                session_id=session_data["id"],
-                dry_run=args.dry_run,
-                force=args.force,
-                verbosity=verbosity
-            )
+            for s in res.sessions:
+                db_delete_session_recursive(
+                    session_id=s["id"],
+                    dry_run=args.dry_run,
+                    force=args.force,
+                    verbosity=verbosity
+                )
+                print(color_green(f"[+] Deleted session {s['id']}"))
         except RecoveryError as e:
             die(str(e))
         return
 
-    # Handle --details, --head, --tail (all require --session or -s).
-    if args.details or args.head is not None or args.tail is not None:
-        session_spec = args.session
-        if not session_spec:
-            die("--details, --head, and --tail require --session (or -s) to identify the session.\n"
-                "Use --list-sessions to see available sessions.")
-
-        all_sessions = db_list_sessions(_project_id)
-        if not all_sessions:
-            die("No sessions found. Try --list-projects first.")
-
+    # Handle --details, --head, --tail (all require --session or -s or specs).
+    show_specs = args.specs or ([args.session] if args.session else [])
+    if (args.details or args.head is not None or args.tail is not None) and show_specs:
         res = resolve_and_expand_targets(
-            [session_spec],
-            kinds={"session"},
+            show_specs,
+            kinds={"session", "project"},
+            allow_project_expansion=True,
             filter_subagents=not args.all_sessions,
+            all_sessions=args.all_sessions,
             project_id=_project_id
         )
-        session_data = res.sessions[0]
 
-        # Display session details.
-        print(color_bold(session_data["title"]))
-        print(f"  ID:        {session_data['id']}")
-        if session_data["slug"]:
-            print(f"  Slug:      {session_data['slug']}")
-        print(f"  Created:   {_fmt_ts(session_data['created'])}")
-        print(f"  Updated:   {_fmt_ts(session_data['updated'])}")
-        if session_data["model"]:
-            model_str = session_data["model"]
-            try:
-                model_obj = json.loads(model_str)
-                if isinstance(model_obj, dict):
-                    model_str = f"{model_obj.get('id', '')} ({model_obj.get('providerID', '')})"
-            except (json.JSONDecodeError, TypeError):
-                pass
-            print(f"  Model:     {model_str}")
-        if session_data["agent"]:
-            print(f"  Agent:     {session_data['agent']}")
-        if session_data["cost"]:
-            print(f"  Cost:      ${session_data['cost']:.2f}")
-        tok_parts = []
-        if session_data["tokens_input"]:
-            tok_parts.append(f"{session_data['tokens_input']:,} in")
-        if session_data["tokens_output"]:
-            tok_parts.append(f"{session_data['tokens_output']:,} out")
-        if session_data["tokens_cache_read"]:
-            tok_parts.append(f"{session_data['tokens_cache_read']:,} cache")
-        if tok_parts:
-            print(f"  Tokens:    {' / '.join(tok_parts)}")
-        if session_data["additions"] or session_data["deletions"]:
-            print(f"  Changes:   +{session_data['additions']} -{session_data['deletions']} ({session_data['files']} files)")
-        if session_data["project_dir"]:
-            print(f"  Directory: {session_data['project_dir']}")
+        for i, session_data in enumerate(res.sessions):
+            if i > 0:
+                print()
+                print("=" * 60)
+                print()
 
-        # If --head or --tail, export and show exchanges.
-        if args.head is not None or args.tail is not None:
-            print()
-            require_opencode()
-            session_dir = Path(session_data["project_dir"]) if session_data["project_dir"] else None
-            if session_dir and not session_dir.is_dir():
-                session_dir = None
-
-            log("Exporting session for exchange preview...", verbosity)
-            with tempfile.TemporaryDirectory(prefix="orsession-") as td:
+            # Display session details.
+            print(color_bold(session_data["title"]))
+            print(f"  ID:        {session_data['id']}")
+            if session_data["slug"]:
+                print(f"  Slug:      {session_data['slug']}")
+            print(f"  Created:   {_fmt_ts(session_data['created'])}")
+            print(f"  Updated:   {_fmt_ts(session_data['updated'])}")
+            if session_data["model"]:
+                model_str = session_data["model"]
                 try:
-                    export_path = write_export_to_temp(
-                        session_id=session_data["id"],
-                        temp_dir=Path(td),
-                        verbosity=verbosity,
-                        cwd=session_dir,
-                    )
-                    data = load_export_file(export_path, verbosity=verbosity)
+                    model_obj = json.loads(model_str)
+                    if isinstance(model_obj, dict):
+                        model_str = f"{model_obj.get('id', '')} ({model_obj.get('providerID', '')})"
+                except (json.JSONDecodeError, TypeError):
+                    pass
+                print(f"  Model:     {model_str}")
+            if session_data["agent"]:
+                print(f"  Agent:     {session_data['agent']}")
+            if session_data["cost"]:
+                print(f"  Cost:      ${session_data['cost']:.2f}")
+            tok_parts = []
+            if session_data["tokens_input"]:
+                tok_parts.append(f"{session_data['tokens_input']:,} in")
+            if session_data["tokens_output"]:
+                tok_parts.append(f"{session_data['tokens_output']:,} out")
+            if session_data["tokens_cache_read"]:
+                tok_parts.append(f"{session_data['tokens_cache_read']:,} cache")
+            if tok_parts:
+                print(f"  Tokens:    {' / '.join(tok_parts)}")
+            if session_data["additions"] or session_data["deletions"]:
+                print(f"  Changes:   +{session_data['additions']} -{session_data['deletions']} ({session_data['files']} files)")
+            if session_data["project_dir"]:
+                print(f"  Directory: {session_data['project_dir']}")
 
-                    turns = find_turns(data, include_tools=False, verbosity=verbosity)
-                    turns = filter_conversation_turns(turns)
+            # If --head or --tail, export and show exchanges.
+            if args.head is not None or args.tail is not None:
+                print()
+                require_opencode()
+                session_dir = Path(session_data["project_dir"]) if session_data["project_dir"] else None
+                if session_dir and not session_dir.is_dir():
+                    session_dir = None
 
-                    if not turns:
-                        print("  No exchanges found.")
-                        return
+                log("Exporting session for exchange preview...", verbosity)
+                with tempfile.TemporaryDirectory(prefix="orsession-") as td:
+                    try:
+                        export_path = write_export_to_temp(
+                            session_id=session_data["id"],
+                            temp_dir=Path(td),
+                            verbosity=verbosity,
+                            cwd=session_dir,
+                        )
+                        data = load_export_file(export_path, verbosity=verbosity)
 
-                    total = len(turns)
-                    interactions = count_interactions(turns)
-                    print(f"  Exchanges: {interactions}  Turns: {total}")
-                    print()
+                        turns = find_turns(data, include_tools=False, verbosity=verbosity)
+                        turns = filter_conversation_turns(turns)
 
-                    show_turns: list[Turn] = []
-                    if args.head is not None and args.tail is not None:
-                        head_turns = turns[:args.head]
-                        tail_turns = turns[-args.tail:] if args.tail <= total else turns
-                        if args.head + args.tail >= total:
-                            show_turns = turns
-                        else:
-                            show_turns = head_turns
-                            show_turns.append(Turn(role="system", text=f"... ({total - args.head - args.tail} exchanges omitted) ...", index=0, source=""))
-                            show_turns.extend(tail_turns)
-                    elif args.head is not None:
-                        show_turns = turns[:args.head]
-                        if args.head < total:
-                            print(f"  Showing first {args.head} of {total} exchanges:")
-                    elif args.tail is not None:
-                        show_turns = turns[-args.tail:]
-                        if args.tail < total:
-                            print(f"  Showing last {args.tail} of {total} exchanges:")
+                        if not turns:
+                            print("  No exchanges found.")
+                            continue
 
-                    print()
-                    for turn in show_turns:
-                        role_char = "U" if turn.role == "user" else "A" if turn.role == "assistant" else "·"
-                        role_color = color_cyan if turn.role == "user" else color_dim
-                        collapsed = " ".join(turn.text.split())
-                        if len(collapsed) > 120:
-                            collapsed = collapsed[:117] + "..."
-                        print(f"  {role_color(role_char)}: {collapsed}")
+                        total = len(turns)
+                        interactions = count_interactions(turns)
+                        print(f"  Exchanges: {interactions}  Turns: {total}")
+                        print()
 
-                except RecoveryError as e:
-                    die(str(e))
+                        show_turns: list[Turn] = []
+                        if args.head is not None and args.tail is not None:
+                            head_turns = turns[:args.head]
+                            tail_turns = turns[-args.tail:] if args.tail <= total else turns
+                            if args.head + args.tail >= total:
+                                show_turns = turns
+                            else:
+                                show_turns = head_turns
+                                show_turns.append(Turn(role="system", text=f"... ({total - args.head - args.tail} exchanges omitted) ...", index=0, source=""))
+                                show_turns.extend(tail_turns)
+                        elif args.head is not None:
+                            show_turns = turns[:args.head]
+                            if args.head < total:
+                                print(f"  Showing first {args.head} of {total} exchanges:")
+                        elif args.tail is not None:
+                            show_turns = turns[-args.tail:]
+                            if args.tail < total:
+                                print(f"  Showing last {args.tail} of {total} exchanges:")
+
+                        print()
+                        for turn in show_turns:
+                            role_char = "U" if turn.role == "user" else "A" if turn.role == "assistant" else "·"
+                            role_color = color_cyan if turn.role == "user" else color_dim
+                            collapsed = " ".join(turn.text.split())
+                            if len(collapsed) > 120:
+                                collapsed = collapsed[:117] + "..."
+                            print(f"  {role_color(role_char)}: {collapsed}")
+
+                    except RecoveryError as e:
+                        print(color_red(f"Error showing session {session_data['id']}: {e}"))
         return
 
     # Handle --show-models early (no session needed).
@@ -11166,71 +11244,115 @@ def main() -> None:
 
         require_opencode()
 
-        try:
-            sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
-        except RecoveryError as e:
-            db_sessions = db_list_sessions(_project_id) if _project_id else None
-            if db_sessions and not args.session:
-                sessions = []
-                for s in db_sessions:
-                    sessions.append(
-                        SessionInfo(
-                            session_id=s["id"],
-                            title=s["title"] or "(untitled)",
-                            created=str(s.get("created", "")) or "unknown",
-                            updated=str(s.get("updated", "")) or "unknown",
-                            raw=s,
-                        )
-                    )
-            elif args.session:
-                sessions = []
-            else:
-                raise e
+        # Build list of target sessions
+        target_sessions = []
+        model_spec = None
+        is_compact_command = args.compact is not None
 
-        if args.session:
-            if args.session.startswith("-"):
-                raise RecoveryError(
-                    f"Invalid session ID: {args.session!r} (must not start with '-')."
+        if is_compact_command:
+            if args.specs:
+                res = resolve_and_expand_targets(
+                    args.specs,
+                    kinds={"session", "project", "model"},
+                    allow_project_expansion=True,
+                    filter_subagents=not args.all_sessions,
+                    all_sessions=args.all_sessions,
+                    project_id=_project_id
                 )
-            # Try to resolve via DB first (supports number, title substring, ID).
-            res = resolve_and_expand_targets(
-                [args.session],
-                kinds={"session"},
-                filter_subagents=not args.all_sessions,
-                project_id=_project_id
-            )
-            resolved = res.sessions[0]
-            if resolved:
-                session = find_session_by_id(sessions, resolved["id"])
-                # Use DB title if find_session_by_id returned a placeholder.
-                if session.title == "(provided session ID)":
-                    session = SessionInfo(
-                        session_id=resolved["id"],
-                        title=resolved["title"],
-                        created=str(resolved.get("created", "")),
-                        updated=str(resolved.get("updated", "")),
-                        raw=resolved,
-                    )
+                target_sessions = res.sessions
+                if len(res.models) > 1:
+                    die(f"ocman: compact takes exactly one model. Found {len(res.models)}: "
+                        f"{', '.join(f'{m.provider_id}/{m.model_id}' for m in res.models)}")
+                elif len(res.models) == 1:
+                    m = res.models[0]
+                    model_spec = f"{m.provider_id}/{m.model_id}"
+                else:
+                    model_spec = "__interactive__"
             else:
-                session = find_session_by_id(sessions, args.session)
+                model_spec = "__interactive__"
         else:
-            session = prompt_for_session(sessions)
+            if args.specs:
+                res = resolve_and_expand_targets(
+                    args.specs,
+                    kinds={"session", "project"},
+                    allow_project_expansion=True,
+                    filter_subagents=not args.all_sessions,
+                    all_sessions=args.all_sessions,
+                    project_id=_project_id
+                )
+                target_sessions = res.sessions
 
-        print(f"Session: {color_bold(session.title)}")
-        print(f"     ID: {session.session_id}")
+        # If no specs, fallback to single session prompt
+        if not target_sessions:
+            try:
+                sessions = list_sessions(verbosity=verbosity, cwd=opencode_cwd)
+            except RecoveryError as e:
+                db_sessions = db_list_sessions(_project_id) if _project_id else None
+                if db_sessions and not args.session:
+                    sessions = []
+                    for s in db_sessions:
+                        sessions.append(
+                            SessionInfo(
+                                session_id=s["id"],
+                                title=s["title"] or "(untitled)",
+                                created=str(s.get("created", "")) or "unknown",
+                                updated=str(s.get("updated", "")) or "unknown",
+                                raw=s,
+                            )
+                        )
+                elif args.session:
+                    sessions = []
+                else:
+                    raise e
+
+            if args.session:
+                if args.session.startswith("-"):
+                    raise RecoveryError(
+                        f"Invalid session ID: {args.session!r} (must not start with '-')."
+                    )
+                res = resolve_and_expand_targets(
+                    [args.session],
+                    kinds={"session"},
+                    filter_subagents=not args.all_sessions,
+                    project_id=_project_id
+                )
+                resolved = res.sessions[0]
+                if resolved:
+                    session_obj = find_session_by_id(sessions, resolved["id"])
+                    if session_obj.title == "(provided session ID)":
+                        session_obj = SessionInfo(
+                            session_id=resolved["id"],
+                            title=resolved["title"],
+                            created=str(resolved.get("created", "")),
+                            updated=str(resolved.get("updated", "")),
+                            raw=resolved,
+                        )
+                else:
+                    session_obj = find_session_by_id(sessions, args.session)
+            else:
+                session_obj = prompt_for_session(sessions)
+            
+            target_sessions = [session_obj.raw]
+
+        # Convert all target sessions to SessionInfo objects
+        sessions_to_process = []
+        for s in target_sessions:
+            if isinstance(s, SessionInfo):
+                sessions_to_process.append(s)
+            else:
+                sessions_to_process.append(
+                    SessionInfo(
+                        session_id=s["id"],
+                        title=s["title"] or "(untitled)",
+                        created=str(s.get("created", "")) or "unknown",
+                        updated=str(s.get("updated", "")) or "unknown",
+                        raw=s,
+                    )
+                )
 
         output_dir = args.out
-        generated_paths: list[Path] = []
 
-        # Whether to also copy the compacted file into a project's .agents/prompts/pending/
-        # (only when --compact produces one). Config default
-        # (copy_restart_to_project_prompts, default True), overridden OFF by the
-        # --no-project-prompt flag.
-        _copy_compacted_to_prompts = bool(
-            load_ocman_config().get("copy_restart_to_project_prompts", True)
-        ) and not getattr(args, "no_project_prompt", False)
-
-        # Load prior context files BEFORE cleaning (in case they're in the output dir).
+        # Load prior context files BEFORE cleaning
         prior_context = load_prior_context_files(
             input_compact=args.input_compact,
             input_restart=args.input_restart,
@@ -11243,189 +11365,339 @@ def main() -> None:
         if args.clean_tmp:
             clean_temp_files(verbosity=verbosity)
 
-        if args.clean_previous:
-            # Warn if --clean-previous will delete files specified via --input-*.
-            prior_files = set(
-                p.resolve() for p in
-                args.input_compact + args.input_restart + args.input_transcript
-            )
-            if prior_files:
-                safe_id = safe_filename(session.session_id)
-                prefix = f"opencode-recovery-{safe_id}-"
-                if output_dir.is_dir():
-                    for entry in output_dir.iterdir():
-                        if entry.is_file() and entry.name.startswith(prefix):
-                            if entry.resolve() in prior_files:
-                                eprint(color_yellow(
-                                    f"Warning: --clean-previous will delete {entry.name}, "
-                                    f"which was specified as prior context input. "
-                                    f"Content was already loaded into memory."
-                                ))
+        _copy_compacted_to_prompts = bool(
+            load_ocman_config().get("copy_restart_to_project_prompts", True)
+        ) and not getattr(args, "no_project_prompt", False)
 
-            clean_previous_recovery_files(
-                output_dir=output_dir,
-                session_id=session.session_id,
-                verbosity=verbosity,
-            )
-
-        # If only cleaning was requested (no recovery/compaction), exit early.
-        clean_only = (
-            (args.clean_tmp or args.clean_previous)
-            and not args.use_model
-            and not args.input_compact
-            and not args.input_restart
-            and not args.input_transcript
-            and not args.keep_temp
-        )
-        if clean_only:
+        # 1. Recover Only mode
+        if not is_compact_command:
+            success_count = 0
+            fail_count = 0
+            for session in sessions_to_process:
+                print()
+                print(f"Recovering session {session.session_id} ({session.title})...")
+                try:
+                    if args.clean_previous:
+                        clean_previous_recovery_files(
+                            output_dir=output_dir,
+                            session_id=session.session_id,
+                            verbosity=verbosity,
+                        )
+                    
+                    if args.keep_temp:
+                        temp_dir = Path(tempfile.mkdtemp(prefix="opencode-recovery-"))
+                        export_path = write_export_to_temp(
+                            session_id=session.session_id,
+                            temp_dir=temp_dir,
+                            verbosity=verbosity,
+                            cwd=opencode_cwd,
+                        )
+                        generated_paths = recover_from_export(
+                            export_path=export_path,
+                            output_dir=output_dir,
+                            session=session,
+                            include_tools=args.include_tools,
+                            all_roles=args.all_roles,
+                            verbosity=verbosity,
+                            max_lines=args.max_lines,
+                            max_interactions=args.max_interactions,
+                            prior_context=prior_context,
+                            output_transcript=args.output_transcript,
+                            output_restart=args.output_restart,
+                            output_compact=args.output_compact,
+                        )
+                        print(f"Temporary export preserved at: {color_cyan(str(export_path))}")
+                    else:
+                        with tempfile.TemporaryDirectory(prefix="opencode-recovery-") as td:
+                            export_path = write_export_to_temp(
+                                session_id=session.session_id,
+                                temp_dir=Path(td),
+                                verbosity=verbosity,
+                                cwd=opencode_cwd,
+                            )
+                            generated_paths = recover_from_export(
+                                export_path=export_path,
+                                output_dir=output_dir,
+                                session=session,
+                                include_tools=args.include_tools,
+                                all_roles=args.all_roles,
+                                verbosity=verbosity,
+                                max_lines=args.max_lines,
+                                max_interactions=args.max_interactions,
+                                prior_context=prior_context,
+                                output_transcript=args.output_transcript,
+                                output_restart=args.output_restart,
+                                output_compact=args.output_compact,
+                            )
+                    
+                    if generated_paths:
+                        success_count += 1
+                        print("Recovery files generated:")
+                        for path in generated_paths:
+                            print(f"  {path}")
+                        restart_file = generated_paths[1]  # .restart.md
+                        print(f"  Next step: Start a fresh session, then: read and execute {color_cyan(str(restart_file))}")
+                    else:
+                        fail_count += 1
+                        print(color_red(f"Recovery failed for session {session.session_id}"))
+                except Exception as e:
+                    fail_count += 1
+                    print(color_red(f"Error recovering session {session.session_id}: {e}"))
+            
+            if len(sessions_to_process) > 1:
+                print()
+                print("=" * 60)
+                print(color_bold("Recovery Batch Summary"))
+                print(f"  Success: {success_count}  Failed: {fail_count}")
+                print("=" * 60)
             return
 
-        if args.keep_temp:
-            temp_dir = Path(tempfile.mkdtemp(prefix="opencode-recovery-"))
-            temp_dir_holder["path"] = temp_dir
-
+        # 2. Compaction Mode
+        # Resolve model if needed
+        if model_spec == "__interactive__":
             try:
-                export_path = write_export_to_temp(
-                    session_id=session.session_id,
-                    temp_dir=temp_dir,
-                    verbosity=verbosity,
-                    cwd=opencode_cwd,
-                )
-
-                generated_paths = recover_from_export(
-                    export_path=export_path,
-                    output_dir=output_dir,
-                    session=session,
-                    include_tools=args.include_tools,
-                    all_roles=args.all_roles,
-                    verbosity=verbosity,
-                    max_lines=args.max_lines,
-                    max_interactions=args.max_interactions,
-                    prior_context=prior_context,
-                    output_transcript=args.output_transcript,
-                    output_restart=args.output_restart,
-                    output_compact=args.output_compact,
-                )
-
-                print()
-                print(f"Temporary export preserved at: {color_cyan(str(export_path))}")
-
-            finally:
-                # --keep-temp intentionally skips cleanup.
-                pass
-
-        else:
-            with tempfile.TemporaryDirectory(prefix="opencode-recovery-") as temp_dir_name:
-                temp_dir = Path(temp_dir_name)
-                temp_dir_holder["path"] = temp_dir
-
-                export_path = write_export_to_temp(
-                    session_id=session.session_id,
-                    temp_dir=temp_dir,
-                    verbosity=verbosity,
-                    cwd=opencode_cwd,
-                )
-
-                generated_paths = recover_from_export(
-                    export_path=export_path,
-                    output_dir=output_dir,
-                    session=session,
-                    include_tools=args.include_tools,
-                    all_roles=args.all_roles,
-                    verbosity=verbosity,
-                    max_lines=args.max_lines,
-                    max_interactions=args.max_interactions,
-                    prior_context=prior_context,
-                    output_transcript=args.output_transcript,
-                    output_restart=args.output_restart,
-                    output_compact=args.output_compact,
-                )
-
-                log("Temporary export cleaned up.", verbosity)
-
-        if generated_paths:
-            print("Recovery files generated:")
-            for path in generated_paths:
-                print(f"  {path}")
-
-            # If --compact (or --use-model) is specified, run compaction via LLM.
-            compacted_path: Path | None = None
-            model_spec = args.use_model
-            if model_spec:
-                # Interactive model selection if no model specified.
-                if model_spec == "__interactive__":
-                    try:
-                        config = load_opencode_config(verbosity=verbosity)
-                        models = extract_models_from_config(config)
-                        display_models(models)
-                        selection = input("Select model (number or name): ").strip()
-                        if not selection:
-                            print("Compaction cancelled.")
-                            model_spec = None
-                        else:
-                            # Resolve by number or name.
-                            compatible = [m for m in models if m.compatible and m.api_key and m.base_url]
-                            compatible.sort(key=lambda m: m.name.lower())
-                            if selection.isdigit():
-                                idx = int(selection) - 1
-                                if 0 <= idx < len(compatible):
-                                    selected = compatible[idx]
-                                    model_spec = f"{selected.provider_id}/{selected.model_id}"
-                                    print(f"\n  Selected: {color_bold(selected.name)} ({model_spec})")
-                                    print(f"  Tip: next time use --compact {model_spec}")
-                                    print()
-                                else:
-                                    print(f"Invalid number. Must be 1-{len(compatible)}.")
-                                    model_spec = None
-                            else:
-                                model_spec = selection
-                    except (RecoveryError, EOFError, KeyboardInterrupt):
-                        model_spec = None
-
-                if model_spec:
-                    compact_prompt_file = next(
-                        (p for p in generated_paths if p.name.endswith(".prompt.md")),
-                        generated_paths[-1],
-                    )
-                    compacted_path = run_compaction(
-                        compact_prompt_path=compact_prompt_file,
-                        output_dir=output_dir,
-                        session=session,
-                        model_spec=model_spec,
-                        verbosity=verbosity,
-                        force=getattr(args, "force", False),
-                        allow_secrets=getattr(args, "allow_secrets", False),
-                    )
-                if compacted_path:
-                    generated_paths.append(compacted_path)
-                    # If the working project uses the .agents convention, also drop the
-                    # compacted file (the doc a fresh agent reads) into
-                    # <project>/.agents/prompts/pending/ (fail-soft; opt-out via config/flag).
-                    project_copy = maybe_copy_compacted_to_project(
-                        compacted_path, session, opencode_cwd,
-                        _copy_compacted_to_prompts, verbosity,
-                    )
-                    if project_copy is not None:
-                        generated_paths.append(project_copy)
-                    print()
-                    print(color_bold("Next step:"))
-                    print(f"  1. Start a fresh opencode session in the same project directory.")
-                    print(f"  2. Tell the agent: read and execute {color_cyan(str(compacted_path))}")
-                    print()
+                config = load_opencode_config(verbosity=verbosity)
+                models = extract_models_from_config(config)
+                display_models(models)
+                selection = input("Select model (number or name): ").strip()
+                if not selection:
+                    print("Compaction cancelled.")
+                    return
                 else:
-                    # User cancelled compaction; fall through to non-compacted instructions.
-                    pass
+                    compatible = [m for m in models if m.compatible and m.api_key and m.base_url]
+                    compatible.sort(key=lambda m: m.name.lower())
+                    if selection.isdigit():
+                        idx = int(selection) - 1
+                        if 0 <= idx < len(compatible):
+                            selected = compatible[idx]
+                            model_spec = f"{selected.provider_id}/{selected.model_id}"
+                            print(f"\n  Selected: {color_bold(selected.name)} ({model_spec})")
+                        else:
+                            die(f"Invalid number. Must be 1-{len(compatible)}.")
+                    else:
+                        model_spec = selection
+            except (RecoveryError, EOFError, KeyboardInterrupt):
+                print("Compaction cancelled.")
+                return
 
-            # Show non-compacted instructions if no compaction was produced.
-            if not args.use_model or (args.use_model and not compacted_path):
-                restart_file = generated_paths[1]  # .restart.md
+        # Load config and resolve model
+        config = load_opencode_config(verbosity=verbosity)
+        models = extract_models_from_config(config)
+        model = resolve_model(models, model_spec)
+
+        print(color_bold("LLM Compaction Estimates"))
+        print(f"  Model:    {color_cyan(f'{model.provider_id}/{model.model_id}')} ({model.name})")
+        print(f"  Endpoint: {model.base_url}")
+        print()
+        print(f"  {'Session ID':<30} | {'Est Input':<10} | {'Est Output':<10} | {'Est Cost':<10}")
+        print("-" * 75)
+
+        total_input_tokens = 0
+        total_output_tokens = 0
+        total_est_cost = 0.0
+        has_unknown_cost = False
+
+        estimates = []
+        temp_dirs_to_clean = []
+
+        try:
+            for session in sessions_to_process:
+                td = tempfile.mkdtemp(prefix="opencode-recovery-")
+                temp_dirs_to_clean.append(td)
+                temp_dir = Path(td)
+
+                export_path = write_export_to_temp(
+                    session_id=session.session_id,
+                    temp_dir=temp_dir,
+                    verbosity=verbosity,
+                    cwd=opencode_cwd,
+                )
+
+                generated_paths = recover_from_export(
+                    export_path=export_path,
+                    output_dir=temp_dir,
+                    session=session,
+                    include_tools=args.include_tools,
+                    all_roles=args.all_roles,
+                    verbosity=verbosity,
+                    max_lines=args.max_lines,
+                    max_interactions=args.max_interactions,
+                    prior_context=prior_context,
+                    output_transcript=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "transcript"),
+                    output_restart=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "restart"),
+                    output_compact=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "prompt"),
+                )
+
+                compact_prompt_file = next(
+                    (p for p in generated_paths if p.name.endswith(".prompt.md")),
+                    None,
+                )
+                if not compact_prompt_file:
+                    raise RecoveryError(f"Compaction prompt file was not generated for session {session.session_id}")
+
+                prompt_content = compact_prompt_file.read_text(encoding="utf-8")
+
+                check_egress_guards(
+                    prompt_content,
+                    source_desc=f"Compaction prompt for session {session.session_id}",
+                    config=load_ocman_config(),
+                    force=args.force,
+                    allow_secrets=args.allow_secrets,
+                )
+
+                input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
+                output_tokens_est = max(500, input_tokens // 5)
+                cost = estimate_cost(input_tokens, output_tokens_est, model)
+
+                estimates.append({
+                    "session": session,
+                    "temp_dir": temp_dir,
+                    "generated_paths": generated_paths,
+                    "compact_prompt_file": compact_prompt_file,
+                    "input_tokens": input_tokens,
+                    "output_tokens_est": output_tokens_est,
+                    "cost": cost
+                })
+
+                total_input_tokens += input_tokens
+                total_output_tokens += output_tokens_est
+                if cost is not None:
+                    total_est_cost += cost
+                else:
+                    has_unknown_cost = True
+
+            # Print table rows
+            for est in estimates:
+                cost_str = f"${est['cost']:.4f}" if est['cost'] is not None else "unknown"
+                print(f"  {est['session'].session_id:<30} | {est['input_tokens']:>10,} | {est['output_tokens_est']:>10,} | {cost_str:>10}")
+            print("-" * 75)
+
+            avg_cost_str = f"${(total_est_cost / len(estimates)):.4f}" if not has_unknown_cost and estimates else "unknown"
+            total_cost_str = f"${total_est_cost:.4f}" if not has_unknown_cost else "unknown"
+
+            print(f"  {'GRAND TOTAL':<30} | {total_input_tokens:>10,} | {total_output_tokens:>10,} | {total_cost_str:>10}")
+            print(f"  {'AVERAGE':<30} | {int(total_input_tokens / len(estimates)):>10,} | {int(total_output_tokens / len(estimates)):>10,} | {avg_cost_str:>10}")
+            print()
+            print("  Note: The session transcripts will be sent to the API endpoint above.")
+            print("  Note: These values are pre-run estimates and may differ from actual usage.")
+            print()
+
+            if args.clean_previous:
+                # Warn if --clean-previous will delete files specified via --input-*.
+                prior_files = set(
+                    p.resolve() for p in
+                    args.input_compact + args.input_restart + args.input_transcript
+                )
+                if prior_files:
+                    for session in sessions_to_process:
+                        safe_id = safe_filename(session.session_id)
+                        prefix = f"opencode-recovery-{safe_id}-"
+                        if output_dir.is_dir():
+                            for entry in output_dir.iterdir():
+                                if entry.is_file() and entry.name.startswith(prefix):
+                                    if entry.resolve() in prior_files:
+                                        eprint(color_yellow(
+                                            f"Warning: --clean-previous will delete {entry.name}, "
+                                            f"which was specified as prior context input. "
+                                            f"Content was already loaded into memory."
+                                        ))
+
+            proceed = True
+            if not args.yes:
+                if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                    answer = input("Proceed with compaction batch? [Y/n]: ").strip().lower()
+                    if answer in {"n", "no"}:
+                        print("  Compaction batch cancelled.")
+                        proceed = False
+                else:
+                    log("Non-interactive mode: proceeding with compaction.", verbosity)
+
+            if proceed:
+                success_count = 0
+                fail_count = 0
+
+                actual_input_tokens = 0
+                actual_output_tokens = 0
+                actual_total_cost = 0.0
+                has_unknown_actual_cost = False
+
+                for est in estimates:
+                    session = est["session"]
+                    print()
+                    print(f"Compacting session {session.session_id} ({session.title})...")
+
+                    try:
+                        if args.clean_previous:
+                            clean_previous_recovery_files(
+                                output_dir=output_dir,
+                                session_id=session.session_id,
+                                verbosity=verbosity,
+                            )
+
+                        output_dir.mkdir(parents=True, exist_ok=True)
+                        moved_paths = []
+                        for p in est["generated_paths"]:
+                            dest_path = output_dir / p.name
+                            resolve_recovery_collision(dest_path, force=args.force, verbosity=verbosity)
+                            shutil.copy2(p, dest_path)
+                            moved_paths.append(dest_path)
+
+                        compact_prompt_file_dest = output_dir / est["compact_prompt_file"].name
+
+                        compacted_path, usage_info = run_compaction(
+                            compact_prompt_path=compact_prompt_file_dest,
+                            output_dir=output_dir,
+                            session=session,
+                            model=model,
+                            verbosity=verbosity,
+                            force=args.force,
+                            allow_secrets=args.allow_secrets,
+                        )
+
+                        if compacted_path:
+                            success_count += 1
+                            moved_paths.append(compacted_path)
+                            project_copy = maybe_copy_compacted_to_project(
+                                compacted_path, session, opencode_cwd,
+                                _copy_compacted_to_prompts, verbosity,
+                            )
+                            if project_copy is not None:
+                                moved_paths.append(project_copy)
+
+                            if usage_info:
+                                actual_input_tokens += usage_info["prompt_tokens"]
+                                actual_output_tokens += usage_info["completion_tokens"]
+                                if usage_info["cost"] is not None:
+                                    actual_total_cost += usage_info["cost"]
+                                else:
+                                    has_unknown_actual_cost = True
+                            else:
+                                has_unknown_actual_cost = True
+
+                            print(color_green(f"[+] Compaction success: {session.session_id}"))
+                        else:
+                            fail_count += 1
+                            print(color_red(f"Compaction failed for session {session.session_id}"))
+
+                    except Exception as e:
+                        fail_count += 1
+                        print(color_red(f"Error compacting session {session.session_id}: {e}"))
+
                 print()
-                print(color_bold("Next step:"))
-                print(f"  1. Start a fresh opencode session in the same project directory.")
-                print(f"  2. Tell the agent: read and execute {color_cyan(str(restart_file))}")
-                print()
-                print(color_dim("  Tip: For a more compact restart file, rerun with:"))
-                print(color_dim(f"    --use-model PROVIDER/MODEL  (see --show-models for options)"))
+                print("=" * 60)
+                print(color_bold("Compaction Batch Summary"))
+                print(f"  Success: {success_count}  Failed: {fail_count}")
+                if success_count > 0:
+                    cost_str = f"${actual_total_cost:.4f}" if not has_unknown_actual_cost else "unavailable"
+                    avg_cost_str = f"${(actual_total_cost / success_count):.4f}" if not has_unknown_actual_cost else "unavailable"
+                    print(f"  Actual tokens (successes): input {actual_input_tokens:,}, output {actual_output_tokens:,}")
+                    print(f"  Actual cost (successes):   {cost_str} (average {avg_cost_str} per session)")
+                    print(color_dim("  Note: Actual costs are estimated based on configured model prices and API-reported tokens."))
+                print("=" * 60)
+
+        finally:
+            for td in temp_dirs_to_clean:
+                shutil.rmtree(td, ignore_errors=True)
 
     except KeyboardInterrupt:
         eprint(color_yellow("Recovery cancelled."))
