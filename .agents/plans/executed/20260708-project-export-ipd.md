@@ -1,6 +1,6 @@
 # Implementation Plan - Whole-Project Export/Import (.ocbox)
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED (2026-07-09)
 
 This document plans a feature deferred from the CLI usability pass: exporting an
 entire project (all of its root sessions and their subtrees) as a single

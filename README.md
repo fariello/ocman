@@ -179,10 +179,13 @@ project or a session, so you rarely need to say which:
     `ocman session move`. If `SPEC` matches both a project and a session, or is a bare integer (a
     list number), ocman errors and asks you to disambiguate with `ocman move project SPEC to DST` or
     `ocman move session SPEC to DST`.
-*   `ocman export SPEC to FILE` exports the session `SPEC` names to a `.ocbox` bundle (`to` optional;
-    `--to FILE` also works). Whole-project export is not yet supported: `ocman export project SPEC`
-    prints a clear "not yet supported" error. It is planned (see
-    `.agents/plans/pending/20260708-project-export-ipd.md`) but not yet available.
+*   `ocman export SPEC to FILE` exports whichever session or project `SPEC` names to a `.ocbox`
+    bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session SPEC`
+    or `ocman export project SPEC`. A project bundle contains the full project row, its
+    `project_directory`/`workspace` rows, and every session (plus subagents) and diff.
+    `ocman session import FILE` auto-detects the bundle kind and restores it; on a project import
+    that collides with an existing project it prompts (back up / delete / move / merge / new / abort)
+    or, non-interactively, refuses unless you pass `--to-project ID` or `--new-project-path PATH`.
 
 The remaining natural-language sugar is an optional `in [project|session] NAME` phrase, accepted by
 `ocman session list`, `ocman session search`, and `ocman search`. For `session list` it is
@@ -334,7 +337,7 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in [project\|session] NAME` (auto-detects; disambiguate with `in project NAME` / `in session NAME`). `-n N`/`--limit N` sets the max matching lines shown per session (default: 10). |
 | `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. |
 | `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |
-| `ocman export SPEC to FILE` | Auto-detects the session `SPEC` and exports it to a `.ocbox` bundle. `to` is optional (`--to FILE` also works). Whole-project export is not yet supported (planned). |
+| `ocman export SPEC to FILE` | Auto-detects whether `SPEC` is a session or a project and exports it to a `.ocbox` bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session\|project SPEC`. `ocman session import FILE` auto-detects and restores either kind. |
 | `ocman info` | Alias of `ocman db info`. |
 | `ocman disk` | Alias of `ocman db info --by-project`. |
 | `ocman logs` | Alias of `ocman history show`. |

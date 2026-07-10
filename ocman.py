@@ -4681,8 +4681,8 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} move SPEC to DST", "Move a project or session (auto-detects which)"),
         (f"{prog} move project SRC to DST", "Force project (disambiguate / use a number)"),
         (f"{prog} db rebase --from A --to B", "Bulk rebase path prefixes in the DB"),
-        (f"{prog} export SPEC to F.ocbox", "Export a session bundle (auto-detects)"),
-        (f"{prog} session import F.ocbox", "Import a session bundle"),
+        (f"{prog} export SPEC to F.ocbox", "Export a session or project bundle (auto-detects)"),
+        (f"{prog} session import F.ocbox", "Import a session or project bundle (auto-detects)"),
     ]
 
     config = [
@@ -4759,7 +4759,7 @@ def build_help_reference() -> str:
             ("compact ID [MODEL] [opts]", "Recover + LLM-compact"),
             ("delete ID [--dry-run --force]", "Delete a session (recursively)"),
             ("export ID --to FILE", "Export a session bundle (.ocbox)"),
-            ("import FILE [--to-project ID]", "Import a session bundle"),
+            ("import FILE [--to-project ID]", "Import a session or project bundle (auto-detects)"),
             ("move ID --to DST [--metadata-only]", "Relocate a session"),
         ]),
         ("project <action>", [
@@ -4801,7 +4801,7 @@ def build_help_reference() -> str:
         ("other verbs", [
             ("search QUERY [in [project|session] NAME]", "Alias of 'session search'"),
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
-            ("export [session] SPEC to FILE", "Export a session bundle; auto-detects"),
+            ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME]", "Word-order aliases"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
@@ -5339,7 +5339,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Update DB paths only; do not move files.")
 
     # 'ocman export [session] SPEC to FILE' (session-scope for now).
-    sp = new_sub("export", help="Export a session bundle (.ocbox); auto-detects the session.")
+    sp = new_sub("export", help="Export a session or project bundle (.ocbox); auto-detects the kind.")
     sp.add_argument("kind", nargs="?", default=None, choices=["project", "session"],
                     help="Optional: force 'session' (project export is not yet supported).")
     sp.add_argument("spec", help="Session id/number/title to export.")
@@ -5735,6 +5735,14 @@ def parse_args() -> argparse.Namespace:
             sys.exit(2)
         print_help(topic)
         sys.exit(0)
+
+    # Apply --db before _normalize so target resolution (move/export/search
+    # scope, which query the DB during normalization) uses the requested
+    # database, not the default. main() also sets it, harmlessly, from args.db.
+    _db = getattr(ns, "db", None)
+    if _db is not None:
+        global OPENCODE_DB_PATH
+        OPENCODE_DB_PATH = _db
 
     return _normalize(ns, config)
 

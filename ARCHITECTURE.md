@@ -61,11 +61,21 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   tables and their session foreign-key columns are enumerated centrally in
   `SESSION_RELATIONAL_TABLES` in `ocman.py`; all delete/export/import/cleanup logic iterates
   that list, so table identifiers are never taken from untrusted input.
-- **`.ocbox` export bundle** (a ZIP, `export_version: 2.0`): `meta.json`,
-  one `db_data/<table>.jsonl` per relational table (streamed in batches to keep memory flat),
-  and `session_diffs/<session_id>.json` storage files. Import validates session-ID format
-  (`^[a-zA-Z0-9_\-]+$`), validates/allowlists table and column names, and remaps IDs on
-  collision. A legacy `db_data.json` single-blob format is still accepted on import.
+- **`.ocbox` export bundle** (a ZIP): `meta.json`, one `db_data/<table>.jsonl` per relational
+  table (streamed in batches to keep memory flat), and `session_diffs/<session_id>.json`
+  storage files, all written by the shared `_write_ocbox` packer. A **session** bundle
+  (`export_version: 2.0`, no `kind`) covers `SESSION_RELATIONAL_TABLES` for one session
+  subtree. A **project** bundle (`export_version: 3.0`, `kind: "project"`,
+  `main_session_id: null`) additionally covers the project-scoped tables
+  (`PROJECT_RELATIONAL_TABLES`: `project`, `project_directory`, `workspace`) and every session
+  in the project. Import auto-detects the kind (a missing `kind` means a session bundle, so
+  legacy `.ocbox` files still import), validates session-ID and project-ID format
+  (`^[a-zA-Z0-9_\-]+$`) and the project worktree (absolute, no traversal), allowlists table and
+  column names, and remaps session IDs on collision. Project import resolves project identity
+  independently (prompt / `--to-project` / `--new-project-path` / non-interactive refusal),
+  inserts the project row inside the import transaction (no orphan on failure), and never runs
+  project/workspace ids through the session id map. A legacy `db_data.json` single-blob format
+  is still accepted on session import.
 - **Backup ZIP**: the database family (`.db`/`-wal`/`-shm`), `ocman.toml`,
   `ocman_history.json`, and session `session_diff/*.json` files.
 - **`ocman.toml`** (`~/.config/opencode/ocman.toml`): flat config with the keys in

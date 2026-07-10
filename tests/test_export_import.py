@@ -9,7 +9,9 @@ import ocman
 from ocman import (
     db_get_session_subtree,
     bundle_session_data,
+    bundle_project_data,
     extract_and_import_session,
+    extract_and_import_project,
     RecoveryError,
 )
 
@@ -28,11 +30,23 @@ def temp_db(tmp_path):
     conn = sqlite3.connect(str(db_path))
     cursor = conn.cursor()
     
+    # Full-column project table (matches the real schema) so whole-project
+    # export/import fidelity tests are meaningful. Existing tests that insert
+    # only (id, worktree, name) still work: the rest default to NULL.
     cursor.execute("""
         CREATE TABLE project (
             id TEXT PRIMARY KEY,
             worktree TEXT,
-            name TEXT
+            vcs TEXT,
+            name TEXT,
+            icon_url TEXT,
+            icon_color TEXT,
+            time_created INTEGER,
+            time_updated INTEGER,
+            time_initialized INTEGER,
+            sandboxes TEXT,
+            commands TEXT,
+            icon_url_override TEXT
         )
     """)
     cursor.execute("""
@@ -56,11 +70,38 @@ def temp_db(tmp_path):
             parent_id TEXT
         )
     """)
+    # Project-scoped tables used by whole-project bundles.
+    cursor.execute("""
+        CREATE TABLE project_directory (
+            project_id TEXT NOT NULL,
+            directory TEXT NOT NULL,
+            type TEXT,
+            strategy TEXT,
+            time_created INTEGER,
+            PRIMARY KEY(project_id, directory)
+        )
+    """)
+    cursor.execute("""
+        CREATE TABLE workspace (
+            id TEXT PRIMARY KEY,
+            type TEXT NOT NULL DEFAULT 'local',
+            name TEXT NOT NULL DEFAULT '',
+            branch TEXT,
+            directory TEXT,
+            extra TEXT,
+            project_id TEXT NOT NULL,
+            time_used INTEGER NOT NULL DEFAULT 0
+        )
+    """)
     for table, col in ocman.SESSION_RELATIONAL_TABLES:
         if table == "session":
             continue
-        cursor.execute(f"CREATE TABLE {table} (id TEXT, {col} TEXT)")
-        
+        # `part` needs a data column for content-bearing tests; others are minimal.
+        if table == "part":
+            cursor.execute(f"CREATE TABLE {table} (id TEXT, {col} TEXT, data TEXT)")
+        else:
+            cursor.execute(f"CREATE TABLE {table} (id TEXT, {col} TEXT)")
+
     conn.commit()
     conn.close()
     
@@ -416,3 +457,221 @@ def test_import_session_path_traversal_rejection(temp_db, tmp_path):
     with pytest.raises(RecoveryError, match="Invalid session ID format"):
         extract_and_import_session(bundle_file, target_project_id="p1")
 
+
+
+# ---------------------------------------------------------------------------
+# Whole-project export/import (.ocbox) - IPD 20260708-project-export
+# ---------------------------------------------------------------------------
+
+
+def _seed_project(db_path, *, proj_id="p1", worktree="/home/me/proj",
+                  sessions=(("sroot", None), ("ssub", "sroot")),
+                  with_scoped=True, full_project=True):
+    """Insert a project with sessions (+ a part row + a diff file) into temp_db."""
+    conn = sqlite3.connect(str(db_path))
+    c = conn.cursor()
+    if full_project:
+        c.execute(
+            "INSERT INTO project (id, worktree, vcs, name, commands) "
+            "VALUES (?,?,?,?,?)",
+            (proj_id, worktree, "git", "My Proj", "cmd"),
+        )
+    else:
+        c.execute("INSERT INTO project (id, worktree, name) VALUES (?,?,?)",
+                  (proj_id, worktree, "My Proj"))
+    for sid, parent in sessions:
+        c.execute(
+            "INSERT INTO session (id, project_id, parent_id, title, directory) "
+            "VALUES (?,?,?,?,?)",
+            (sid, proj_id, parent, f"title {sid}", worktree),
+        )
+    c.execute("INSERT INTO part (id, session_id, data) VALUES ('pt1', ?, ?)",
+              (sessions[0][0], json.dumps({"type": "text", "text": "hi"})))
+    if with_scoped:
+        c.execute("INSERT INTO project_directory (project_id, directory, type, time_created) "
+                  "VALUES (?,?,?,?)", (proj_id, worktree, "main", 1))
+        c.execute("INSERT INTO workspace (id, type, name, project_id, time_used) "
+                  "VALUES ('w1','local','ws',?,5)", (proj_id,))
+    conn.commit()
+    conn.close()
+    # a session-diff file for the root session
+    (ocman.OPENCODE_STORAGE_DIR / f"{sessions[0][0]}.json").write_text(
+        json.dumps({"x": 1}), encoding="utf-8"
+    )
+
+
+def _wipe_all(db_path):
+    conn = sqlite3.connect(str(db_path))
+    c = conn.cursor()
+    for t in ("session", "project_directory", "workspace", "part", "project"):
+        c.execute(f"DELETE FROM {t}")
+    conn.commit()
+    conn.close()
+    for f in list(ocman.OPENCODE_STORAGE_DIR.glob("*.json")):
+        f.unlink()
+
+
+def test_bundle_project_data_contents(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    with zipfile.ZipFile(box) as zf:
+        names = set(zf.namelist())
+        meta = json.loads(zf.read("meta.json").decode())
+    assert meta["kind"] == "project"
+    assert meta["main_session_id"] is None
+    assert set(meta["all_session_ids"]) == {"sroot", "ssub"}
+    for t in ("project", "project_directory", "workspace", "session", "part"):
+        assert f"db_data/{t}.jsonl" in names, t
+    assert "session_diffs/sroot.json" in names
+
+
+def test_bundle_project_empty_errors(temp_db, tmp_path):
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('empty', '/x', 'E')")
+    conn.commit()
+    conn.close()
+    with pytest.raises(RecoveryError, match="no sessions"):
+        bundle_project_data("empty", tmp_path / "e.ocbox")
+
+
+def test_project_roundtrip_full_fidelity(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    _wipe_all(temp_db)
+
+    dest = extract_and_import_project(box, interactive=False)
+    assert dest == "p1"
+
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    # full project row restored (not just id/name/worktree)
+    row = c.execute("SELECT id, vcs, name, commands FROM project").fetchone()
+    assert row == ("p1", "git", "My Proj", "cmd")
+    assert {r[0] for r in c.execute("SELECT id FROM session")} == {"sroot", "ssub"}
+    assert c.execute("SELECT project_id FROM project_directory").fetchone()[0] == "p1"
+    assert c.execute("SELECT project_id FROM workspace").fetchone()[0] == "p1"
+    assert c.execute("SELECT session_id FROM part").fetchone()[0] == "sroot"
+    conn.close()
+    assert (ocman.OPENCODE_STORAGE_DIR / "sroot.json").exists()
+
+
+def test_project_import_refuses_collision_non_interactive(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    # project still present -> collision -> non-interactive must refuse
+    with pytest.raises(RecoveryError, match="already exists"):
+        extract_and_import_project(box, interactive=False)
+
+
+def test_project_import_new_project_path_rebases(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    # original project stays; import as a new project at a new worktree
+    dest = extract_and_import_project(box, new_project_path="/home/me/copy", interactive=False)
+    assert dest != "p1"
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    # sessions collided -> rewritten under the new project, directory rebased
+    rows = c.execute("SELECT project_id, directory FROM session WHERE project_id = ?", (dest,)).fetchall()
+    assert rows, "new-project sessions missing"
+    assert all(d.startswith("/home/me/copy") for _, d in rows)
+    conn.close()
+
+
+def test_project_import_merge_does_not_clobber_metadata(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    # A distinct target project to merge INTO.
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO project (id, worktree, vcs, name, commands) "
+                 "VALUES ('target', '/t', 'hg', 'Target Name', 'tcmd')")
+    conn.commit()
+    conn.close()
+
+    dest = extract_and_import_project(box, target_project_id="target", interactive=False)
+    assert dest == "target"
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    # target's own metadata is untouched (not overwritten by the bundle's project row)
+    assert c.execute("SELECT name, vcs, commands FROM project WHERE id='target'").fetchone() \
+        == ("Target Name", "hg", "tcmd")
+    # imported sessions are attached to the target
+    assert {r[0] for r in c.execute("SELECT project_id FROM session")} <= {"p1", "target"}
+    assert any(pid == "target" for (pid,) in c.execute("SELECT project_id FROM session"))
+    conn.close()
+
+
+def test_project_import_back_compat_session_bundle(temp_db, tmp_path):
+    """A legacy session bundle (no meta.kind) still imports as a session."""
+    _seed_project(temp_db, sessions=(("s1", None),))
+    box = tmp_path / "s.ocbox"
+    bundle_session_data("s1", box)  # session bundle: no kind
+    with zipfile.ZipFile(box) as zf:
+        assert "kind" not in json.loads(zf.read("meta.json").decode())
+    _wipe_all(temp_db)
+    # session importer path: reuse existing project id via source_project
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('p1','/home/me/proj','P')")
+    conn.commit()
+    conn.close()
+    imported = extract_and_import_session(box, target_project_id="p1")
+    assert imported == "s1"
+
+
+def test_project_import_rejects_bad_worktree(temp_db, tmp_path):
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    # Corrupt the bundle's project worktree to a traversal path.
+    import io
+    src = zipfile.ZipFile(box)
+    meta = json.loads(src.read("meta.json").decode())
+    meta["source_project"]["worktree"] = "../../etc"
+    members = {n: src.read(n) for n in src.namelist()}
+    src.close()
+    members["meta.json"] = json.dumps(meta).encode()
+    with zipfile.ZipFile(box, "w") as zf:
+        for n, data in members.items():
+            zf.writestr(n, data)
+    with pytest.raises(RecoveryError, match="(traversal|absolute)"):
+        extract_and_import_project(box, interactive=False)
+
+
+def test_project_import_rollback_no_orphan(temp_db, tmp_path, monkeypatch):
+    """A Phase-3 failure must leave NO partial state, including no orphan project row."""
+    _seed_project(temp_db)
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    _wipe_all(temp_db)
+
+    # Force a failure during the diff-restore step (inside the import transaction).
+    def boom(*a, **k):
+        raise RuntimeError("boom")
+    monkeypatch.setattr(ocman, "_remap_ids_in_json", boom)
+
+    # No collision (project wiped), but make session ids collide to trigger the
+    # remap path we just sabotaged: re-seed a colliding session id.
+    conn = sqlite3.connect(str(temp_db))
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('z','/z','Z')")
+    conn.execute("INSERT INTO session (id, project_id, parent_id, title, directory) "
+                 "VALUES ('sroot','z',NULL,'x','/z')")
+    conn.commit()
+    conn.close()
+
+    # bundle's project id 'p1' does not exist now, so Axis A = create-from-bundle;
+    # session 'sroot' collides -> remap path -> boom.
+    with pytest.raises(RecoveryError, match="Project import failed"):
+        extract_and_import_project(box, interactive=False)
+
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    # The bundle's project 'p1' must NOT have been left behind (no orphan row).
+    assert c.execute("SELECT COUNT(*) FROM project WHERE id='p1'").fetchone()[0] == 0
+    # Pre-existing unrelated project/session survive untouched.
+    assert c.execute("SELECT COUNT(*) FROM project WHERE id='z'").fetchone()[0] == 1
+    conn.close()

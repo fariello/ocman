@@ -1166,6 +1166,37 @@ def test_subcommand_global_db_flag(monkeypatch):
     assert a.list_projects is True
 
 
+def test_db_before_verb_used_for_target_resolution(monkeypatch, tmp_path):
+    """Regression: '--db X export project NAME to F' must resolve NAME against X,
+    not the default DB (target resolution happens during normalization, which
+    runs before main() applies --db). Guards the parse-time --db ordering fix."""
+    import sys
+    from pathlib import Path
+    from ocman import parse_args
+    db = tmp_path / "other.db"
+    conn = sqlite3.connect(str(db))
+    conn.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+    conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, "
+                 "title TEXT, directory TEXT, time_updated INTEGER)")
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('pX', '/some/where', 'X')")
+    # resolve_project (via db_list_projects) only surfaces projects with >=1
+    # session and reads MAX(session.time_updated), so the column must exist.
+    conn.execute("INSERT INTO session (id, project_id, parent_id, title, directory, time_updated) "
+                 "VALUES ('sX', 'pX', NULL, 't', '/some/where', 2)")
+    conn.commit()
+    conn.close()
+    orig = ocman.OPENCODE_DB_PATH
+    try:
+        monkeypatch.setattr(sys, "argv",
+                            ["ocman", "--db", str(db), "export", "project", "/some/where",
+                             "to", str(tmp_path / "out.ocbox")])
+        args = parse_args()
+        assert args.export_project == "pX"
+        assert args.to == str(tmp_path / "out.ocbox")
+    finally:
+        ocman.OPENCODE_DB_PATH = orig
+
+
 # ---- duration parsing (items 7 & 8) ---------------------------------------
 
 def test_parse_duration_to_days():
