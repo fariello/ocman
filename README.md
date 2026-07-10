@@ -177,15 +177,15 @@ project or a session, so you rarely need to say which:
     optional sugar (`ocman move SPEC DST` and `ocman move SPEC --to DST` also work), and
     `--metadata-only` is still supported. This is equivalent to `ocman project move` /
     `ocman session move`. If `SPEC` matches both a project and a session, or is a bare integer (a
-    list number), ocman errors and asks you to disambiguate with `ocman move project SPEC to DST` or
-    `ocman move session SPEC to DST`.
+    list number), ocman prompts you on a TTY to select the target, or errors non-interactively. You can disambiguate by using the qualifier `session:SPEC` or `project:SPEC`, or by using the explicit commands `ocman move project SPEC to DST` or `ocman move session SPEC to DST`.
 *   `ocman export SPEC to FILE` exports whichever session or project `SPEC` names to a `.ocbox`
-    bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session SPEC`
-    or `ocman export project SPEC`. A project bundle contains the full project row, its
+    bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session SPEC`,
+    `ocman export project SPEC`, or using `session:SPEC`/`project:SPEC` qualifiers. A project bundle contains the full project row, its
     `project_directory`/`workspace` rows, and every session (plus subagents) and diff.
     `ocman session import FILE` auto-detects the bundle kind and restores it; on a project import
     that collides with an existing project it prompts (back up / delete / move / merge / new / abort)
     or, non-interactively, refuses unless you pass `--to-project ID` or `--new-project-path PATH`.
+*   **Qualifiers.** You can explicitly force the interpretation of any spec using the prefixes `session:SPEC`, `project:SPEC`, or `model:SPEC`. This prefix overrides auto-detection, prevents TTY prompts, and works in both interactive and non-interactive environments.
 
 The remaining natural-language sugar is an optional `in [project|session] NAME` phrase, accepted by
 `ocman session list`, `ocman session search`, and `ocman search`. For `session list` it is

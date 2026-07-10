@@ -29,9 +29,12 @@ export/import).
   `preprocess_argv` applies natural-language sugar on top of the grammar: word-order list
   aliases (`list projects` / `list sessions [NAME]`), the optional `to` keyword for
   `move`/`export` (`move X to Y` == `move X Y`), and an `in [project|session] NAME` phrase in
-  `search`/`session search`. Two shared helpers keep behavior consistent: `resolve_target()`
-  resolves a specifier that could be a project or a session (used by `move`, `export`, and the
-  search scope, with an explicit "ambiguous" outcome that forces disambiguation), and
+  `search`/`session search`. Shared helpers keep behavior consistent: `resolve_targets()`
+  resolves multiple specifiers that could be projects, sessions, or models, handling
+  kind-qualified prefixes (`session:SPEC`, `project:SPEC`, `model:SPEC`) to bypass auto-detection.
+  Resolution happens within command handlers in `main()` (not during normalization) to allow for
+  interactive TTY prompting and detailed non-interactive ambiguity errors.
+  `resolve_target()` remains as a single-target legacy wrapper. `resolve_model_spec()` resolves model specifiers.
   `parse_duration_to_days()` parses `--older-than`/positional durations (`2h`, `5d`, `6w`,
   `6mo`, `1y`, or spelled-out `"30 days"`; `mo`/`y` are approximate). The legacy `--days` is a
   hidden alias of `--older-than`. `backup create`/`backup restore` stream byte-level progress

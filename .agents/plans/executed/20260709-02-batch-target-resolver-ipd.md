@@ -1,6 +1,6 @@
 # Implementation Plan 02 - Batch multi-target resolver & ambiguity engine
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 Foundation for the multi-target work. Introduces a single place that turns a
 list of raw user specs into resolved targets (sessions, projects, models),

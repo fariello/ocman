@@ -1185,14 +1185,19 @@ def test_db_before_verb_used_for_target_resolution(monkeypatch, tmp_path):
                  "VALUES ('sX', 'pX', NULL, 't', '/some/where', 2)")
     conn.commit()
     conn.close()
+    called_with = []
+    monkeypatch.setattr(ocman, "bundle_project_data", lambda pid, path, progress_callback: called_with.append(pid))
+
     orig = ocman.OPENCODE_DB_PATH
     try:
         monkeypatch.setattr(sys, "argv",
                             ["ocman", "--db", str(db), "export", "project", "/some/where",
                              "to", str(tmp_path / "out.ocbox")])
-        args = parse_args()
-        assert args.export_project == "pX"
-        assert args.to == str(tmp_path / "out.ocbox")
+        try:
+            ocman.main()
+        except SystemExit as e:
+            assert e.code == 0
+        assert called_with == ["pX"]
     finally:
         ocman.OPENCODE_DB_PATH = orig
 
@@ -1869,4 +1874,167 @@ def test_e2e_list_models_word_order(tmp_path):
     r = _run_ocman_py(["list", "models"], tmp_path)
     combined = r.stdout + r.stderr
     assert "invalid choice" not in combined
+
+
+def test_resolve_targets_kind_qualified(temp_db):
+    from ocman import resolve_targets
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    # qualified project
+    res = resolve_targets(["project:proj1"], kinds={"project"})
+    assert len(res.projects) == 1
+    assert res.projects[0]["id"] == "proj1"
+
+    # qualified session
+    res = resolve_targets(["session:sess1"], kinds={"session"})
+    assert len(res.sessions) == 1
+    assert res.sessions[0]["id"] == "sess1"
+
+    # qualified mismatched kind
+    res = resolve_targets(["model:sess1"], kinds={"session"})
+    assert len(res.unmatched) == 1
+    assert res.unmatched[0] == "model:sess1"
+
+
+def test_resolve_targets_auto_detect(temp_db):
+    from ocman import resolve_targets
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    res = resolve_targets(["proj1", "sess1"], kinds={"project", "session"})
+    assert len(res.projects) == 1
+    assert res.projects[0]["id"] == "proj1"
+    assert len(res.sessions) == 1
+    assert res.sessions[0]["id"] == "sess1"
+    assert not res.unmatched
+    assert not res.ambiguous
+
+
+def test_resolve_targets_unmatched(temp_db, capsys):
+    from ocman import resolve_and_expand_targets
+    import pytest
+
+    with pytest.raises(SystemExit) as exc:
+        resolve_and_expand_targets(["nonexistent"], kinds={"project", "session"}, interactive=False)
+    assert exc.value.code == 1
+
+    captured = capsys.readouterr()
+    assert "No matches found for 'nonexistent'." in captured.err
+    assert "Run 'ocman list sessions' to see valid targets" in captured.err
+    assert "Run 'ocman list projects' to see valid targets" in captured.err
+
+
+def test_resolve_targets_ambiguous_non_tty(temp_db, capsys):
+    from ocman import resolve_and_expand_targets
+    import pytest
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('same_id', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('same_id', 'same_id', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    with pytest.raises(SystemExit) as exc:
+        resolve_and_expand_targets(["same_id"], kinds={"project", "session"}, interactive=False)
+    assert exc.value.code == 1
+
+    captured = capsys.readouterr()
+    assert "Ambiguous specifier 'same_id'" in captured.err
+    assert "- [session] same_id" in captured.err
+    assert "- [project] same_id" in captured.err
+    assert "fully-qualified specifier: 'session:SPEC'" in captured.err
+
+
+def test_resolve_targets_ambiguous_tty(temp_db, monkeypatch):
+    from ocman import resolve_and_expand_targets
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('same_id', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('same_id', 'same_id', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    inputs = iter(["1"])
+    monkeypatch.setattr("builtins.input", lambda prompt: next(inputs))
+
+    res = resolve_and_expand_targets(["same_id"], kinds={"project", "session"}, interactive=True)
+    assert len(res.sessions) == 1
+    assert res.sessions[0]["id"] == "same_id"
+    assert not res.projects
+
+
+def test_resolve_targets_bare_integer(temp_db):
+    from ocman import resolve_targets
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    conn.commit()
+    conn.close()
+
+    res = resolve_targets(["42"], kinds={"project", "session"})
+    assert len(res.ambiguous) == 1
+    assert res.ambiguous[0][0] == "42"
+
+
+def test_resolve_targets_project_expansion(temp_db):
+    from ocman import resolve_and_expand_targets
+    import sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('child1', 'proj1', 'Child 1', 1000, 2000, '/path/to/proj', 'sess1')
+    """)
+    conn.commit()
+    conn.close()
+
+    res = resolve_and_expand_targets(["project:proj1"], kinds={"project", "session"}, allow_project_expansion=True, all_sessions=False)
+    assert len(res.sessions) == 1
+    assert res.sessions[0]["id"] == "sess1"
+
+    res = resolve_and_expand_targets(["project:proj1"], kinds={"project", "session"}, allow_project_expansion=True, all_sessions=True)
+    assert len(res.sessions) == 2
+    assert {s["id"] for s in res.sessions} == {"sess1", "child1"}
 

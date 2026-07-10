@@ -4641,6 +4641,353 @@ class TargetResolution:
         self.session = session
 
 
+class TargetSet:
+    """
+    Result of batch resolution. Contains resolved objects,
+    plus classification metadata for unmatched and ambiguous specifiers.
+    """
+    def __init__(self):
+        self.sessions: list[dict[str, Any]] = []
+        self.projects: list[dict[str, Any]] = []
+        self.models: list[ModelInfo] = []
+
+        self.resolved: list[tuple[str, str, Any]] = []  # (spec, kind, obj)
+        self.unmatched: list[str] = []
+        self.ambiguous: list[tuple[str, list[tuple[str, Any]]]] = []  # (spec, candidates)
+
+
+def parse_qualified_spec(spec: str) -> tuple[str | None, str]:
+    """
+    If the spec starts with exactly "session:", "project:", or "model:",
+    return (kind, stripped_spec). Otherwise, return (None, spec).
+    """
+    parts = spec.split(":", 1)
+    if len(parts) == 2:
+        k = parts[0].lower()
+        if k in ("session", "project", "model"):
+            return k, parts[1]
+    return None, spec
+
+
+def resolve_project_in_list(spec: str, projects: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """
+    Resolve a project from an in-memory list.
+    """
+    is_numeric = spec.isdigit()
+
+    # Try as a number (1-based index from list).
+    if is_numeric:
+        idx = int(spec) - 1
+        if 0 <= idx < len(projects):
+            return projects[idx]
+
+    # Exact ID match.
+    for p in projects:
+        if p["id"] == spec:
+            return p
+
+    # Exact directory match.
+    for p in projects:
+        if p["directory"] == spec:
+            return p
+
+    # Do not allow partial/substring directory matching for pure numeric specifiers.
+    if is_numeric:
+        return None
+
+    # Directory ends-with match.
+    for p in projects:
+        if p["directory"].endswith(spec):
+            return p
+
+    # Substring match on directory.
+    matches = [p for p in projects if spec.lower() in p["directory"].lower()]
+    if len(matches) == 1:
+        return matches[0]
+
+    return None
+
+
+def resolve_targets(
+    specs: list[str],
+    *,
+    kinds: set[str],
+    filter_subagents: bool = True,
+    project_id: str | None = None
+) -> TargetSet:
+    """
+    Resolve a list of target specifiers against in-memory candidate matches.
+    Classifies each specifier into resolved, unmatched, or ambiguous.
+    """
+    res = TargetSet()
+    if not specs:
+        return res
+
+    sessions_list = None
+    projects_list = None
+    models_list = None
+
+    if "session" in kinds:
+        sessions_list = db_list_sessions(project_id)
+    if "project" in kinds:
+        projects_list = db_list_projects()
+    if "model" in kinds:
+        try:
+            config = load_opencode_config(verbosity=0)
+            models_list = extract_models_from_config(config)
+        except Exception:
+            models_list = []
+
+    for spec in specs:
+        spec_str = str(spec).strip()
+        if not spec_str:
+            res.unmatched.append(spec)
+            continue
+
+        # Check qualified prefix
+        forced_kind, stripped_spec = parse_qualified_spec(spec_str)
+        if forced_kind is not None:
+            if forced_kind not in kinds:
+                res.unmatched.append(spec)
+                continue
+
+            matched_obj = None
+            if forced_kind == "session" and sessions_list:
+                matched_obj = resolve_session_spec(stripped_spec, sessions_list, filter_subagents=filter_subagents)
+            elif forced_kind == "project" and projects_list:
+                matched_obj = resolve_project_in_list(stripped_spec, projects_list)
+            elif forced_kind == "model" and models_list:
+                matched_obj = resolve_model_spec(stripped_spec, models_list)
+
+            if matched_obj is None:
+                res.unmatched.append(spec)
+            elif matched_obj == "ambiguous":
+                model_matches = [
+                    m for m in models_list
+                    if stripped_spec.lower() in f"{m.provider_id}/{m.model_id}".lower() or stripped_spec.lower() in m.name.lower()
+                ]
+                res.ambiguous.append((spec, [("model", mm) for mm in model_matches]))
+            else:
+                res.resolved.append((spec, forced_kind, matched_obj))
+                if forced_kind == "session":
+                    res.sessions.append(matched_obj)
+                elif forced_kind == "project":
+                    res.projects.append(matched_obj)
+                elif forced_kind == "model":
+                    res.models.append(matched_obj)
+            continue
+
+        # Bare integer guard for multiple kinds
+        if spec_str.isdigit() and len(kinds) > 1:
+            digit_matches = []
+            if "session" in kinds and sessions_list:
+                sess = resolve_session_spec(spec_str, sessions_list, filter_subagents=filter_subagents)
+                if sess:
+                    digit_matches.append(("session", sess))
+            if "project" in kinds and projects_list:
+                proj = resolve_project_in_list(spec_str, projects_list)
+                if proj:
+                    digit_matches.append(("project", proj))
+            res.ambiguous.append((spec, digit_matches))
+            continue
+
+        # Auto-detect across allowed kinds
+        matches = []
+        if "session" in kinds and sessions_list:
+            sess = resolve_session_spec(spec_str, sessions_list, filter_subagents=filter_subagents)
+            if sess:
+                matches.append(("session", sess))
+        if "project" in kinds and projects_list:
+            proj = resolve_project_in_list(spec_str, projects_list)
+            if proj:
+                matches.append(("project", proj))
+        if "model" in kinds and models_list:
+            model = resolve_model_spec(spec_str, models_list)
+            if model:
+                if model == "ambiguous":
+                    model_matches = [
+                        m for m in models_list
+                        if spec_str.lower() in f"{m.provider_id}/{m.model_id}".lower() or spec_str.lower() in m.name.lower()
+                    ]
+                    for mm in model_matches:
+                        matches.append(("model", mm))
+                else:
+                    matches.append(("model", model))
+
+        if len(matches) == 1:
+            kind, obj = matches[0]
+            res.resolved.append((spec, kind, obj))
+            if kind == "session":
+                res.sessions.append(obj)
+            elif kind == "project":
+                res.projects.append(obj)
+            elif kind == "model":
+                res.models.append(obj)
+        elif len(matches) > 1:
+            res.ambiguous.append((spec, matches))
+        else:
+            res.unmatched.append(spec)
+
+    return res
+
+
+def resolve_and_expand_targets(
+    specs: list[str],
+    *,
+    kinds: set[str],
+    allow_project_expansion: bool = False,
+    interactive: bool | None = None,
+    filter_subagents: bool = True,
+    all_sessions: bool = False,
+    project_id: str | None = None
+) -> TargetSet:
+    """
+    Resolve target specifiers to a TargetSet. Handles interactive prompting,
+    unmatched suggestions, and optional project-to-session expansion.
+    """
+    if interactive is None:
+        interactive = sys.stdout.isatty()
+
+    res = resolve_targets(specs, kinds=kinds, filter_subagents=filter_subagents, project_id=project_id)
+
+    # Validate unmatched up front
+    if res.unmatched:
+        for spec in res.unmatched:
+            print(f"ocman: No matches found for {spec!r}.", file=sys.stderr)
+
+        suggestions = []
+        if "session" in kinds:
+            suggestions.append("ocman list sessions")
+        if "project" in kinds:
+            suggestions.append("ocman list projects")
+        if "model" in kinds:
+            suggestions.append("ocman list models")
+        if suggestions:
+            print("Suggestions:", file=sys.stderr)
+            for sug in suggestions:
+                print(f"  - Run '{sug}' to see valid targets", file=sys.stderr)
+        sys.exit(1)
+
+    # Validate/Prompt ambiguous up front
+    if res.ambiguous:
+        resolved_ambiguous = []
+        for spec, candidates in res.ambiguous:
+            if not candidates:
+                print(f"ocman: Numeric specifier {spec!r} is ambiguous. Disambiguate by prefixing with 'session:' or 'project:'.", file=sys.stderr)
+                sys.exit(1)
+
+            if interactive:
+                print(f"ocman: {spec!r} is ambiguous. Candidates:")
+                for i, (kind, cand) in enumerate(candidates, 1):
+                    if kind == "session":
+                        title = cand.get("title") or "(untitled)"
+                        if len(title) > 60:
+                            title = title[:57] + "..."
+                        print(f"  {i:>2}. [session] {cand['id']} ({title})")
+                    elif kind == "project":
+                        name = cand.get("name") or cand.get("directory") or cand["id"]
+                        print(f"  {i:>2}. [project] {cand['id']} ({name})")
+                    elif kind == "model":
+                        print(f"  {i:>2}. [model] {cand.provider_id}/{cand.model_id} ({cand.name})")
+
+                chosen_kind = None
+                chosen_obj = None
+                while True:
+                    try:
+                        choice = input(f"Select candidate (1-{len(candidates)}) or type a new query (or 'q' to quit): ").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        print()
+                        die("Operation aborted.")
+
+                    if choice.lower() == 'q':
+                        die("Operation aborted.")
+
+                    if not choice:
+                        continue
+
+                    if choice.isdigit():
+                        idx = int(choice) - 1
+                        if 0 <= idx < len(candidates):
+                            chosen_kind, chosen_obj = candidates[idx]
+                            break
+                        else:
+                            print(f"Invalid selection: {choice}")
+                            continue
+
+                    new_res = resolve_targets([choice], kinds=kinds, filter_subagents=filter_subagents)
+                    if new_res.unmatched:
+                        print(f"No match found for query '{choice}'. Try again.")
+                        continue
+                    if new_res.ambiguous:
+                        print(f"Query '{choice}' is still ambiguous. Candidates:")
+                        candidates = new_res.ambiguous[0][1]
+                        for i, (kind, cand) in enumerate(candidates, 1):
+                            if kind == "session":
+                                title = cand.get("title") or "(untitled)"
+                                if len(title) > 60:
+                                    title = title[:57] + "..."
+                                print(f"  {i:>2}. [session] {cand['id']} ({title})")
+                            elif kind == "project":
+                                name = cand.get("name") or cand.get("directory") or cand["id"]
+                                print(f"  {i:>2}. [project] {cand['id']} ({name})")
+                            elif kind == "model":
+                                print(f"  {i:>2}. [model] {cand.provider_id}/{cand.model_id} ({cand.name})")
+                        continue
+
+                    chosen_kind, chosen_obj = new_res.resolved[0][1], new_res.resolved[0][2]
+                    break
+
+                resolved_ambiguous.append((spec, chosen_kind, chosen_obj))
+            else:
+                # Non-interactive fail
+                print(f"ocman: Ambiguous specifier {spec!r}. Matches:", file=sys.stderr)
+                for kind, cand in candidates:
+                    if kind == "session":
+                        print(f"  - [session] {cand['id']} ({cand.get('title') or '(untitled)'})", file=sys.stderr)
+                    elif kind == "project":
+                        print(f"  - [project] {cand['id']} ({cand.get('name') or cand.get('directory') or cand['id']})", file=sys.stderr)
+                    elif kind == "model":
+                        print(f"  - [model] {cand.provider_id}/{cand.model_id} ({cand.name})", file=sys.stderr)
+                print(file=sys.stderr)
+                print("Suggestions to resolve ambiguity:", file=sys.stderr)
+                print("  - Use a fully-qualified specifier: 'session:SPEC', 'project:SPEC', or 'model:SPEC'", file=sys.stderr)
+                print("  - Use the exact ID (e.g. ses_XXXX) or full model name", file=sys.stderr)
+                print("  - Re-run this command on an interactive TTY", file=sys.stderr)
+                print("If that does not resolve it, please file a bug report.", file=sys.stderr)
+                sys.exit(1)
+
+        for spec, kind, obj in resolved_ambiguous:
+            res.resolved.append((spec, kind, obj))
+            if kind == "session":
+                res.sessions.append(obj)
+            elif kind == "project":
+                res.projects.append(obj)
+            elif kind == "model":
+                res.models.append(obj)
+
+        res.ambiguous = []
+
+    # Project expansion
+    if allow_project_expansion and res.projects:
+        expanded_sessions = []
+        for proj in res.projects:
+            project_sessions = db_list_sessions(proj["id"])
+            if not project_sessions:
+                die(f"Error: Project '{proj['name'] or proj['id']}' has no sessions.")
+            if all_sessions:
+                expanded_sessions.extend(project_sessions)
+            else:
+                expanded_sessions.extend([s for s in project_sessions if not s["parent_id"]])
+
+        existing_ids = {s["id"] for s in res.sessions}
+        for s in expanded_sessions:
+            if s["id"] not in existing_ids:
+                res.sessions.append(s)
+                existing_ids.add(s["id"])
+
+    return res
+
+
 def resolve_target(spec: str, prefer: str | None = None) -> TargetResolution:
     """
     Resolve a specifier that could name a project OR a session.
@@ -5162,6 +5509,11 @@ def _legacy_defaults(config: dict) -> dict:
         # global
         "db": OPENCODE_DB_PATH,
         "verbose": 0,
+        "spec": None,
+        "spec_kind": None,
+        "verb": None,
+        "search_scope_name": None,
+        "search_scope_kind": None,
         # positional command surface (set by _normalize for ui/gui/info/filter/help)
         "command": None,
         "command_arg": None,
@@ -5510,8 +5862,7 @@ def _apply_search(out: dict, ns: argparse.Namespace, g) -> None:
     Normalize a search subcommand into the legacy namespace.
 
     Scope may come from the trailing NAME positional or the sugar-derived
-    --scope-name/--scope-kind. The scope is resolved (project or session) and
-    stored as out['project'] or out['search_session_id'] for main().
+    --scope-name/--scope-kind. The scope is stashed to be resolved in main().
     """
     out["search"] = g("query")
     out["limit"] = g("limit", 10)
@@ -5522,18 +5873,8 @@ def _apply_search(out: dict, ns: argparse.Namespace, g) -> None:
     if not scope_name:
         return
 
-    res = resolve_target(scope_name, prefer=scope_kind)
-    if res.kind == "project":
-        out["project"] = res.project["directory"]
-        # resolve_project matched; pass the resolved directory so main() scopes it.
-        out["_search_project_row"] = res.project
-    elif res.kind == "session":
-        out["search_session_id"] = res.session["id"]
-    elif res.kind == "ambiguous":
-        _die_cli(f"{scope_name!r} matches both a project and a session. "
-                 f"Disambiguate: 'in project {scope_name}' or 'in session {scope_name}'.")
-    else:
-        _die_cli(f"No project or session matches {scope_name!r}.")
+    out["search_scope_name"] = scope_name
+    out["search_scope_kind"] = scope_kind
 
 
 def _resolve_clean_args(ns, g, with_name: bool, default_days: float):
@@ -5602,26 +5943,12 @@ def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> No
     dst = g("to_flag") or g("dst")
     kind = g("kind")
 
-    res = resolve_target(spec, prefer=kind)
-    if res.kind == "ambiguous":
-        _die_cli(f"{spec!r} matches both a project and a session. "
-                 f"Disambiguate: 'ocman {verb} project {spec} to ...' or "
-                 f"'ocman {verb} session {spec} to ...'.")
-    if res.kind == "none":
-        _die_cli(f"No project or session matches {spec!r}.")
-
     out["to"] = dst
+    out["spec"] = spec
+    out["spec_kind"] = kind
+    out["verb"] = verb
     if verb == "move":
         out["metadata_only"] = bool(g("metadata_only", False))
-        if res.kind == "project":
-            out["move_project"] = res.project["id"]
-        else:
-            out["move_session"] = res.session["id"]
-    else:  # export
-        if res.kind == "project":
-            out["export_project"] = res.project["id"]
-        else:
-            out["export_session"] = res.session["id"]
 
 
 def _die_cli(message: str) -> None:
@@ -10002,13 +10329,39 @@ def main() -> None:
             die(str(e))
         return
 
+    # Resolve top-level move/export specs if present
+    if getattr(args, "spec", None) is not None:
+        verb = getattr(args, "verb", "move")
+        spec_kind = getattr(args, "spec_kind", None)
+        prefer_kinds = {spec_kind} if spec_kind else {"project", "session"}
+
+        res = resolve_and_expand_targets(
+            [args.spec],
+            kinds=prefer_kinds,
+            allow_project_expansion=False
+        )
+
+        if res.projects:
+            resolved_proj = res.projects[0]
+            if verb == "move":
+                args.move_project = resolved_proj["id"]
+            else:
+                args.export_project = resolved_proj["id"]
+        elif res.sessions:
+            resolved_sess = res.sessions[0]
+            if verb == "move":
+                args.move_session = resolved_sess["id"]
+            else:
+                args.export_session = resolved_sess["id"]
+
     # Handle session export/import early
     if getattr(args, "export_project", None) is not None:
         if not args.to:
             die("Error: project export requires a destination file path specified by --to <file.ocbox> (or 'to <file.ocbox>').")
         try:
-            proj = resolve_project(args.export_project)
-            proj_id = proj["id"] if proj else args.export_project
+            res = resolve_and_expand_targets([args.export_project], kinds={"project"})
+            proj = res.projects[0]
+            proj_id = proj["id"]
             print(f"{info_prefix()} Exporting project '{proj_id}' to '{args.to}'...")
             bundle_project_data(proj_id, Path(args.to), progress_callback=print)
             print(color_green(f"[+] Successfully exported project '{proj_id}' to '{args.to}'!"))
@@ -10020,14 +10373,13 @@ def main() -> None:
         if not args.to:
             die("Error: --export-session requires a destination file path specified by --to <file_path.ocbox>.")
         try:
-            all_db_sessions = db_list_sessions(None)
-            resolved = resolve_session_spec(
-                args.export_session,
-                all_db_sessions,
+            res = resolve_and_expand_targets(
+                [args.export_session],
+                kinds={"session"},
                 filter_subagents=False
-            ) if all_db_sessions else None
-            
-            sess_id = resolved["id"] if resolved else args.export_session
+            )
+            resolved = res.sessions[0]
+            sess_id = resolved["id"]
             
             print(f"{info_prefix()} Exporting session '{sess_id}' to '{args.to}'...")
             bundle_session_data(sess_id, Path(args.to), progress_callback=print)
@@ -10348,9 +10700,8 @@ def main() -> None:
     _dir_scope: str | None = None
 
     if args.project:
-        proj = resolve_project(args.project)
-        if not proj:
-            die(f"Project not found: {args.project!r}\nUse --list-projects to see available projects.")
+        res = resolve_and_expand_targets([args.project], kinds={"project"})
+        proj = res.projects[0]
         _project_id = proj["id"]
         _project_dir = proj["directory"]
     else:
@@ -10381,12 +10732,12 @@ def main() -> None:
             _dir_scope = cwd_str
 
         if not _project_id and args.session:
-            all_db_sessions = db_list_sessions(None)
-            resolved = resolve_session_spec(
-                args.session,
-                all_db_sessions,
+            res = resolve_and_expand_targets(
+                [args.session],
+                kinds={"session"},
                 filter_subagents=not args.all_sessions
-            ) if all_db_sessions else None
+            )
+            resolved = res.sessions[0]
             if resolved:
                 conn = None
                 try:
@@ -10479,7 +10830,24 @@ def main() -> None:
 
     # Handle --search early.
     if args.search:
-        _search_session_id = getattr(args, "search_session_id", None)
+        _search_session_id = None
+        _search_project_dir = None
+
+        search_scope_name = getattr(args, "search_scope_name", None)
+        search_scope_kind = getattr(args, "search_scope_kind", None)
+        if search_scope_name:
+            res = resolve_and_expand_targets(
+                [search_scope_name],
+                kinds={search_scope_kind} if search_scope_kind else {"project", "session"},
+                allow_project_expansion=False
+            )
+            if res.sessions:
+                _search_session_id = res.sessions[0]["id"]
+            elif res.projects:
+                _project_id = res.projects[0]["id"]
+                _search_project_dir = res.projects[0]["directory"]
+                _dir_scope = None
+
         results = db_search_sessions(
             args.search,
             project_id=_project_id,
@@ -10488,8 +10856,9 @@ def main() -> None:
         )
 
         # Directory scope: restrict to sessions that ran in/under CWD.
-        if _dir_scope:
-            allowed = {s["id"] for s in db_list_sessions_under_dir(_dir_scope)}
+        search_dir_scope = _search_project_dir or _dir_scope
+        if search_dir_scope:
+            allowed = {s["id"] for s in db_list_sessions_under_dir(search_dir_scope)}
             results = [s for s in results if s["id"] in allowed]
 
         # Filter child sessions unless --all-sessions (skip when scoped to one session).
@@ -10498,8 +10867,8 @@ def main() -> None:
 
         if _search_session_id:
             scope = f" in session {_search_session_id}"
-        elif _dir_scope:
-            scope = f" in {_dir_scope}"
+        elif search_dir_scope:
+            scope = f" in {search_dir_scope}"
         elif _project_dir:
             scope = f" in {_project_dir}"
         else:
@@ -10590,14 +10959,13 @@ def main() -> None:
         if not all_sessions:
             die("No sessions found. Try --list-projects first.")
 
-        session_data = resolve_session_spec(
-            session_spec,
-            all_sessions,
-            filter_subagents=not args.all_sessions
+        res = resolve_and_expand_targets(
+            [session_spec],
+            kinds={"session"},
+            filter_subagents=not args.all_sessions,
+            project_id=_project_id
         )
-        if not session_data:
-            die(f"Session not found: {session_spec!r}\n"
-                "Try a number from --list-sessions, a session ID, or a title substring.")
+        session_data = res.sessions[0]
 
         try:
             db_delete_session_recursive(
@@ -10621,16 +10989,13 @@ def main() -> None:
         if not all_sessions:
             die("No sessions found. Try --list-projects first.")
 
-        session_data = resolve_session_spec(
-            session_spec,
-            all_sessions,
-            filter_subagents=not args.all_sessions
+        res = resolve_and_expand_targets(
+            [session_spec],
+            kinds={"session"},
+            filter_subagents=not args.all_sessions,
+            project_id=_project_id
         )
-        if not session_data:
-            die(
-                f"Session not found: {session_spec!r}\n"
-                "Try a number from --list-sessions, a session ID, or a title substring."
-            )
+        session_data = res.sessions[0]
 
         # Display session details.
         print(color_bold(session_data["title"]))
@@ -10828,12 +11193,13 @@ def main() -> None:
                     f"Invalid session ID: {args.session!r} (must not start with '-')."
                 )
             # Try to resolve via DB first (supports number, title substring, ID).
-            db_sessions = db_list_sessions(_project_id)
-            resolved = resolve_session_spec(
-                args.session,
-                db_sessions,
-                filter_subagents=not args.all_sessions
-            ) if db_sessions else None
+            res = resolve_and_expand_targets(
+                [args.session],
+                kinds={"session"},
+                filter_subagents=not args.all_sessions,
+                project_id=_project_id
+            )
+            resolved = res.sessions[0]
             if resolved:
                 session = find_session_by_id(sessions, resolved["id"])
                 # Use DB title if find_session_by_id returned a placeholder.
