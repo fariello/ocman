@@ -382,6 +382,17 @@ SESSION_RELATIONAL_TABLES: list[tuple[str, str]] = [
     ("session", "id"),
 ]
 
+# Project-scoped tables for whole-project export/import, as (table, id-column).
+# These are keyed by the project id (or are the project row itself) rather than a
+# session id, so they are packed/imported via a separate path from the
+# session-scoped tables above. `project` MUST come first on import so its row
+# exists before FK-referencing rows.
+PROJECT_RELATIONAL_TABLES: list[tuple[str, str]] = [
+    ("project", "id"),
+    ("project_directory", "project_id"),
+    ("workspace", "project_id"),
+]
+
 
 @dataclass
 class ModelInfo:
@@ -5012,6 +5023,7 @@ def _legacy_defaults(config: dict) -> dict:
         "from_prefix": None,
         "metadata_only": False,
         "export_session": None,
+        "export_project": None,
         "import_session": None,
         "to_project": None,
         "new_project_path": None,
@@ -5464,10 +5476,6 @@ def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> No
     dst = g("to_flag") or g("dst")
     kind = g("kind")
 
-    if verb == "export" and kind == "project":
-        _die_cli("Project export is not yet supported. Use 'ocman export session SPEC to FILE'. "
-                 "(Whole-project export is planned; see the project-export plan.)")
-
     res = resolve_target(spec, prefer=kind)
     if res.kind == "ambiguous":
         _die_cli(f"{spec!r} matches both a project and a session. "
@@ -5485,9 +5493,9 @@ def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> No
             out["move_session"] = res.session["id"]
     else:  # export
         if res.kind == "project":
-            _die_cli("Project export is not yet supported. Use a session, e.g. "
-                     "'ocman export session SPEC to FILE'.")
-        out["export_session"] = res.session["id"]
+            out["export_project"] = res.project["id"]
+        else:
+            out["export_session"] = res.session["id"]
 
 
 def _die_cli(message: str) -> None:
@@ -7219,86 +7227,70 @@ def db_get_session_subtree(session_id: str) -> list[str]:
             conn.close()
 
 
-def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=None) -> None:
-    """Export a session and its subagents into an .ocbox ZIP bundle using a low-memory streaming format."""
+def _write_ocbox(
+    bundle_path: Path,
+    *,
+    meta: dict,
+    session_ids: list[str],
+    project_scoped: list[tuple[str, str, str]] | None = None,
+    progress_callback=None,
+) -> None:
+    """
+    Write an .ocbox ZIP bundle: a `meta.json`, one `db_data/<table>.jsonl` per
+    exported table (streamed in batches to keep memory flat), and one
+    `session_diffs/<sid>.json` per session id.
+
+    Args:
+        meta: the metadata dict written verbatim as meta.json.
+        session_ids: session ids whose SESSION_RELATIONAL_TABLES rows and diff
+            files are packed (`WHERE <col> IN (session_ids)`).
+        project_scoped: optional list of `(table, col, id_value)` triples for
+            project-scoped tables, packed via `WHERE <col> = id_value` into the
+            same `db_data/<table>.jsonl` namespace.
+
+    Shared by bundle_session_data (project_scoped=None) and bundle_project_data.
+    """
     import zipfile
     import json
     import tempfile
-    
+
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
-    
-    if progress_callback:
-        progress_callback(f"{info_prefix()} Analyzing session subtree for '{session_id}'...")
-    session_ids = db_get_session_subtree(session_id)
-    if not session_ids:
-        raise RecoveryError(f"Session {session_id} not found.")
-    
-    if progress_callback:
-        progress_callback(f"    -> Found {len(session_ids)} session(s) in subtree.")
 
-    conn = None
     try:
-        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
-        # Configure cursor to return row dictionaries
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-
-        # Get parent project details
-        cursor.execute("""
-            SELECT p.id, p.name, p.worktree FROM project p
-            JOIN session s ON s.project_id = p.id
-            WHERE s.id = ?
-        """, (session_id,))
-        proj_row = cursor.fetchone()
-        proj_meta = dict(proj_row) if proj_row else {}
-
-    except Exception as e:
-        raise RecoveryError(f"Failed to query export data from database: {e}")
-    finally:
-        if conn:
-            conn.close()
-
-    # Create Zip Bundle
-    try:
-        # Ensure parent directory of bundle exists
         bundle_path.parent.mkdir(parents=True, exist_ok=True)
-        
         with zipfile.ZipFile(bundle_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             if progress_callback:
                 progress_callback(f"{info_prefix()} Writing metadata...")
-            # Write metadata
-            meta = {
-                "export_version": "2.0",
-                "exported_at": datetime.now().isoformat(),
-                "main_session_id": session_id,
-                "all_session_ids": session_ids,
-                "source_project": proj_meta
-            }
             zipf.writestr("meta.json", json.dumps(meta, indent=2))
 
-            # Query and write each table to a temporary JSONL file in batches, then add to ZIP.
-            # The connection is wrapped in try/finally so it is always closed, including on the
-            # error path (previously it was closed only on success, leaking a handle on failure).
-            # Table JSONL is staged in a per-run temp directory (unique name, single-shot
-            # cleanup) rather than fixed-named files in the shared temp dir, so concurrent
-            # exports can't collide and nothing is left behind on error.
+            # Stage each table's rows into a per-run temp JSONL (unique dir,
+            # single-shot cleanup) so concurrent exports never collide, then add
+            # to the ZIP. The connection is closed on every path.
             conn = sqlite3.connect(str(OPENCODE_DB_PATH))
             export_tmp_dir = Path(tempfile.mkdtemp(prefix="ocman-export-"))
             try:
                 conn.row_factory = sqlite3.Row
                 cursor = conn.cursor()
-                placeholders = ",".join("?" for _ in session_ids)
 
-                total_tables = len(SESSION_RELATIONAL_TABLES)
-                for idx, (table, col) in enumerate(SESSION_RELATIONAL_TABLES):
+                # Build the full (table, query, params) plan: session-scoped
+                # tables filtered by IN (session_ids), then project-scoped tables
+                # filtered by col = id_value. Both land in db_data/<table>.jsonl.
+                jobs: list[tuple[str, str, list]] = []
+                placeholders = ",".join("?" for _ in session_ids) if session_ids else ""
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    if not session_ids:
+                        continue
+                    jobs.append((table, f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", list(session_ids)))
+                for table, col, id_value in (project_scoped or []):
+                    jobs.append((table, f"SELECT * FROM {table} WHERE {col} = ?", [id_value]))
+
+                total_tables = len(jobs)
+                for idx, (table, query, params) in enumerate(jobs):
                     if progress_callback:
                         progress_callback(f"{info_prefix()} Exporting database table '{table}' ({idx+1}/{total_tables})...")
-
-                    # Query in batches of 1000 to keep memory flat
-                    cursor.execute(f"SELECT * FROM {table} WHERE {col} IN ({placeholders})", session_ids)
-
+                    cursor.execute(query, params)
                     temp_file = export_tmp_dir / f"{table}.jsonl"
                     row_count = 0
                     with open(temp_file, "w", encoding="utf-8") as f:
@@ -7309,7 +7301,6 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
                             for row in rows:
                                 f.write(json.dumps(dict(row)) + "\n")
                                 row_count += 1
-
                     zipf.write(temp_file, f"db_data/{table}.jsonl")
                     if progress_callback:
                         progress_callback(f"    -> Exported {row_count} rows.")
@@ -7317,7 +7308,7 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
                 conn.close()
                 shutil.rmtree(export_tmp_dir, ignore_errors=True)
 
-            # Write storage diff files
+            # Write storage diff files (one per session id).
             if progress_callback:
                 progress_callback(f"{info_prefix()} Packing session storage diff files...")
             diff_count = 0
@@ -7330,6 +7321,120 @@ def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=No
                 progress_callback(f"    -> Packed {diff_count} diff file(s).")
     except Exception as e:
         raise RecoveryError(f"Failed to write export ZIP bundle: {e}")
+
+
+def bundle_session_data(session_id: str, bundle_path: Path, progress_callback=None) -> None:
+    """Export a session and its subagents into an .ocbox ZIP bundle using a low-memory streaming format."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    if progress_callback:
+        progress_callback(f"{info_prefix()} Analyzing session subtree for '{session_id}'...")
+    session_ids = db_get_session_subtree(session_id)
+    if not session_ids:
+        raise RecoveryError(f"Session {session_id} not found.")
+
+    if progress_callback:
+        progress_callback(f"    -> Found {len(session_ids)} session(s) in subtree.")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT p.id, p.name, p.worktree FROM project p
+            JOIN session s ON s.project_id = p.id
+            WHERE s.id = ?
+        """, (session_id,))
+        proj_row = cursor.fetchone()
+        proj_meta = dict(proj_row) if proj_row else {}
+    except Exception as e:
+        raise RecoveryError(f"Failed to query export data from database: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    meta = {
+        "export_version": "2.0",
+        "exported_at": datetime.now().isoformat(),
+        "main_session_id": session_id,
+        "all_session_ids": session_ids,
+        "source_project": proj_meta,
+    }
+    _write_ocbox(
+        bundle_path,
+        meta=meta,
+        session_ids=session_ids,
+        project_scoped=None,
+        progress_callback=progress_callback,
+    )
+
+
+def bundle_project_data(project_id: str, bundle_path: Path, progress_callback=None) -> None:
+    """
+    Export a whole project (all its sessions + subagents, all project-scoped
+    tables, and every session diff) into an .ocbox ZIP bundle.
+
+    The bundle is a superset of a session bundle: same format, but meta.kind is
+    "project", main_session_id is null, and the project-scoped tables
+    (PROJECT_RELATIONAL_TABLES) are packed alongside the session-scoped tables.
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    if progress_callback:
+        progress_callback(f"{info_prefix()} Analyzing project '{project_id}'...")
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        cursor.execute("SELECT * FROM project WHERE id = ?", (project_id,))
+        proj_row = cursor.fetchone()
+        if not proj_row:
+            raise RecoveryError(f"Project {project_id} not found.")
+        proj_meta = dict(proj_row)
+
+        cursor.execute("SELECT id FROM session WHERE project_id = ?", (project_id,))
+        session_ids = [r[0] for r in cursor.fetchall()]
+    except RecoveryError:
+        raise
+    except Exception as e:
+        raise RecoveryError(f"Failed to query project export data from database: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    if not session_ids:
+        raise RecoveryError(
+            f"Project {project_id} has no sessions; nothing to export."
+        )
+
+    if progress_callback:
+        progress_callback(f"    -> Found {len(session_ids)} session(s) in project.")
+
+    meta = {
+        "export_version": "3.0",
+        "kind": "project",
+        "exported_at": datetime.now().isoformat(),
+        "main_session_id": None,
+        "project_id": project_id,
+        "all_session_ids": session_ids,
+        "source_project": proj_meta,
+    }
+    project_scoped = [(table, col, project_id) for table, col in PROJECT_RELATIONAL_TABLES]
+    _write_ocbox(
+        bundle_path,
+        meta=meta,
+        session_ids=session_ids,
+        project_scoped=project_scoped,
+        progress_callback=progress_callback,
+    )
 
 
 def _remap_ids_in_json(data: Any, id_map: dict[str, str]) -> Any:
@@ -7603,6 +7708,365 @@ def extract_and_import_session(
             conn.close()
 
     return id_map[meta["main_session_id"]]
+
+
+def _validate_worktree_path(worktree: str) -> str:
+    """
+    Validate and normalize a project worktree path from an untrusted bundle.
+
+    The worktree is used to rebase session.directory on import, so a relative or
+    traversing path could plant directories outside the intended tree. Require an
+    absolute, resolved path with no '..' components.
+    """
+    if not isinstance(worktree, str) or not worktree:
+        raise RecoveryError("Bundle project has an empty or invalid worktree.")
+    if ".." in worktree.split("/"):
+        raise RecoveryError(f"Unsafe project worktree in bundle (path traversal): {worktree!r}")
+    p = Path(worktree)
+    if not p.is_absolute():
+        raise RecoveryError(f"Bundle project worktree must be absolute: {worktree!r}")
+    return str(p.resolve())
+
+
+def _prompt_project_collision(existing_id: str, existing_worktree: str, interactive: bool) -> str:
+    """
+    On a project-identity collision with no up-front flag, decide what to do.
+
+    Returns one of: 'backup', 'delete', 'move', 'merge', 'new', 'abort'.
+    Non-interactive callers never reach here (the caller refuses first); this
+    prompts a TTY user and defaults to the safe 'backup' option.
+    """
+    print(color_yellow(
+        f"A project already exists on this system with the same identity:\n"
+        f"  id:       {existing_id}\n"
+        f"  worktree: {_display_worktree(existing_worktree)}"
+    ))
+    print("How do you want to import over it?")
+    print("  1. Back up the existing project, then import in its place (recommended)")
+    print("  2. Delete the existing project, then import in its place")
+    print("  3. Move the existing project to a different path, then import")
+    print("  4. Merge the imported sessions into the existing project (may create duplicates)")
+    print("  5. Import as a NEW project at a different path")
+    print("  6. Abort (no changes)")
+    mapping = {"1": "backup", "2": "delete", "3": "move", "4": "merge", "5": "new", "6": "abort"}
+    try:
+        choice = input("Choose [1-6] (default 1): ").strip() or "1"
+    except (EOFError, KeyboardInterrupt):
+        print("\nAborted.")
+        return "abort"
+    return mapping.get(choice, "backup")
+
+
+def extract_and_import_project(
+    bundle_path: Path,
+    target_project_id: str | None = None,
+    new_project_path: str | None = None,
+    progress_callback=None,
+    interactive: bool | None = None,
+) -> str:
+    """
+    Import a whole-project .ocbox bundle. Returns the destination project id.
+
+    Three phases (see the project-export IPD): (1) pre-flight validation and
+    Axis-A/Axis-B resolution with no writes; (2) any chosen destructive step on
+    the existing project (backup/delete/move), each guarded by its own backup;
+    (3) a single import transaction that inserts project-scoped then
+    session-scoped rows and restores diffs, with full rollback on failure.
+    """
+    import zipfile
+    import json
+    import uuid
+    import re
+
+    if interactive is None:
+        interactive = bool(hasattr(sys.stdin, "isatty") and sys.stdin.isatty())
+
+    if not bundle_path.exists():
+        raise RecoveryError(f"Bundle file not found: {bundle_path}")
+
+    # ---- Phase 1: pre-flight (no writes) ----
+    try:
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Reading project bundle metadata...")
+        with zipfile.ZipFile(bundle_path, "r") as zipf:
+            meta = json.loads(zipf.read("meta.json").decode("utf-8"))
+    except Exception as e:
+        raise RecoveryError(f"Failed to read or parse bundle contents: {e}")
+
+    if meta.get("kind") != "project":
+        raise RecoveryError("Not a project bundle (meta.kind != 'project').")
+
+    id_regex = re.compile(r"^[a-zA-Z0-9_\-]+$")
+    all_ids = meta.get("all_session_ids", [])
+    if not isinstance(all_ids, list):
+        raise RecoveryError("Invalid all_session_ids format in bundle metadata.")
+    for sid in all_ids:
+        if not isinstance(sid, str) or not id_regex.match(sid):
+            raise RecoveryError(f"Invalid session ID format in bundle metadata: {sid}")
+
+    source_project = meta.get("source_project", {}) or {}
+    bundle_proj_id = source_project.get("id")
+    if not bundle_proj_id or not id_regex.match(str(bundle_proj_id)):
+        raise RecoveryError(f"Invalid project ID in bundle metadata: {bundle_proj_id!r}")
+    bundle_worktree = _validate_worktree_path(source_project.get("worktree", ""))
+
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    # Resolve Axis A (project identity) and Axis B (session id collisions).
+    conn = None
+    action = None  # backup|delete|move|merge|new|None (create from bundle)
+    move_dest: str | None = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # Axis B: do any session ids collide?
+        collision = False
+        if all_ids:
+            placeholders = ",".join("?" for _ in all_ids)
+            cursor.execute(f"SELECT id FROM session WHERE id IN ({placeholders})", all_ids)
+            collision = bool(cursor.fetchall())
+        id_map = {sid: (f"ses_{uuid.uuid4().hex}" if collision else sid) for sid in all_ids}
+
+        # Axis A: decide dest_proj_id and any destructive action.
+        merge_only = False  # when True, do NOT import the project-scoped rows
+        if target_project_id:
+            cursor.execute("SELECT id FROM project WHERE id = ?", (target_project_id,))
+            if not cursor.fetchone():
+                raise RecoveryError(f"--to-project {target_project_id} not found on this system.")
+            dest_proj_id = target_project_id
+            merge_only = True  # merge: leave the target project row/metadata intact
+        elif new_project_path:
+            dest_proj_id = f"proj_{uuid.uuid4().hex[:8]}"
+            action = "new_at_path"
+            move_dest = _validate_worktree_path(str(Path(new_project_path).expanduser().resolve()))
+        else:
+            # Does the bundle's project (by id or worktree) already exist?
+            cursor.execute(
+                "SELECT id, worktree FROM project WHERE id = ? OR worktree = ?",
+                (bundle_proj_id, bundle_worktree),
+            )
+            existing = cursor.fetchone()
+            if not existing:
+                dest_proj_id = bundle_proj_id  # create from the bundle's own row
+            else:
+                if not interactive:
+                    raise RecoveryError(
+                        f"A project already exists matching the bundle "
+                        f"(id={existing[0]}, worktree={existing[1]!r}). Re-run interactively, "
+                        f"or pass --to-project <id> to merge or --new-project-path <path> to "
+                        f"import as a new project."
+                    )
+                action = _prompt_project_collision(existing[0], existing[1] or "", interactive)
+                if action == "abort":
+                    raise RecoveryError("Import aborted.")
+                elif action == "merge":
+                    dest_proj_id = existing[0]
+                    merge_only = True
+                elif action == "new":
+                    dest_proj_id = f"proj_{uuid.uuid4().hex[:8]}"
+                    try:
+                        new_path = input("New project worktree path: ").strip()
+                    except (EOFError, KeyboardInterrupt):
+                        raise RecoveryError("Import aborted.")
+                    move_dest = _validate_worktree_path(str(Path(new_path).expanduser().resolve()))
+                    action = "new_at_path"
+                else:
+                    # backup / delete / move all import in place (dest = bundle id).
+                    dest_proj_id = bundle_proj_id
+                    if action == "move":
+                        try:
+                            mv = input("Move existing project to worktree path: ").strip()
+                        except (EOFError, KeyboardInterrupt):
+                            raise RecoveryError("Import aborted.")
+                        move_dest = _validate_worktree_path(str(Path(mv).expanduser().resolve()))
+    except RecoveryError:
+        if conn:
+            conn.close()
+        raise
+    except Exception as e:
+        if conn:
+            conn.close()
+        raise RecoveryError(f"Pre-flight project import failed: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+    # ---- Phase 2: destructive step on the existing project (each backed up) ----
+    # Any branch that deletes or moves the existing project first writes a full
+    # .ocbox backup of it; delete/move commit in their own transactions, so this
+    # backup is the recovery path if Phase 3 later fails.
+    existing_backup: Path | None = None
+    if action in ("backup", "delete", "move"):
+        try:
+            backup_dir = Path(load_ocman_config()["default_backup_dir"]).expanduser()
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            ts = get_startup_timestamp_local()
+            existing_backup = backup_dir / f"project-{bundle_proj_id}-preimport-{ts}.ocbox"
+            if progress_callback:
+                progress_callback(f"{info_prefix()} Backing up existing project to {existing_backup}...")
+            bundle_project_data(bundle_proj_id, existing_backup, progress_callback=progress_callback)
+        except Exception as e:
+            raise RecoveryError(f"Aborting: failed to back up the existing project before import: {e}")
+
+        if action in ("backup", "delete"):
+            if progress_callback:
+                progress_callback(f"{info_prefix()} Deleting existing project '{bundle_proj_id}'...")
+            db_delete_project_recursive(bundle_proj_id, dry_run=False, force=False,
+                                        verbosity=0, confirm=False)
+        elif action == "move":
+            cursor2_conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            try:
+                old_wt = cursor2_conn.execute(
+                    "SELECT worktree FROM project WHERE id = ?", (bundle_proj_id,)
+                ).fetchone()
+            finally:
+                cursor2_conn.close()
+            if progress_callback:
+                progress_callback(f"{info_prefix()} Moving existing project to {move_dest}...")
+            db_move_project_metadata(bundle_proj_id, old_wt[0] if old_wt else bundle_worktree, move_dest)
+
+    # ---- Phase 3: import transaction ----
+    if progress_callback:
+        progress_callback(f"{info_prefix()} Creating database rollback backup...")
+    backup_file = db_create_rollback_backup()
+    copied_diffs: list[Path] = []
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("BEGIN TRANSACTION")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+
+        # Determine the destination worktree (for rebasing session.directory).
+        if action == "new_at_path" and move_dest:
+            target_worktree = move_dest
+        else:
+            row = cursor.execute("SELECT worktree FROM project WHERE id = ?", (dest_proj_id,)).fetchone()
+            target_worktree = (row[0] if row else None) or bundle_worktree
+        orig_worktree = bundle_worktree
+
+        project_tables = {t for t, _ in PROJECT_RELATIONAL_TABLES}
+        session_tables = {t for t, _ in SESSION_RELATIONAL_TABLES}
+        table_counts: dict[str, int] = {}
+
+        def _valid_cols(row: dict, table: str) -> None:
+            if not all(isinstance(c, str) and c.isidentifier() for c in row.keys()):
+                raise RecoveryError(f"Invalid database column name in import bundle for table '{table}'")
+
+        def insert_project_row(table: str, row: dict) -> None:
+            # Project-scoped inserter: NEVER runs project/workspace own ids through
+            # the session id_map. Sets the destination project id, and remaps only
+            # genuine session-id references via id_map.
+            if table == "project":
+                if merge_only:
+                    return  # do not overwrite the target project's metadata
+                row["id"] = dest_proj_id
+                if action == "new_at_path" and move_dest:
+                    row["worktree"] = move_dest
+            else:
+                # project_directory / workspace: repoint at the destination project.
+                row["project_id"] = dest_proj_id
+                # A workspace row may reference a session id in its own id / a
+                # session-id column; remap those (exact-match) if colliding.
+                for col_name, val in list(row.items()):
+                    if col_name in ("session_id",) and val in id_map:
+                        row[col_name] = id_map[val]
+            _valid_cols(row, table)
+            cols = ", ".join(row.keys())
+            ph = ", ".join("?" for _ in row.values())
+            cursor.execute(f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({ph})", list(row.values()))
+            table_counts[table] = table_counts.get(table, 0) + 1
+
+        def insert_session_row(table: str, row: dict) -> None:
+            for col_name, val in list(row.items()):
+                if col_name in ("id", "parent_id", "session_id", "aggregate_id") and val in id_map:
+                    row[col_name] = id_map[val]
+            if table == "session":
+                row["project_id"] = dest_proj_id
+                if row.get("directory") and orig_worktree and target_worktree:
+                    old_dir = row["directory"]
+                    try:
+                        rel = Path(old_dir).relative_to(Path(orig_worktree))
+                        row["directory"] = str(Path(target_worktree) / rel)
+                    except ValueError:
+                        if old_dir.startswith(orig_worktree):
+                            row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
+            _valid_cols(row, table)
+            cols = ", ".join(row.keys())
+            ph = ", ".join("?" for _ in row.values())
+            cursor.execute(f"INSERT OR REPLACE INTO {table} ({cols}) VALUES ({ph})", list(row.values()))
+            table_counts[table] = table_counts.get(table, 0) + 1
+
+        with zipfile.ZipFile(bundle_path, "r") as zipf:
+            namelist = set(zipf.namelist())
+            # Project-scoped tables first (project row before FK-referencing rows),
+            # then session-scoped tables.
+            ordered = list(PROJECT_RELATIONAL_TABLES) + list(SESSION_RELATIONAL_TABLES)
+            for table, _col in ordered:
+                member = f"db_data/{table}.jsonl"
+                if member not in namelist:
+                    continue
+                if progress_callback:
+                    progress_callback(f"{info_prefix()} Importing database table '{table}'...")
+                with zipf.open(member, "r") as f:
+                    for line in f:
+                        row = json.loads(line.decode("utf-8"))
+                        if table in project_tables:
+                            insert_project_row(table, row)
+                        elif table in session_tables:
+                            insert_session_row(table, row)
+                        else:
+                            raise RecoveryError(f"Unauthorized table in import bundle: {table}")
+
+            # Restore diff files (remap ids when colliding).
+            storage_dir = OPENCODE_STORAGE_DIR
+            storage_dir.mkdir(parents=True, exist_ok=True)
+            if progress_callback:
+                progress_callback(f"{info_prefix()} Restoring session storage diff files...")
+            for old_id, new_id in id_map.items():
+                member = f"session_diffs/{old_id}.json"
+                if member not in namelist:
+                    continue
+                diff_data = json.loads(zipf.read(member).decode("utf-8"))
+                if collision:
+                    diff_data = _remap_ids_in_json(diff_data, id_map)
+                target_file = storage_dir / f"{new_id}.json"
+                target_file.write_text(json.dumps(diff_data, indent=2), encoding="utf-8")
+                copied_diffs.append(target_file)
+
+        if progress_callback:
+            progress_callback(f"{info_prefix()} Committing database transaction...")
+        conn.commit()
+        if backup_file.exists():
+            backup_file.unlink()
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        db_restore_rollback_backup(backup_file)
+        if backup_file.exists():
+            backup_file.unlink()
+        for f in copied_diffs:
+            if f.exists():
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+        hint = ""
+        if existing_backup is not None:
+            hint = (f" The existing project was already backed up to {existing_backup} "
+                    f"before this step; restore it with 'ocman backup restore' if needed.")
+        raise RecoveryError(f"Project import failed: {e}{hint}")
+    finally:
+        if conn:
+            conn.close()
+
+    return dest_proj_id
 
 
 def db_run_cleanup(
@@ -9405,6 +9869,19 @@ def main() -> None:
         return
 
     # Handle session export/import early
+    if getattr(args, "export_project", None) is not None:
+        if not args.to:
+            die("Error: project export requires a destination file path specified by --to <file.ocbox> (or 'to <file.ocbox>').")
+        try:
+            proj = resolve_project(args.export_project)
+            proj_id = proj["id"] if proj else args.export_project
+            print(f"{info_prefix()} Exporting project '{proj_id}' to '{args.to}'...")
+            bundle_project_data(proj_id, Path(args.to), progress_callback=print)
+            print(color_green(f"[+] Successfully exported project '{proj_id}' to '{args.to}'!"))
+        except Exception as e:
+            die(f"Export failed: {e}")
+        return
+
     if getattr(args, "export_session", None) is not None:
         if not args.to:
             die("Error: --export-session requires a destination file path specified by --to <file_path.ocbox>.")
@@ -9429,16 +9906,37 @@ def main() -> None:
         bundle_path = Path(args.import_session)
         to_project = getattr(args, "to_project", None)
         new_project_path = getattr(args, "new_project_path", None)
-        
+
+        # Auto-detect the bundle kind: a project bundle (meta.kind == "project")
+        # dispatches to the project importer; anything else (incl. legacy bundles
+        # with no 'kind') is a session import.
+        kind = None
         try:
-            print(f"{info_prefix()} Importing session from '{bundle_path}'...")
-            imported_id = extract_and_import_session(
-                bundle_path,
-                target_project_id=to_project,
-                new_project_path=new_project_path,
-                progress_callback=print
-            )
-            print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
+            import zipfile as _zf, json as _json
+            with _zf.ZipFile(bundle_path, "r") as zf:
+                kind = _json.loads(zf.read("meta.json").decode("utf-8")).get("kind")
+        except Exception:
+            kind = None
+
+        try:
+            if kind == "project":
+                print(f"{info_prefix()} Importing project from '{bundle_path}'...")
+                imported_id = extract_and_import_project(
+                    bundle_path,
+                    target_project_id=to_project,
+                    new_project_path=new_project_path,
+                    progress_callback=print,
+                )
+                print(color_green(f"[+] Successfully imported project as '{imported_id}'!"))
+            else:
+                print(f"{info_prefix()} Importing session from '{bundle_path}'...")
+                imported_id = extract_and_import_session(
+                    bundle_path,
+                    target_project_id=to_project,
+                    new_project_path=new_project_path,
+                    progress_callback=print
+                )
+                print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
         except Exception as e:
             die(f"Import failed: {e}")
         return
