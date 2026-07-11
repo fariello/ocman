@@ -1,0 +1,12 @@
+id,source_ids,section,status,description,files_changed,commit,validation,reason_not_done,next_step
+20260624-024342-S2-A1,20260624-024342-S2-E1,Section 2,completed,Wrap connection in db_list_projects() with try-finally or context manager,ocman.py,7d7b98a,pytest,,none
+20260624-024342-S2-A2,20260624-024342-S2-E2,Section 2,completed,Wrap connection in db_list_sessions() with try-finally or context manager,ocman.py,7d7b98a,pytest,,none
+20260624-024342-S2-A3,20260624-024342-S2-E3,Section 2,completed,Wrap connection in main project context resolution with try-finally or context manager,ocman.py,7d7b98a,pytest,,none
+20260624-024342-S2-A4,20260624-024342-S2-E4,Section 2,completed,Wrap connection in TUI database widget with try-finally or context manager,ocman_tui/widgets/database.py,7d7b98a,pytest,,none
+20260624-024342-S2-A5,20260624-024342-S2-E5,Section 2,completed,Wrap connection in TUI session deletion dialog with try-finally or context manager,ocman_tui/app.py,7d7b98a,pytest,,none
+20260624-024342-S2-A6,20260624-024342-S2-E6,Section 2,completed,Wrap connection in TUI project deletion dialog with try-finally or context manager,ocman_tui/app.py,7d7b98a,pytest,,none
+20260624-024342-S2-A7,20260624-024342-S2-E7,Section 2,completed,Wrap connection in TUI delete worker with try-finally or context manager,ocman_tui/app.py,7d7b98a,pytest,,none
+20260624-024342-S3-A1,20260624-024342-S3-T1,Section 3,completed,Add unit tests for db_list_projects() and db_list_sessions() exception connection cleanup,tests/test_ocman.py,fd0dc06,pytest,,none
+20260624-024342-S3-A2,20260624-024342-S3-T2,Section 3,completed,Add integration tests for CLI arguments execution,tests/test_ocman.py,fd0dc06,pytest,,none
+20260624-024342-S8-A1,20260624-024342-S8-E1,Section 8,completed,Define startup timestamps and use them for all output files,ocman.py tests/test_ocman.py,staged,pytest,,none
+

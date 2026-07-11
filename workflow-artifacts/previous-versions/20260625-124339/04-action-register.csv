@@ -1,0 +1,11 @@
+id,source_ids,section,status,description,files_changed,commit,validation,reason_not_done,next_step
+20260625-124339-S1-X1,20260625-124339-S1-D1,7,completed,Bump version to 1.0.2 in pyproject.toml and CHANGELOG,pyproject.toml;CHANGELOG.md;ocman.py;ocman_tui/__init__.py,bc85e4de090a99f46e1b1e34e0846999d30e86ab,version check,,none
+20260625-124339-S1-X2,20260625-124339-S1-D2,7,completed,Update CLI argument help text and README.md with move/export-import instructions,ocman.py;README.md,bc85e4de090a99f46e1b1e34e0846999d30e86ab,help text check,,none
+20260625-124339-S1-X3,20260625-124339-S1-REL1,7,completed,Add Github Actions workflow for automated testing,.github/workflows/ci.yml,bc85e4de090a99f46e1b1e34e0846999d30e86ab,check CI yaml,,none
+20260625-124339-S1-X4,20260625-124339-S1-REL2,7,completed,Document PYTHONPATH requirement for running tests in README.md,README.md,bc85e4de090a99f46e1b1e34e0846999d30e86ab,pytest runs,,none
+20260625-124339-S1-X5,20260625-124339-S1-DEP1,7,completed,Exclude debug opencode json files from hatch packaging,pyproject.toml,bc85e4de090a99f46e1b1e34e0846999d30e86ab,Hatch settings check,,none
+20260625-124339-S2-X1,20260625-124339-S2-S1,7,completed,Whitelist tables and validate column names in extract_and_import_session,ocman.py,bc85e4de090a99f46e1b1e34e0846999d30e86ab,pytest passes,,none
+20260625-124339-S2-X2,20260625-124339-S2-S2,7,completed,Validate session IDs against strict regex in extract_and_import_session,ocman.py,bc85e4de090a99f46e1b1e34e0846999d30e86ab,pytest passes,,none
+20260625-124339-S3-X1,20260625-124339-S3-T1,7,completed,Write test cases verifying rejection of malicious SQL injection and path traversal payloads,tests/test_export_import.py,bc85e4de090a99f46e1b1e34e0846999d30e86ab,pytest passes,,none
+20260625-124339-S3-X2,20260625-124339-S3-T2,7,completed,Write test cases verifying CLI metadata-only option and mock prompt input,tests/test_move.py,bc85e4de090a99f46e1b1e34e0846999d30e86ab,pytest passes,,none
+20260625-124339-S4-X1,20260625-124339-S4-D1,7,completed,Update CHANGELOG.md with version 1.0.2 release notes,CHANGELOG.md,bc85e4de090a99f46e1b1e34e0846999d30e86ab,inspect CHANGELOG,,none

@@ -1,0 +1,9 @@
+id,source_ids,section,status,description,files_changed,commit,validation,reason_not_done,next_step
+20260617-173940-S7-X1,20260617-173940-S1-T1,7,planned,Create pytest unit tests covering core modules,tests/test_ocman.py tests/test_core.py,,pytest,,Implement tests
+20260617-173940-S7-X2,20260617-173940-S1-CI1,7,planned,Create basic GitHub Actions CI configuration,.github/workflows/ci.yml,,local syntax validation,,Create yml file
+20260617-173940-S7-X3,20260617-173940-S2-E1,7,planned,Add transaction rollback and connection closure in try/except/finally,ocman.py,,pytest,,Refactor db pruning methods
+20260617-173940-S7-X4,20260617-173940-S2-E2,7,planned,Stop textual timer intervals when background threads complete/fail,orsession/app.py,,manual TUI run,,Update timers in app.py
+20260617-173940-S7-X5,20260617-173940-S2-S1,7,planned,Sanitize session ID and verify that diff JSON paths remain in storage dir,ocman.py,,pytest,,Add check in ocman.py
+20260617-173940-S7-X6,20260617-173940-S2-E3,7,planned,Add timeout parameter to subprocess export in ocman.py,ocman.py,,pytest,,Add timeout to subprocess.run
+20260617-173940-S7-X7,20260617-173940-S4-D1,7,planned,Update README.md arguments table with all db/cleanup/compact options,README.md,,manual review,,Edit README.md
+20260617-173940-S7-X8,20260617-173940-S1-DEP2,7,planned,Mark rebuild_opencode.sh as deprecated/obsolete,rebuild_opencode.sh,,manual review,,Mark deprecated

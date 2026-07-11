@@ -1,0 +1,6 @@
+id,source_ids,section,status,description,files_changed,commit,validation,reason_not_done,next_step
+20260618-023542-S1-AC1,20260618-023542-S1-DEP1,1,completed,Remove rebuild_opencode.sh,rebuild_opencode.sh,7d63ee5,Check file exists,,None
+20260618-023542-S2-AC1,20260618-023542-S2-E1,2,completed,Implement confirm flag in CLI deletion functions and remove monkeypatch in TUI,"ocman.py, ocman_tui/app.py",8adc0ed,Run pytest,,None
+20260618-023542-S2-AC2,20260618-023542-S2-E2,2,completed,Batch DB queries/deletions in chunks of 999 sessions,ocman.py,8adc0ed,Run pytest,,None
+20260618-023542-S3-AC1,20260618-023542-S3-T1,3,completed,Implement test_tui_app_project_deletion() in tests/test_tui.py,tests/test_tui.py,91a39c7,Run pytest,,None
+20260618-023542-S4-AC1,20260618-023542-S4-D1,4,completed,Add --delete-project option in README.md reference table,README.md,5eebf7e,Check README file,,None

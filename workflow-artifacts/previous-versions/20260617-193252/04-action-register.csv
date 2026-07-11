@@ -1,0 +1,10 @@
+Unique ID,Source Finding IDs,Section,Status,Description,Files Changed,Commit,Validation,Reason Not Done,Recommended Next Step
+20260617-193252-S2-A1,20260617-193252-S2-E1,2,completed,Refactor database cleanup to run in background thread,ocman_tui/widgets/database.py;ocman_tui/app.py,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Manual test,None,None
+20260617-193252-S2-A2,20260617-193252-S2-E2,2,completed,Delete temporary JSON export file immediately after load,ocman_tui/app.py,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Run tests,None,None
+20260617-193252-S3-A1,20260617-193252-S3-T1,3,completed,Implement async TUI worker tests in tests/test_tui.py,tests/test_tui.py,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Run test suite,None,None
+20260617-193252-S4-A1,20260617-193252-S4-D1,4,completed,Update README.md to use ocman ui / gui instead of standalone orsession,README.md,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Manual test,None,None
+20260617-193252-S4-A2,20260617-193252-S4-D2,4,completed,Delete SPEC-orsession.md and opencode_db_cleanup_handoff_for_claude.md,SPEC-orsession.md;opencode_db_cleanup_handoff_for_claude.md,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Verify file deletion,None,None
+20260617-193252-S5-A1,20260617-193252-S5-B1,5,completed,Check session_map before adding nodes to avoid duplicates,ocman_tui/widgets/sidebar.py,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Verify sidebar tree rendering,None,None
+20260617-193252-S5-A2,20260617-193252-S5-U1,5,completed,Implement actual history resetting in ocman.py clear_history branch,ocman.py,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Run CLI with clear-history,None,None
+20260617-193252-S6-A1,20260617-193252-S6-P1,6,completed,Change name to ocman in pyproject.toml,pyproject.toml,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Verify package install,None,None
+20260617-193252-S6-A2,20260617-193252-S6-CI1,6,completed,Add Python 3.14 to CI workflow test matrix,.github/workflows/ci.yml,8f08a6afc2099e3229a59c96a8f62a1da1a3cfd3,Verify file format,None,None
