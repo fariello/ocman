@@ -92,6 +92,16 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   run inside a SQLite transaction and print copy-paste rollback instructions. For multi-file
   restores, a single pre-batch safety backup is taken, and if any restore fails, the entire
   batch is rolled back to that original state.
+- **One batch, one report.** Multi-session and project-expanded deletes go through
+  `db_delete_sessions_batch`, which shares a single process-lock check, ONE family backup,
+  ONE transaction, ONE `VACUUM`, ONE metrics write, and ONE consolidated grand-total report
+  for the whole batch (rather than repeating them per session). The low-level row delete is
+  factored into `_delete_session_rows` so both the single-session path
+  (`db_delete_session_recursive`, whose output is unchanged) and the batch path reuse the
+  same primitive. Empty-project cleanup (removing a `project` row plus its
+  `project_directory`/`workspace` rows) happens inside that same transaction, but only for
+  projects the user explicitly targeted (passed as `remove_project_ids`), never inferred
+  from "0 sessions remain".
 - **Untrusted input is validated at the boundary.** Import validates IDs/table/column names;
   restore validates ZIP member paths before extraction (Zip-Slip protection). SQL uses
   parameterized values with hardcoded/allowlisted identifiers. During single-session import,

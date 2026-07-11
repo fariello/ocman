@@ -2,7 +2,18 @@
 
 ## [Unreleased]
 
-## [1.1.0] - 2026-07-07
+### Changed
+- **Batch session delete is now one consolidated operation.** Deleting multiple sessions
+  (an explicit list, or a project expansion) no longer repeats the backup, `VACUUM`, and
+  rollback report once per session. It now takes a single family backup, runs one
+  transaction and one `VACUUM`, writes one history entry, and prints one grand-total report
+  (sessions/messages/rows/files removed, database size before/after, total reclaimed) with a
+  single rollback stanza. Single-session `session delete ID` output is unchanged.
+- **Deleting a project's sessions by naming the project now removes the empty project row.**
+  When you delete a whole project's sessions (e.g. `ocman session delete <project>`), the
+  now-empty `project` row (and its `project_directory`/`workspace` rows) is removed in the
+  same transaction, so the project no longer lingers with zero sessions. A plain
+  `session delete ID1 ID2` that happens to empty a project does NOT remove the project row.
 
 ### Added
 - **`ocman filter <input>` command:** re-scopes an existing recovery/compacted document to a

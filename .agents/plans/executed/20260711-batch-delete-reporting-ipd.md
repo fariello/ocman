@@ -1,6 +1,17 @@
 # Implementation Plan - Batch delete reporting, per-batch VACUUM, empty-project cleanup
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED (2026-07-11)
+
+Implemented via `_delete_session_rows` / `_expand_session_tree` /
+`_resolve_session_diff_files` helpers and a new `db_delete_sessions_batch(...)`;
+the `main()` `--delete` handler now routes single loose sessions through the
+unchanged `db_delete_session_recursive` and everything else through the batch
+function, passing explicitly-targeted project ids for empty-project cleanup. The
+Open Question is resolved: `TargetSet.projects` (from `resolve_and_expand_targets`)
+is the dispatch signal, and the batch removes a targeted project only when its
+in-transaction session count reaches 0. Tests added in
+`tests/test_ocman.py::test_batch_delete_*`; docs updated (README, ARCHITECTURE,
+CHANGELOG). Full suite: 281 passed, 2 skipped.
 
 Improves the UX of multi-session (and project-expanded) `ocman session delete`
 and `ocman project delete`, based on a real run that deleted a whole project's

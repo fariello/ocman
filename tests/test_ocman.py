@@ -2117,6 +2117,144 @@ def test_multi_session_delete(temp_db, monkeypatch):
     conn.close()
 
 
+def _seed_batch_sessions(temp_db, n=4, project_id="proj1"):
+    """Insert one project + n root sessions with a message each for batch-delete tests."""
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("DELETE FROM session")
+    cur.execute("DELETE FROM project")
+    cur.execute(
+        "INSERT INTO project (id, worktree, name) VALUES (?, '/path/to/proj', 'Proj 1')",
+        (project_id,),
+    )
+    for i in range(1, n + 1):
+        cur.execute(
+            "INSERT INTO session (id, project_id, title, time_created, time_updated, "
+            "directory, cost, tokens_input, tokens_output, parent_id) "
+            "VALUES (?, ?, ?, ?, ?, '/path/to/proj', ?, ?, ?, '')",
+            (f"sess{i}", project_id, f"Sess {i}", 1000, 2000, 0.10, 100, 50),
+        )
+        cur.execute("INSERT INTO message (id, session_id) VALUES (?, ?)", (f"m{i}", f"sess{i}"))
+    conn.commit()
+    conn.close()
+
+
+def test_batch_delete_single_report_and_one_vacuum(temp_db, mock_history_path, monkeypatch, capsys, tmp_path):
+    """Multi-session delete produces ONE consolidated report and ONE VACUUM (not N)."""
+    import ocman
+    _seed_batch_sessions(temp_db, n=4)
+    # Isolate the backup family into tmp_path (avoid writing under the real HOME).
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: tmp_path))
+
+    ocman.db_delete_sessions_batch(
+        ["sess1", "sess2", "sess3", "sess4"],
+        dry_run=False, force=True, verbosity=0,
+    )
+    out = capsys.readouterr().out
+
+    # Exactly one consolidated report and one VACUUM.
+    assert out.count("Batch deletion complete!") == 1
+    assert out.count("VACUUM complete.") == 1
+    assert out.count("Rollback instructions:") == 1
+    # Grand total present.
+    assert "Sessions deleted:" in out
+    assert "Total space reclaimed:" in out
+
+    # All rows gone.
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session"); assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM message"); assert cur.fetchone()[0] == 0
+    conn.close()
+
+    # Exactly ONE history run entry for the whole batch.
+    history = ocman._load_history()
+    assert history["cumulative"]["sessions_deleted"] == 4
+    assert len(history["runs"]) == 1
+
+
+def test_batch_delete_dry_run_changes_nothing(temp_db, mock_history_path, capsys):
+    import ocman
+    _seed_batch_sessions(temp_db, n=3)
+    ocman.db_delete_sessions_batch(
+        ["sess1", "sess2", "sess3"],
+        dry_run=True, force=True, verbosity=0,
+    )
+    out = capsys.readouterr().out
+    assert "Dry run complete" in out
+    assert "VACUUM" not in out
+    assert "Batch deletion complete!" not in out
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session"); assert cur.fetchone()[0] == 3
+    conn.close()
+
+
+def test_batch_delete_removes_empty_targeted_project(temp_db, mock_history_path, monkeypatch, tmp_path):
+    """When a targeted project's sessions are all deleted, its project row is removed."""
+    import ocman
+    _seed_batch_sessions(temp_db, n=2, project_id="proj1")
+    # Create the project-scoped tables the cleanup touches.
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("CREATE TABLE project_directory (id TEXT, project_id TEXT)")
+    cur.execute("CREATE TABLE workspace (id TEXT, project_id TEXT)")
+    cur.execute("INSERT INTO project_directory (id, project_id) VALUES ('pd1', 'proj1')")
+    cur.execute("INSERT INTO workspace (id, project_id) VALUES ('ws1', 'proj1')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: tmp_path))
+
+    ocman.db_delete_sessions_batch(
+        ["sess1", "sess2"],
+        dry_run=False, force=True, verbosity=0,
+        remove_project_ids=["proj1"],
+    )
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM project WHERE id='proj1'"); assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM project_directory WHERE project_id='proj1'"); assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM workspace WHERE project_id='proj1'"); assert cur.fetchone()[0] == 0
+    conn.close()
+
+
+def test_batch_delete_no_project_removal_when_not_targeted(temp_db, mock_history_path, monkeypatch, tmp_path):
+    """A plain multi-session delete that empties a project does NOT remove the project row."""
+    import ocman
+    _seed_batch_sessions(temp_db, n=2, project_id="proj1")
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: tmp_path))
+
+    ocman.db_delete_sessions_batch(
+        ["sess1", "sess2"],
+        dry_run=False, force=True, verbosity=0,
+        remove_project_ids=None,  # user named sessions, not the project
+    )
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session"); assert cur.fetchone()[0] == 0
+    cur.execute("SELECT COUNT(*) FROM project WHERE id='proj1'"); assert cur.fetchone()[0] == 1
+    conn.close()
+
+
+def test_batch_delete_mid_failure_rolls_back(temp_db, mock_history_path, monkeypatch, tmp_path):
+    """A failure during the batch transaction rolls back: no partial deletion."""
+    import ocman
+    _seed_batch_sessions(temp_db, n=3)
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: tmp_path))
+
+    # Force a failure after the DELETEs but before COMMIT by making the empty-project
+    # cleanup query blow up (reference a nonexistent project table column path).
+    orig = ocman._delete_session_rows
+    def boom(session_ids, *, cursor):
+        orig(session_ids, cursor=cursor)
+        raise RuntimeError("injected failure mid-transaction")
+    monkeypatch.setattr(ocman, "_delete_session_rows", boom)
+
+    with pytest.raises(ocman.RecoveryError):
+        ocman.db_delete_sessions_batch(
+            ["sess1", "sess2", "sess3"],
+            dry_run=False, force=True, verbosity=0,
+        )
+    # Nothing deleted (rolled back).
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session"); assert cur.fetchone()[0] == 3
+    conn.close()
+
+
 def test_compact_two_models_errors(temp_db, capsys):
     import sqlite3
     import ocman

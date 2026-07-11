@@ -7237,12 +7237,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         # Gather metrics of sessions to be deleted
         stats = gather_deletion_metrics(session_ids, conn)
 
-        deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
-        for chunk in chunks:
-            placeholders = ",".join("?" for _ in chunk)
-            for table, col in SESSION_RELATIONAL_TABLES:
-                cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
-                deleted_counts[table] += cursor.rowcount
+        deleted_counts = _delete_session_rows(session_ids, cursor=cursor)
 
         for table, _ in SESSION_RELATIONAL_TABLES:
             print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
@@ -7312,6 +7307,288 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         if isinstance(e, RecoveryError):
             raise
         raise RecoveryError(f"Database operation failed: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def _expand_session_tree(session_ids: list[str], cursor) -> list[str]:
+    """Expand a set of session ids to include all recursive descendant sub-sessions.
+
+    Returns the de-duplicated union of the input ids and every session reachable
+    by following ``parent_id`` links. Chunked to respect SQLITE_MAX_VARIABLE_NUMBER.
+    """
+    seen: set[str] = set()
+    frontier = [str(sid).strip() for sid in session_ids if sid and str(sid).strip()]
+    for sid in frontier:
+        if "/" in sid or "\\" in sid or ".." in sid:
+            raise RecoveryError(f"Unsafe session ID detected: {sid}")
+    chunk_size = 999
+    while frontier:
+        new_frontier: list[str] = []
+        chunks = [frontier[i:i + chunk_size] for i in range(0, len(frontier), chunk_size)]
+        for chunk in chunks:
+            placeholders = ",".join("?" for _ in chunk)
+            cursor.execute(
+                f"SELECT id FROM session WHERE id IN ({placeholders})", chunk
+            )
+            present = {row[0] for row in cursor.fetchall()}
+            for sid in present:
+                seen.add(sid)
+            # Find children of this chunk's sessions.
+            cursor.execute(
+                f"SELECT id FROM session WHERE parent_id IN ({placeholders})", chunk
+            )
+            for row in cursor.fetchall():
+                if row[0] not in seen:
+                    new_frontier.append(row[0])
+        frontier = new_frontier
+    return list(seen)
+
+
+def _delete_session_rows(session_ids: list[str], *, cursor) -> dict[str, int]:
+    """Delete the DB rows for the given session ids inside an ALREADY-OPEN transaction.
+
+    Deletes only the relational rows (via ``SESSION_RELATIONAL_TABLES``) for the
+    exact ids provided; it does NOT expand descendants (call ``_expand_session_tree``
+    first), take a backup, VACUUM, write metrics, or print a report. Returns a dict
+    of ``{table: rows_deleted}``. This is the shared low-level primitive used by both
+    the single-session and batch delete paths.
+    """
+    deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+    if not session_ids:
+        return deleted_counts
+    chunk_size = 999
+    chunks = [session_ids[i:i + chunk_size] for i in range(0, len(session_ids), chunk_size)]
+    for chunk in chunks:
+        placeholders = ",".join("?" for _ in chunk)
+        for table, col in SESSION_RELATIONAL_TABLES:
+            cursor.execute(
+                f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk
+            )
+            deleted_counts[table] += cursor.rowcount
+    return deleted_counts
+
+
+def _resolve_session_diff_files(session_ids: list[str], storage_dir: Path) -> list[Path]:
+    """Resolve on-disk session-diff JSON files for the given session ids, traversal-safe."""
+    files: list[Path] = []
+    for sid in session_ids:
+        if not sid or not str(sid).strip():
+            continue
+        clean_sid = str(sid).strip()
+        if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
+            raise RecoveryError(f"Unsafe session ID detected: {clean_sid}")
+        diff_file = (storage_dir / f"{clean_sid}.json").resolve()
+        try:
+            if diff_file.parent != storage_dir:
+                raise RecoveryError(
+                    f"Path traversal detected: resolved path {diff_file} is outside "
+                    f"storage directory {storage_dir}"
+                )
+        except Exception as ex:
+            if isinstance(ex, RecoveryError):
+                raise
+            raise RecoveryError(f"Invalid path for session ID {clean_sid}: {ex}")
+        if diff_file.exists():
+            files.append(diff_file)
+    return files
+
+
+def db_delete_sessions_batch(
+    session_ids: list[str],
+    *,
+    dry_run: bool,
+    force: bool,
+    verbosity: int,
+    remove_project_ids: list[str] | None = None,
+) -> None:
+    """Delete MANY sessions as ONE consolidated operation.
+
+    Unlike calling ``db_delete_session_recursive`` per session, this performs a
+    single process-lock check, ONE rollback family backup, ONE transaction, ONE
+    VACUUM, ONE metrics write, and ONE consolidated report with a single rollback
+    stanza. It does NOT print a per-session preview or confirm; the caller is
+    responsible for the single ``confirm_destructive`` preview.
+
+    If ``remove_project_ids`` is given, any of those projects whose session count
+    reaches 0 after the deletes is removed (project row + project_directory +
+    workspace) inside the SAME transaction. This is gated by the caller having
+    explicitly targeted those projects (e.g. ``session delete <project>``); it is
+    never inferred from "0 sessions remain".
+    """
+    clean_ids = [str(s).strip() for s in session_ids if s and str(s).strip()]
+    if not clean_ids:
+        return
+
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    if not OPENCODE_DB_PATH.exists():
+        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+
+    # One process-lock check for the whole batch (fail-open; --force bypasses).
+    check_opencode_process_lock(force, verbosity)
+
+    conn = None
+    transaction_started = False
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+
+        # 1. Expand to the full recursive set (parents + descendants), de-duplicated.
+        all_ids = _expand_session_tree(clean_ids, cursor)
+        if not all_ids:
+            raise RecoveryError("None of the requested sessions were found in the database.")
+
+        # 2. Gather metrics ONCE for the whole batch (used for the report + history).
+        stats = gather_deletion_metrics(all_ids, conn)
+
+        # 3. Resolve on-disk diff files for the whole set.
+        storage_dir = OPENCODE_STORAGE_DIR
+        files_to_delete = _resolve_session_diff_files(all_ids, storage_dir)
+
+        # Determine which explicitly-targeted projects would become empty.
+        remove_project_ids = remove_project_ids or []
+
+        print()
+        print(color_bold(f"Deleting {len(all_ids)} session(s) in a single batch operation:"))
+        if stats:
+            print(f"  Sessions:   {stats['sessions_count']:,} "
+                  f"({stats.get('subagents_count', 0):,} subagent)")
+            print(f"  Messages:   {stats['messages_count']:,}")
+        if files_to_delete:
+            print(f"  Diff files: {len(files_to_delete):,}")
+
+        if dry_run:
+            print()
+            print(f"{info_prefix()} Dry run complete. No database changes were made.")
+            if remove_project_ids:
+                print(f"{info_prefix()} Would remove up to {len(remove_project_ids)} "
+                      f"now-empty project row(s).")
+            return
+
+        print()
+        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
+
+        # 4. ONE rollback family backup for the whole batch.
+        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
+        wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+        shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+        try:
+            backup_dir.mkdir(parents=True, exist_ok=True)
+            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+            if wal_file.exists():
+                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+            if shm_file.exists():
+                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+            print("[+] Backup created successfully.")
+        except Exception as e:
+            print(color_red(f"[-] Backup failed: {e}"))
+            print(color_red("    Aborting deletion for safety."))
+            return
+
+        # 5. ONE transaction: delete session rows, then any now-empty targeted projects.
+        size_before = get_file_size_local(OPENCODE_DB_PATH)
+        print(f"{info_prefix()} Starting transaction...")
+        cursor.execute("PRAGMA foreign_keys = OFF;")
+        cursor.execute("BEGIN TRANSACTION;")
+        transaction_started = True
+
+        deleted_counts = _delete_session_rows(all_ids, cursor=cursor)
+        total_rows = sum(deleted_counts.values())
+
+        # Empty-project cleanup, gated on explicit project targeting.
+        projects_removed = 0
+        for pid in remove_project_ids:
+            cursor.execute(
+                "SELECT COUNT(*) FROM session WHERE project_id = ?", (pid,)
+            )
+            remaining = cursor.fetchone()[0]
+            if remaining == 0:
+                for table, col in PROJECT_RELATIONAL_TABLES:
+                    cursor.execute(f"DELETE FROM {table} WHERE {col} = ?", (pid,))
+                projects_removed += 1
+
+        cursor.execute("COMMIT;")
+        transaction_started = False
+        cursor.execute("PRAGMA foreign_keys = ON;")
+        print(f"[+] Transaction committed: {total_rows:,} row(s) deleted"
+              + (f", {projects_removed} empty project(s) removed" if projects_removed else "")
+              + ".")
+
+        # 6. Delete disk files.
+        files_space_saved = 0
+        for f in files_to_delete:
+            try:
+                if f.exists():
+                    files_space_saved += f.stat().st_size
+                f.unlink()
+            except OSError as e:
+                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+        # 7. ONE VACUUM.
+        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
+        conn.execute("VACUUM;")
+        print("[+] VACUUM complete.")
+
+        size_after = OPENCODE_DB_PATH.stat().st_size
+        db_space_saved = max(0, size_before - size_after)
+        total_space_saved = db_space_saved + files_space_saved
+
+        # 8. ONE metrics write for the whole batch.
+        if stats:
+            stats["space_saved"] = total_space_saved
+            if projects_removed:
+                stats["projects_count"] = projects_removed
+        save_deletion_metrics("delete", stats)
+
+        # 9. ONE consolidated report + ONE rollback stanza.
+        print(color_green("Batch deletion complete!"))
+        print("--------------------------------------------------------")
+        if stats:
+            print(f"Sessions deleted:      {stats['sessions_count']:,} "
+                  f"({stats.get('subagents_count', 0):,} subagent)")
+            print(f"Messages deleted:      {stats['messages_count']:,}")
+        print(f"Rows deleted:          {total_rows:,}")
+        if projects_removed:
+            print(f"Empty projects removed:{projects_removed:>3}")
+        print(f"Files removed:         {len(files_to_delete):,} ({human_size_local(files_space_saved)})")
+        print(f"Database size before:  {human_size_local(size_before)}")
+        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+        print(f"Database space saved:  {human_size_local(db_space_saved)}")
+        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
+        print("--------------------------------------------------------")
+        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+        print()
+        print("Rollback instructions:")
+        print("  1. Close OpenCode if it is running.")
+        print("  2. Restore the database file family:")
+        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+        if wal_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+        else:
+            print(f"     rm -f '{wal_file}'")
+        if shm_file.exists():
+            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+        else:
+            print(f"     rm -f '{shm_file}'")
+        print("--------------------------------------------------------")
+
+    except Exception as e:
+        if conn and transaction_started:
+            try:
+                conn.rollback()
+                print(f"{info_prefix()} " + color_yellow("Transaction rolled back."))
+            except Exception:
+                pass
+        if isinstance(e, RecoveryError):
+            raise
+        raise RecoveryError(f"Batch database operation failed: {e}")
     finally:
         if conn:
             try:
@@ -11300,16 +11577,34 @@ def main() -> None:
         ):
             return
 
+        # Projects the user EXPLICITLY targeted (by name/number/project: spec) are
+        # expanded to their sessions above. Pass their ids so the batch can remove
+        # any that become empty, in the SAME transaction. Loose session specs do
+        # NOT carry a project id here, so a plain `session delete ID` that happens
+        # to empty a project will NOT auto-remove the project row (intent-gated).
+        remove_project_ids = [p["id"] for p in res.projects]
+
         try:
-            for s in res.sessions:
+            if len(res.sessions) == 1 and not remove_project_ids:
+                # Single loose session: keep the existing, characterized single-
+                # session report (one backup / VACUUM / rollback stanza already).
                 db_delete_session_recursive(
-                    session_id=s["id"],
+                    session_id=res.sessions[0]["id"],
                     dry_run=args.dry_run,
                     force=args.force,
                     verbosity=verbosity,
                     confirm=False
                 )
-                print(color_green(f"[+] Deleted session {s['id']}"))
+            else:
+                # Multi-session (and/or project-expansion): ONE consolidated
+                # backup / transaction / VACUUM / metrics write / report.
+                db_delete_sessions_batch(
+                    [s["id"] for s in res.sessions],
+                    dry_run=args.dry_run,
+                    force=args.force,
+                    verbosity=verbosity,
+                    remove_project_ids=remove_project_ids,
+                )
         except RecoveryError as e:
             die(str(e))
         return
