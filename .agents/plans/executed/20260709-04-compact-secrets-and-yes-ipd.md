@@ -1,6 +1,6 @@
 # Implementation Plan 04 - compact secret visibility/expunge & -y/--yes
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 IPD 04 in the execution order (independent of 01-03, though it shares the
 `-y/--yes` definition with 03). Adds, to `session compact` (and the shared

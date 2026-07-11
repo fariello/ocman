@@ -5478,6 +5478,8 @@ def _legacy_defaults(config: dict) -> dict:
         "use_model": None,
         "no_project_prompt": False,
         "allow_secrets": False,
+        "show_secrets": None,
+        "expunge_secrets": False,
         "specs": None,
         "yes": False,
         # browse / search
@@ -5733,6 +5735,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Do not copy the compacted file into the project's prompts.")
     sp.add_argument("--allow-secrets", action="store_true",
                     help="Bypass the pre-egress secret/PII scan.")
+    sp.add_argument("--show-secrets", nargs="?", const="masked", choices=["masked", "raw"],
+                    help="Display matched secrets (default: masked).")
+    sp.add_argument("--expunge-secrets", action="store_true",
+                    help="Redact secrets/PII from outbound LLM payload.")
     sp.add_argument("--force", action="store_true",
                     help="Override the input size cap.")
     sp.add_argument("-y", "--yes", action="store_true",
@@ -5871,6 +5877,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Output path.")
     sp.add_argument("--allow-secrets", action="store_true",
                     help="Bypass the pre-egress secret/PII scan.")
+    sp.add_argument("--show-secrets", nargs="?", const="masked", choices=["masked", "raw"],
+                    help="Display matched secrets (default: masked).")
+    sp.add_argument("--expunge-secrets", action="store_true",
+                    help="Redact secrets/PII from outbound LLM payload.")
     sp.add_argument("--force", action="store_true", help="Override the input size cap.")
 
     new_sub("models", help="List available LLM models (was --show-models).")
@@ -6071,6 +6081,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["all_sessions"] = bool(g("all_sessions", False))
             out["no_project_prompt"] = bool(g("no_project_prompt", False))
             out["allow_secrets"] = bool(g("allow_secrets", False))
+            out["show_secrets"] = g("show_secrets")
+            out["expunge_secrets"] = bool(g("expunge_secrets", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
             carry_recovery()
@@ -6200,6 +6212,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["compact"] = model if model else None
         out["output_compact"] = g("output_compact")
         out["allow_secrets"] = bool(g("allow_secrets", False))
+        out["show_secrets"] = g("show_secrets")
+        out["expunge_secrets"] = bool(g("expunge_secrets", False))
         out["force"] = bool(g("force", False))
 
     elif group == "models":
@@ -6386,7 +6400,9 @@ def run_compaction(
     verbosity: int,
     force: bool = False,
     allow_secrets: bool = False,
-) -> tuple[Path | None, dict[str, Any] | None]:
+    expunge_secrets: bool = False,
+    show_secrets: str | None = None,
+) -> tuple[Path | None, dict[str, Any] | None, bool]:
     """
     Run LLM-based compaction on the recovery transcript.
 
@@ -6399,13 +6415,17 @@ def run_compaction(
         raise RecoveryError(f"Could not read compact prompt: {compact_prompt_path}\n{error}") from error
 
     # Egress guards: size cap + secret/PII scan (shared with `filter`).
-    check_egress_guards(
+    original_prompt = prompt_content
+    prompt_content = check_egress_guards(
         prompt_content,
         source_desc="Compaction prompt",
         config=load_ocman_config(),
         force=force,
         allow_secrets=allow_secrets,
+        expunge_secrets=expunge_secrets,
+        show_secrets=show_secrets,
     )
+    did_expunge = (prompt_content != original_prompt)
 
     response_text, usage_info = call_compaction_api(
         model=model,
@@ -6437,7 +6457,7 @@ def run_compaction(
         for line in major_issue_lines:
             print(f"  {color_yellow(line)}")
 
-    return compacted_path, usage_info
+    return compacted_path, usage_info, did_expunge
 
 
 import dataclasses
@@ -6448,6 +6468,8 @@ class SecretHit:
     """A redacted secret/PII detection: the detector kind and the 1-based line number."""
     kind: str
     line: int
+    col_start: int | None = None
+    col_end: int | None = None
 
 
 # High-signal secret/PII patterns (conservative set). Each maps a detector name to a compiled
@@ -6487,11 +6509,128 @@ def scan_for_secrets(text: str, mode: str = "conservative") -> list[SecretHit]:
     patterns = list(_SECRET_PATTERNS)
     for lineno, line in enumerate(text.splitlines(), start=1):
         for kind, pat in patterns:
-            if pat.search(line):
-                hits.append(SecretHit(kind=kind, line=lineno))
-        if mode == "aggressive" and _SECRET_KEYWORDS_AGGRESSIVE.search(line):
-            hits.append(SecretHit(kind="keyword", line=lineno))
+            for match in pat.finditer(line):
+                hits.append(SecretHit(kind=kind, line=lineno, col_start=match.start(), col_end=match.end()))
+        if mode == "aggressive":
+            for match in _SECRET_KEYWORDS_AGGRESSIVE.finditer(line):
+                hits.append(SecretHit(kind="keyword", line=lineno, col_start=match.start(), col_end=match.end()))
     return hits
+
+
+def redact_secrets(text: str, hits: list[SecretHit]) -> str:
+    """Replace each detected secret span with a fixed placeholder, preserving line structure."""
+    if not hits:
+        return text
+
+    # Group hits by line
+    from collections import defaultdict
+    hits_by_line = defaultdict(list)
+    for h in hits:
+        if h.col_start is not None and h.col_end is not None:
+            hits_by_line[h.line].append(h)
+
+    lines = text.splitlines(keepends=True)
+    new_lines = []
+    for idx, line in enumerate(lines, start=1):
+        if idx not in hits_by_line:
+            new_lines.append(line)
+            continue
+
+        # Sort spans by col_start
+        line_hits = sorted(hits_by_line[idx], key=lambda h: h.col_start)
+        # Merge overlapping/adjacent spans
+        merged = []
+        for h in line_hits:
+            if not merged:
+                merged.append((h.col_start, h.col_end, h.kind))
+            else:
+                last_start, last_end, last_kind = merged[-1]
+                if h.col_start <= last_end:
+                    # Merge: choose the first kind
+                    merged[-1] = (last_start, max(last_end, h.col_end), last_kind)
+                else:
+                    merged.append((h.col_start, h.col_end, h.kind))
+
+        # Split ending newline to keep character indexes correct
+        ending = ""
+        line_content = line
+        if line.endswith("\r\n"):
+            ending = "\r\n"
+            line_content = line[:-2]
+        elif line.endswith("\n"):
+            ending = "\n"
+            line_content = line[:-1]
+
+        line_chars = list(line_content)
+        for col_start, col_end, kind in reversed(merged):
+            # Sanitize kind to prevent re-triggering scanner keywords
+            safe_kind = kind.replace("api", "a_p_i").replace("key", "k_e_y").replace("secret", "sec_ret").replace("private", "pri_vate").replace("token", "to_ken").replace("password", "pass_word")
+            placeholder = f"<REDACTED:{safe_kind}>"
+            line_chars[col_start:col_end] = list(placeholder)
+
+        new_lines.append("".join(line_chars) + ending)
+
+    return "".join(new_lines)
+
+
+def mask_line(line: str, hits: list[SecretHit]) -> str:
+    """Return the line with only the secret span(s) masked with asterisks."""
+    if not hits:
+        return line
+    spans = []
+    for h in sorted(hits, key=lambda x: x.col_start or 0):
+        if h.col_start is None or h.col_end is None:
+            continue
+        if not spans:
+            spans.append((h.col_start, h.col_end))
+        else:
+            last_start, last_end = spans[-1]
+            if h.col_start <= last_end:
+                spans[-1] = (last_start, max(last_end, h.col_end))
+            else:
+                spans.append((h.col_start, h.col_end))
+
+    line_chars = list(line)
+    for start, end in reversed(spans):
+        length = end - start
+        line_chars[start:end] = list("*" * length)
+    return "".join(line_chars)
+
+
+def _display_secrets_context(text: str, hits: list[SecretHit], mode: str, is_tty: bool) -> None:
+    """Print context of detected secrets, either masked or raw."""
+    if mode == "raw":
+        if not is_tty:
+            print(color_yellow("Warning: Raw reveal requested but stdout/stdin is not a TTY. Skipping raw display."))
+            return
+        print(color_red("WARNING: Raw secret values will be displayed in plain text in your terminal scrollback."))
+        try:
+            confirm = input("Type 'reveal' to confirm raw display: ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nReveal cancelled.")
+            return
+        if confirm != "reveal":
+            print("Reveal cancelled.")
+            return
+
+    from collections import defaultdict
+    hits_by_line = defaultdict(list)
+    for h in hits:
+        hits_by_line[h.line].append(h)
+
+    lines = text.splitlines()
+    print()
+    print("Detections context:")
+    for lineno in sorted(hits_by_line.keys()):
+        line_text = lines[lineno - 1]
+        line_hits = hits_by_line[lineno]
+        
+        if mode == "raw":
+            print(f"  Line {lineno:3}: {line_text}")
+        else:
+            masked = mask_line(line_text, line_hits)
+            print(f"  Line {lineno:3}: {masked}")
+    print()
 
 
 def check_egress_guards(
@@ -6501,14 +6640,14 @@ def check_egress_guards(
     config: dict,
     force: bool,
     allow_secrets: bool,
-) -> None:
-    """Guard an outbound LLM payload: size cap + secret/PII scan. Raises RecoveryError to stop.
+    expunge_secrets: bool = False,
+    show_secrets: str | None = None,
+    interactive: bool | None = None,
+) -> str:
+    """Guard an outbound LLM payload: size cap + secret/PII scan. Returns cleaned/original text or raises.
 
     - Size cap: refuse if ``len(text.encode())`` exceeds ``filter_max_bytes`` unless ``force``.
-    - Secret scan: refuse if :func:`scan_for_secrets` finds anything unless ``allow_secrets``;
-      the error lists detector types + line numbers, never the secret values.
-
-    Applies identically to ``filter`` and ``--compact`` so both egress paths share one posture.
+    - Secret scan: refuse or redact if :func:`scan_for_secrets` finds anything.
     """
     max_bytes = int(config.get("filter_max_bytes", 5 * 1024 * 1024))
     size = len(text.encode("utf-8", errors="ignore"))
@@ -6517,16 +6656,87 @@ def check_egress_guards(
             f"{source_desc} is {size:,} bytes, over the filter_max_bytes cap ({max_bytes:,}). "
             f"Pass --force to send it anyway, or raise filter_max_bytes in ocman.toml."
         )
+
     mode = str(config.get("filter_secret_scan", "conservative")).lower()
     hits = scan_for_secrets(text, mode=mode)
-    if hits and not allow_secrets:
-        # Redacted summary: type + line only, deduped and sorted.
+    if not hits:
+        return text
+
+    if allow_secrets:
+        return text
+
+    if expunge_secrets:
+        # Redact secrets
+        cleaned = redact_secrets(text, hits)
+        # Summarize redaction
+        from collections import Counter
+        counts = Counter(h.kind for h in hits)
+        print(f"Redacted possible secrets from {source_desc}:")
+        for kind, count in sorted(counts.items()):
+            print(f"  - {kind}: {count} instance(s)")
+        # Re-scan to be 100% sure
+        re_hits = scan_for_secrets(cleaned, mode=mode)
+        if re_hits:
+            summary = ", ".join(sorted({f"{h.kind}@L{h.line}" for h in re_hits}))
+            raise RecoveryError(f"Critical: Egress guard re-scan failed after redaction: {summary}")
+        return cleaned
+
+    # We have hits, and allow_secrets and expunge_secrets are False.
+    # Check if we should prompt or print.
+    is_tty = sys.stdout.isatty() and sys.stdin.isatty()
+    if interactive is False:
+        is_tty = False
+
+    # If --show-secrets was passed initially, display it!
+    if show_secrets:
+        _display_secrets_context(text, hits, show_secrets, is_tty)
+
+    if not is_tty:
+        # Non-interactive: raise directly
         summary = ", ".join(sorted({f"{h.kind}@L{h.line}" for h in hits}))
         raise RecoveryError(
-            "Refusing to send: possible secret/PII detected in the content that would be "
-            f"transmitted to the API endpoint.\n  Detections (redacted): {summary}\n"
-            "  Review the content; pass --allow-secrets to send anyway."
+            f"Refusing to send: possible secret/PII detected in {source_desc}.\n"
+            f"  Detections (redacted): {summary}\n"
+            "  Review the content; pass --allow-secrets or --expunge-secrets to proceed."
         )
+
+    # Interactive TTY loop
+    while True:
+        print()
+        print(color_yellow(f"Possible secret/PII detected in {source_desc}."))
+        print(color_yellow("What would you like to do?"))
+        print("  [s] show masked context")
+        print("  [r] reveal raw values (warning: displays secrets in scrollback)")
+        print("  [e] expunge (redact outbound content and proceed)")
+        print("  [a] abort")
+        try:
+            choice = input("Choice [s/r/e/a]: ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            print("\nOperation aborted.")
+            raise SystemExit(1)
+
+        if choice in ("s", "show"):
+            _display_secrets_context(text, hits, "masked", is_tty)
+        elif choice in ("r", "reveal"):
+            _display_secrets_context(text, hits, "raw", is_tty)
+        elif choice in ("e", "expunge"):
+            # Clean and return
+            cleaned = redact_secrets(text, hits)
+            from collections import Counter
+            counts = Counter(h.kind for h in hits)
+            print(f"\nRedacted possible secrets from {source_desc}:")
+            for kind, count in sorted(counts.items()):
+                print(f"  - {kind}: {count} instance(s)")
+            re_hits = scan_for_secrets(cleaned, mode=mode)
+            if re_hits:
+                summary = ", ".join(sorted({f"{h.kind}@L{h.line}" for h in re_hits}))
+                raise RecoveryError(f"Critical: Egress guard re-scan failed after redaction: {summary}")
+            return cleaned
+        elif choice in ("a", "abort"):
+            print("Operation aborted.")
+            raise SystemExit(1)
+        else:
+            print("Invalid choice.")
 
 
 def resolve_recovery_collision(
@@ -6597,6 +6807,8 @@ def cli_filter(
     verbosity: int,
     force: bool = False,
     allow_secrets: bool = False,
+    expunge_secrets: bool = False,
+    show_secrets: str | None = None,
 ) -> Path | None:
     """Re-scope an existing recovery/text document to a single project/scope via the LLM.
 
@@ -6663,12 +6875,14 @@ def cli_filter(
     user_prompt = FILTER_USER_PROMPT_TEMPLATE.format(scope=scope_text, content=source_text)
 
     # Egress guards: size cap + secret/PII scan (shared with --compact).
-    check_egress_guards(
+    user_prompt = check_egress_guards(
         user_prompt,
         source_desc=f"Input {input_path.name}",
         config=ocman_config,
         force=force,
         allow_secrets=allow_secrets,
+        expunge_secrets=expunge_secrets,
+        show_secrets=show_secrets,
     )
 
     input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(user_prompt)
@@ -10363,6 +10577,8 @@ def main() -> None:
     if getattr(args, "command", None) == "filter":
         if not args.command_arg:
             die("Error: 'filter' requires an input file: ocman filter <input.md> [--project X | --scope \"...\"]")
+        if getattr(args, "allow_secrets", False) and getattr(args, "expunge_secrets", False):
+            die("Error: --allow-secrets and --expunge-secrets are mutually exclusive.")
         try:
             cli_filter(
                 input_path=Path(args.command_arg),
@@ -10373,6 +10589,8 @@ def main() -> None:
                 verbosity=verbosity,
                 force=getattr(args, "force", False),
                 allow_secrets=getattr(args, "allow_secrets", False),
+                expunge_secrets=getattr(args, "expunge_secrets", False),
+                show_secrets=getattr(args, "show_secrets", None),
             )
         except Exception as e:
             die(str(e))
@@ -11481,6 +11699,8 @@ def main() -> None:
                 return
 
         # Load config and resolve model
+        if getattr(args, "allow_secrets", False) and getattr(args, "expunge_secrets", False):
+            die("Error: --allow-secrets and --expunge-secrets are mutually exclusive.")
         config = load_opencode_config(verbosity=verbosity)
         models = extract_models_from_config(config)
         model = resolve_model(models, model_spec)
@@ -11537,13 +11757,17 @@ def main() -> None:
 
                 prompt_content = compact_prompt_file.read_text(encoding="utf-8")
 
-                check_egress_guards(
+                prompt_content = check_egress_guards(
                     prompt_content,
                     source_desc=f"Compaction prompt for session {session.session_id}",
                     config=load_ocman_config(),
                     force=args.force,
                     allow_secrets=args.allow_secrets,
+                    expunge_secrets=args.expunge_secrets,
+                    show_secrets=args.show_secrets,
+                    interactive=None if not args.yes else False,
                 )
+                compact_prompt_file.write_text(prompt_content, encoding="utf-8")
 
                 input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
                 output_tokens_est = max(500, input_tokens // 5)
@@ -11644,7 +11868,7 @@ def main() -> None:
 
                         compact_prompt_file_dest = output_dir / est["compact_prompt_file"].name
 
-                        compacted_path, usage_info = run_compaction(
+                        compacted_path, usage_info, did_expunge = run_compaction(
                             compact_prompt_path=compact_prompt_file_dest,
                             output_dir=output_dir,
                             session=session,
@@ -11652,6 +11876,8 @@ def main() -> None:
                             verbosity=verbosity,
                             force=args.force,
                             allow_secrets=args.allow_secrets,
+                            expunge_secrets=args.expunge_secrets,
+                            show_secrets=args.show_secrets,
                         )
 
                         if compacted_path:
@@ -11663,6 +11889,30 @@ def main() -> None:
                             )
                             if project_copy is not None:
                                 moved_paths.append(project_copy)
+
+                            if did_expunge:
+                                rewrite = True
+                                if not args.yes:
+                                    if hasattr(sys.stdin, "isatty") and sys.stdin.isatty():
+                                        try:
+                                            ans = input("Rewrite saved recovery/restart files on disk to redact secrets too? [Y/n]: ").strip().lower()
+                                            if ans in ("n", "no"):
+                                                rewrite = False
+                                        except (KeyboardInterrupt, EOFError):
+                                            rewrite = False
+                                if rewrite:
+                                    mode = str(load_ocman_config().get("filter_secret_scan", "conservative")).lower()
+                                    for p in moved_paths:
+                                        if p.is_file():
+                                            try:
+                                                content = p.read_text(encoding="utf-8")
+                                                file_hits = scan_for_secrets(content, mode=mode)
+                                                if file_hits:
+                                                    cleaned = redact_secrets(content, file_hits)
+                                                    p.write_text(cleaned, encoding="utf-8")
+                                                    print(f"  Scrubbed secrets from saved file: {p.name}")
+                                            except Exception as fe:
+                                                print(color_yellow(f"Warning: Could not scrub secrets from {p.name}: {fe}"))
 
                             if usage_info:
                                 actual_input_tokens += usage_info["prompt_tokens"]

@@ -94,6 +94,7 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   restore validates ZIP member paths before extraction (Zip-Slip protection). SQL uses
   parameterized values with hardcoded/allowlisted identifiers.
 - **Connections are closed deterministically** via `try/finally` around each DB operation.
+- **Egress guards and safe secret redaction.** Outbound LLM payloads are scanned for secrets/PII. Users can view detections (`--show-secrets` context masked, or `--show-secrets=raw` requiring TTY confirmation). Detections can be redacted outbound via `--expunge-secrets` and optionally scrubbed from on-disk recovery outputs. Redaction runs on copies only; original transcripts, logs, and database records are never modified, and secret values are never logged.
 - **Destructive-confirmation seam.** Destructive commands present their outcome and confirm
   through one shared seam in `ocman.py`: a `DestructivePreview`/`PreviewItem` data model, a
   pure `render_destructive_preview()` (a color-independent table with headers, a right-aligned

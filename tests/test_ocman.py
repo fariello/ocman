@@ -2175,3 +2175,55 @@ def test_backup_create_scoped(temp_db, tmp_path, capsys):
         
     assert (out_dir / "sess1.ocbox").exists()
 
+
+def test_scan_and_redact_secrets():
+    from ocman import scan_for_secrets, redact_secrets
+    
+    text = "Here is my aws token AKIA1234567890123456 on this line.\nAnd a github token ghp_12345678901234567890\n"
+    hits = scan_for_secrets(text)
+    assert len(hits) == 2
+    
+    redacted = redact_secrets(text, hits)
+    assert "AKIA1234567890123456" not in redacted
+    assert "ghp_12345678901234567890" not in redacted
+    assert "<REDACTED:aws-access-k_e_y-id>" in redacted
+    assert "<REDACTED:github-to_ken>" in redacted
+    
+    # Re-scan yields no hits
+    assert len(scan_for_secrets(redacted)) == 0
+
+
+def test_redact_overlapping_secrets():
+    from ocman import scan_for_secrets, redact_secrets
+    text = "password=mysecretpasswordtoken\n"
+    hits = scan_for_secrets(text, mode="aggressive")
+    
+    redacted = redact_secrets(text, hits)
+    assert redacted.count("<REDACTED") == 1
+    assert len(scan_for_secrets(redacted, mode="aggressive")) == 0
+
+
+def test_mask_line():
+    from ocman import scan_for_secrets, mask_line
+    line = "my aws key is AKIA1234567890123456 and token is ghp_12345678901234567890"
+    hits = scan_for_secrets(line)
+    masked = mask_line(line, hits)
+    assert "AKIA1234567890123456" not in masked
+    assert "ghp_12345678901234567890" not in masked
+    assert "********************" in masked
+
+
+def test_allow_and_expunge_mutually_exclusive(temp_db):
+    import sys
+    import pytest
+    import ocman
+    
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact", "sess1", "--allow-secrets", "--expunge-secrets"]
+    try:
+        with pytest.raises(SystemExit) as exc:
+            ocman.main()
+        assert exc.value.code != 0
+    finally:
+        sys.argv = orig
+

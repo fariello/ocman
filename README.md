@@ -294,6 +294,9 @@ Global options work on any subcommand and may appear before or after it.
 | `-k` | `--keep-temp` | Keep the raw exported JSON file for debugging |
 | `-cp` | `--clean-previous` | Remove prior recovery outputs generated for this session |
 | `-ct` | `--clean-tmp` | Prune old exported JSON temporary files from `/tmp` |
+| | `--show-secrets[=masked|raw]` | Display matched secrets context (default: masked) |
+| | `--expunge-secrets` | Redact secrets from the transmitted payload and rewrite saved files |
+| `-y` | `--yes` | Skip confirmation prompt and batch cost confirm |
 
 ### `project` (work with projects)
 
@@ -348,7 +351,7 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman compaction-prompt` | Print the compaction prompt template, then exit. |
 | `ocman ui` / `ocman gui` | Launch the interactive terminal dashboard. |
 | `ocman help [TOPIC]` | Show help. `TOPIC` is one of `browse`, `recover`, `maintain`, `backup`, `move`, `config`, `all`. |
-| `ocman filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM. Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. `--allow-secrets` bypasses the pre-egress secret/PII scan; `--force` overrides the input size cap. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
+| `ocman filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM. Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. Supports `--allow-secrets`, `--show-secrets[=masked\|raw]`, `--expunge-secrets`, and `--force`. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
 
 ---
 
