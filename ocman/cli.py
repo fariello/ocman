@@ -11,72 +11,61 @@ This utility helps recover from broken opencode sessions by:
 6. Optionally compacting the transcript via an LLM API call.
 7. Cleaning up temporary files, including after CTRL-C or failure.
 
-Basic usage:
+ocman uses a noun-based, git/kubectl-style subcommand grammar
+(`ocman <group> <action> [options]`). Run `ocman help` for the full command
+overview and `ocman <command> -h` for one command's options.
+
+Basic usage (from a project directory):
     ocman
 
-Recover a session from a different project directory:
-    ocman --session-dir /path/to/project
+List projects and sessions:
+    ocman list projects
+    ocman list sessions [NAME]
 
-Non-interactive with a known session ID:
-    ocman --session SESSION_ID
+Recover a session to restart-ready Markdown:
+    ocman session recover <session>
+    ocman session recover <session> --max-interactions 50
+    ocman session recover <session> --max-lines 2000 -o ./out
 
-Truncate to the most recent 50 interactions:
-    ocman --session SESSION_ID --max-interactions 50
+Show session details or a transcript preview:
+    ocman session show <session> [-H N] [-T N]
 
-Truncate to fit within 2000 output lines:
-    ocman --session SESSION_ID --max-lines 2000
-
-Show available models for LLM compaction:
-    ocman --show-models
-
-Compact a recovery via a cheap model:
-    ocman --session SESSION_ID --use-model uri/its_direct/pt1-qwen3-32b-us
+Compact one or more sessions via an LLM (one model applies to all):
+    ocman session compact <session> [<session> ...] <model_id>
+    ocman list models                 # see available models
 
 Chain recoveries (include prior compacted context):
-    ocman --session SESSION_ID \
+    ocman session recover <session> \
         --input-compact ./opencode-recovery/previous-session.compacted.md
 
-Write output to explicit paths:
-    ocman --session SESSION_ID \
-        --output-transcript ./out/transcript.md \
-        --output-restart ./out/restart.md \
-        --output-compact ./out/compact-prompt.md
-
-Clean up only (no export or recovery):
-    ocman -s SESSION_ID -c --clean-previous
-
-Clean up before generating new output:
-    ocman -s SESSION_ID -c --clean-previous -mi 50
+Search, maintain, back up, and transfer:
+    ocman search "text" [in [project|session] NAME]
+    ocman db clean [NAME] [AGE]        # e.g. "30 days" or 6mo
+    ocman db clean-orphans
+    ocman backup create [DEST] / ocman backup restore FILE...
+    ocman session export <session> to FILE / ocman session import FILE
+    ocman move <project|session> to DST
 
 Show the compaction prompt template:
-    ocman --show-compaction-prompt
-
-Short forms:
-    -s  --session             -d  --session-dir        -o  --out
-    -k  --keep-temp           -c  --clean              -t  --include-tools
-    -ml --max-lines           -mi --max-interactions   -m  --use-model
-    -ic --input-compact       -ir --input-restart      -it --input-transcript
-    -oc --output-compact      -or --output-restart     -ot --output-transcript
-    -v  --verbose
+    ocman compaction-prompt
 
 Notes:
     Requires the `opencode` CLI to be installed and available on PATH.
 
-    Uses only Python standard library (no third-party packages).
+    Uses only Python standard library for the CLI path (no third-party packages;
+    the TUI adds textual/rich).
 
-    When --use-model is specified, the session transcript is sent to an
-    external LLM API endpoint (configured in ~/.config/opencode/opencode.json).
-    The script shows estimated and actual token counts and costs.
-
-    When only --clean and/or --clean-previous are specified (without --use-model,
-    --input-*, or --keep-temp), the script cleans and exits without exporting.
+    During `session compact`, the session transcript is sent to an external LLM
+    API endpoint (configured in ~/.config/opencode/opencode.json). ocman shows
+    estimated and actual token counts and costs, and scans for secrets/PII before
+    sending (see --show-secrets / --expunge-secrets / --allow-secrets).
 
     Output files (canonical name: YYYYMMDD-HHMM-<session_id>.<kind>.md, local time;
     all artifacts of one session share the YYYYMMDD-HHMM-<session_id> stem):
       *.transcript.md    - Raw consolidated transcript (user/assistant turns)
       *.restart.md       - Transcript wrapped with instructions for a fresh agent
       *.prompt.md        - Full prompt for LLM compaction (includes instructions)
-      *.compacted.md     - LLM-generated compact restart document (if --compact)
+      *.compacted.md     - LLM-generated compact restart document (from `compact`)
 
     The 'filter' command re-scopes an existing document to a single project/scope via the LLM,
     writing YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md next to the source.
@@ -97,6 +86,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
+import vistab
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -706,7 +696,7 @@ def display_models(models: list[ModelInfo]) -> None:
         )
 
     print()
-    print("Select by number or use --compact <model_id> directly.")
+    print("Use a model with: ocman session compact <session> <model_id>")
     print()
 
 
@@ -3645,6 +3635,7 @@ def recover_from_export(
     output_restart: Path | None = None,
     output_compact: Path | None = None,
     quiet: bool = False,
+    preview: bool | None = None,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -3693,6 +3684,12 @@ def recover_from_export(
         RecoveryError:
             If no useful turns are found or output cannot be written.
     """
+
+    # `preview` controls the transcript tail preview independently of `quiet`
+    # (which suppresses verbose logging). Default: show iff not quiet (prior
+    # behavior). A quiet caller that still wants the user-facing conversation
+    # preview (e.g. the multi-session compact estimate pass) passes preview=True.
+    show_preview = (not quiet) if preview is None else preview
 
     log("Reading exported session JSON...", verbosity)
     data = load_export_file(export_path, verbosity=verbosity)
@@ -3743,7 +3740,7 @@ def recover_from_export(
             max_interactions=max_interactions,
             verbosity=verbosity,
         )
-        if len(selected_turns) < total_turns_before_truncation:
+        if show_preview and len(selected_turns) < total_turns_before_truncation:
             skipped = total_turns_before_truncation - len(selected_turns)
             print(color_yellow(
                 f"Truncated: keeping {len(selected_turns)} most recent turns "
@@ -3791,7 +3788,7 @@ def recover_from_export(
         ),
     )
 
-    if not quiet:
+    if show_preview:
         print(f"\nExtracted turns: {color_bold(str(len(selected_turns)))} Session tail preview:")
         display_turn_preview(selected_turns)
 
@@ -4446,22 +4443,21 @@ def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
     if projects:
         print_projects(projects, title=f"Known projects ({len(projects)}):", blank_after_title=False)
         print("Next steps:")
-        print(f"{command} --project 1 --list-sessions # List sessions for the first project")
-        print(f"{command} --project 1 # Recover from the first project")
-        print(f"{command} --list-sessions # List all sessions for all projects")
-        print(f"{command} --session-dir /path/to/project # Select a project by directory")
+        print(f"{command} list sessions in PROJECT   # List sessions for a project")
+        print(f"{command} session recover ID          # Recover a specific session")
+        print(f"{command} list sessions               # List sessions across all projects")
         print()
-        print(f"I ran `{command} --list-projects` for you because no opencode project context was found for:")
-        print(f"  {cwd}")
+        print(
+            f"I ran {color_bold(color_yellow(f'{command} list projects'))} for you because "
+            f"{cwd} is not a project directory."
+        )
     else:
         print("No known opencode projects found.")
         print()
         print("Next steps:")
-        print("Run from an opencode project directory")
-        print(f"{command} --session-dir /path/to/project # Select a project by directory")
+        print("Run ocman from an opencode project directory.")
         print()
-        print("No opencode project context was found for:")
-        print(f"  {cwd}")
+        print(f"{cwd} is not a project directory (and no opencode projects exist yet).")
 
 
 # Duration units accepted by --older-than and positional durations, expressed
@@ -10665,7 +10661,7 @@ def main() -> None:
 
     if getattr(args, "export_session", None) is not None:
         if not args.to:
-            die("Error: --export-session requires a destination file path specified by --to <file_path.ocbox>.")
+            die("Error: 'ocman export' requires a destination, e.g. 'ocman export <session> to <file.ocbox>'.")
         try:
             res = resolve_and_expand_targets(
                 [args.export_session],
@@ -10743,7 +10739,7 @@ def main() -> None:
 
     if args.move_project is not None:
         if not args.to:
-            die("Error: --move-project requires a destination path via --to <new_path>.")
+            die("Error: 'ocman move' requires a destination, e.g. 'ocman move <project> to <new_path>'.")
         # Find project
         proj = db_find_project(args.move_project)
         if not proj:
@@ -10826,7 +10822,7 @@ def main() -> None:
 
     if args.move_session is not None:
         if not args.to:
-            die("Error: --move-session requires a destination path via --to <new_path>.")
+            die("Error: 'ocman move' requires a destination, e.g. 'ocman move <session> to <new_path>'.")
         # Find session
         sess = db_find_session(args.move_session)
         if not sess:
@@ -10984,7 +10980,7 @@ def main() -> None:
             die("No projects found. Is opencode installed and has it been used?")
         print_projects(projects)
         print()
-        print("Use --project <number_or_directory> with --list-sessions to see sessions.")
+        print("Use 'ocman list sessions in PROJECT' to see a project's sessions.")
         return
 
     # ── Resolve project context ──
@@ -11087,6 +11083,10 @@ def main() -> None:
         top_count = sum(1 for s in all_sessions if not s["parent_id"])
         child_count = sum(1 for s in all_sessions if s["parent_id"])
 
+        # When neither a project nor a directory scope matched the CWD, we are
+        # listing EVERY project's sessions. Track that so we can scream about it
+        # again at the bottom (a header scrolls off the top of a long list).
+        _no_project_match = False
         if _dir_scope:
             print(color_bold(f"Sessions in {_dir_scope} ({top_count} sessions, {child_count} subagent):"))
             if any(s["project_dir"] in ("/", "", None) for s in all_sessions):
@@ -11094,8 +11094,8 @@ def main() -> None:
         elif _project_dir:
             print(color_bold(f"Sessions for {_project_dir} ({top_count} sessions, {child_count} subagent):"))
         else:
+            _no_project_match = True
             print(color_bold(f"All sessions ({top_count} sessions, {child_count} subagent):"))
-            print("  (No project context. Use --project to filter, or run from a project directory.)")
         if not show_all and child_count:
             print(f"  ({child_count} subagent sessions hidden. Use --all-sessions to show them.)")
         print(color_dim("  (Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts.)"))
@@ -11122,7 +11122,15 @@ def main() -> None:
                 stats_str = f"~msgs: {msgs}  ~parts: {parts}"
             print(f"       ID: {sid}  Updated: {updated}  {color_dim(stats_str)}")
         print()
-        print("Use --session <number_or_id_or_title> with --details, --head, or --tail.")
+        if _no_project_match:
+            # Loud footer (the header scrolls off the top of a long list) placed
+            # just above the usage hint, so it stays near the bottom of the view.
+            print(
+                f"{color_bold(color_yellow('SHOWING'))} {color_bold(color_red('ALL'))} "
+                f"{color_bold(color_yellow('PROJECTS.'))} "
+                f"{Path.cwd()} did not match any existing projects."
+            )
+        print("Use 'ocman session show <number|id|title>' (add -H/-T for a transcript preview).")
         return
 
     # Handle --search early.
@@ -11231,8 +11239,8 @@ def main() -> None:
     # Handle --delete-project (requires --project).
     if getattr(args, "delete_project", False):
         if not _project_id:
-            die("Error: --delete-project requires --project to identify the project.\n"
-                "Use --list-projects to see available projects.")
+            die("Error: 'ocman project delete' needs a project to identify.\n"
+                "Run 'ocman list projects' to see available projects.")
 
         try:
             db_delete_project_recursive(
@@ -11249,11 +11257,11 @@ def main() -> None:
     if args.delete:
         delete_specs = args.specs or ([args.session] if args.session else [])
         if not delete_specs:
-            die("--delete requires a session ID/number/title or project specifier.")
+            die("'ocman session delete' needs a session ID/number/title or project specifier.")
 
         all_sessions = db_list_sessions(_project_id)
         if not all_sessions:
-            die("No sessions found. Try --list-projects first.")
+            die("No sessions found. Run 'ocman list sessions' first.")
 
         res = resolve_and_expand_targets(
             delete_specs,
@@ -11740,8 +11748,6 @@ def main() -> None:
         print(f"  Model:    {color_cyan(f'{model.provider_id}/{model.model_id}')} ({model.name})")
         print(f"  Endpoint: {model.base_url}")
         print()
-        print(f"  {'Session ID':<30} | {'Est Input':<10} | {'Est Output':<10} | {'Est Cost':<10}")
-        print("-" * 75)
 
         total_input_tokens = 0
         total_output_tokens = 0
@@ -11756,6 +11762,13 @@ def main() -> None:
                 td = tempfile.mkdtemp(prefix="opencode-recovery-")
                 temp_dirs_to_clean.append(td)
                 temp_dir = Path(td)
+
+                # Per-session header so the tail preview below is clearly
+                # attributed. Users usually pick sessions by DATE + content
+                # (not id/name), so show title + updated date, then the preview.
+                print()
+                print(color_bold(f"{session.title or '(untitled)'}"))
+                print(color_dim(f"  {session.session_id}  updated {format_timestamp(session.updated)}"))
 
                 export_path = write_export_to_temp(
                     session_id=session.session_id,
@@ -11778,6 +11791,7 @@ def main() -> None:
                     output_restart=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "restart"),
                     output_compact=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "prompt"),
                     quiet=True,
+                    preview=True,
                 )
 
                 compact_prompt_file = next(
@@ -11822,17 +11836,31 @@ def main() -> None:
                 else:
                     has_unknown_cost = True
 
-            # Print table rows
-            for est in estimates:
-                cost_str = f"${est['cost']:.4f}" if est['cost'] is not None else "unknown"
-                print(f"  {est['session'].session_id:<30} | {est['input_tokens']:>10,} | {est['output_tokens_est']:>10,} | {cost_str:>10}")
-            print("-" * 75)
-
+            # Render the whole table in one shot with vistab AFTER all data is
+            # collected, so nothing printed during the build phase can split it.
             avg_cost_str = f"${(total_est_cost / len(estimates)):.4f}" if not has_unknown_cost and estimates else "unknown"
             total_cost_str = f"${total_est_cost:.4f}" if not has_unknown_cost else "unknown"
 
-            print(f"  {'GRAND TOTAL':<30} | {total_input_tokens:>10,} | {total_output_tokens:>10,} | {total_cost_str:>10}")
-            print(f"  {'AVERAGE':<30} | {int(total_input_tokens / len(estimates)):>10,} | {int(total_output_tokens / len(estimates)):>10,} | {avg_cost_str:>10}")
+            table = vistab.Vistab(header=["Session ID", "Est Input", "Est Output", "Est Cost"])
+            for est in estimates:
+                cost_str = f"${est['cost']:.4f}" if est['cost'] is not None else "unknown"
+                table.add_row([
+                    est['session'].session_id,
+                    f"{est['input_tokens']:,}",
+                    f"{est['output_tokens_est']:,}",
+                    cost_str,
+                ])
+            table.add_row([
+                "GRAND TOTAL", f"{total_input_tokens:,}", f"{total_output_tokens:,}", total_cost_str,
+            ])
+            table.add_row([
+                "AVERAGE",
+                f"{int(total_input_tokens / len(estimates)):,}",
+                f"{int(total_output_tokens / len(estimates)):,}",
+                avg_cost_str,
+            ])
+            table.set_cols_align(["l", "r", "r", "r"])
+            print(table.draw())
             print()
             print("  Note: The session transcripts will be sent to the API endpoint above.")
             print("  Note: These values are pre-run estimates and may differ from actual usage.")

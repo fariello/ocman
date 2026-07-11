@@ -18,6 +18,12 @@ from ocman import (
 
 @pytest.fixture
 def temp_env(tmp_path, monkeypatch):
+    # Run inside tmp_path so that ocman's relative OPENCODE_CONFIG_PATHS entries
+    # (Path("opencode.json") / Path("opencode.jsonc"), resolved against the CWD)
+    # are read/written under tmp during backup/restore, instead of leaking those
+    # files into the repo working tree.
+    monkeypatch.chdir(tmp_path)
+
     # Mock config path
     cfg_path = tmp_path / "ocman_test.toml"
     monkeypatch.setattr(ocman, "OCMAN_CONFIG_PATH", cfg_path)

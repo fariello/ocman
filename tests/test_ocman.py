@@ -2302,12 +2302,16 @@ default_backup_dir = {backup_dir}
         ocman.OCMAN_CONFIG_PATH = orig_config_path
 
 
-def test_restore_multiple_files_rollback(tmp_path, temp_db):
+def test_restore_multiple_files_rollback(tmp_path, temp_db, monkeypatch):
     import ocman
     import sqlite3
     from pathlib import Path
     import pytest
-    
+
+    # Run in tmp so restore's relative opencode.json/.jsonc writes (from the
+    # rollback path) do not leak into the repo working tree.
+    monkeypatch.chdir(tmp_path)
+
     config_file = tmp_path / "ocman_temp.toml"
     orig_config_path = ocman.OCMAN_CONFIG_PATH
     ocman.OCMAN_CONFIG_PATH = config_file
@@ -2546,7 +2550,7 @@ def test_session_delete_single_confirm(temp_db, monkeypatch):
     conn.close()
 
 
-def test_compact_batch_mid_failure_and_estimates(temp_db, monkeypatch, capsys):
+def test_compact_batch_mid_failure_and_estimates(temp_db, tmp_path, monkeypatch, capsys):
     import sqlite3
     import ocman
     import sys
@@ -2604,7 +2608,13 @@ def test_compact_batch_mid_failure_and_estimates(temp_db, monkeypatch, capsys):
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
 
     orig = sys.argv
-    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact", "sess1", "sess2", "model:gpt-4", "--yes"]
+    # Isolate all output to tmp: -o keeps recovery files out of the repo's
+    # opencode-recovery/, and --no-project-prompt stops the compacted copy from
+    # being written into the repo's real .agents/prompts/pending/.
+    out_dir = tmp_path / "recovery-out"
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact",
+                "sess1", "sess2", "model:gpt-4", "--yes",
+                "-o", str(out_dir), "--no-project-prompt"]
     try:
         ocman.main()
     finally:
@@ -2619,8 +2629,18 @@ def test_compact_batch_mid_failure_and_estimates(temp_db, monkeypatch, capsys):
     assert "Success: 1  Failed: 1" in captured
     assert "Actual tokens (successes): input 100, output 50" in captured
     assert "Actual cost (successes):   $0.0003" in captured
-    assert "Session tail preview" not in captured
-    assert "Extracted turns" not in captured
+    # The per-session conversation preview is shown during the estimate pass so
+    # users can identify sessions by content (not just id/name); it must appear,
+    # and must NOT split the summary table (table renders once, after the loop).
+    assert "Session tail preview" in captured
+    assert "Extracted turns" in captured
+    # The vistab summary table must be contiguous: no preview text may appear
+    # between its top and bottom box-drawing borders.
+    top = captured.index("\u250c")          # top-left corner of the table
+    bottom = captured.index("\u2514")       # bottom-left corner
+    table_block = captured[top:bottom]
+    assert "Session tail preview" not in table_block
+    assert "Extracted turns" not in table_block
 
 
 def test_check_egress_guards_interactive_and_yes(monkeypatch, capsys):
