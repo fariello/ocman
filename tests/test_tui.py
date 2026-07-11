@@ -29,6 +29,13 @@ def tui_db(tmp_path, monkeypatch):
     
     ocman.OPENCODE_DB_PATH = db_path
     ocman.OPENCODE_HISTORY_PATH = tmp_path / "test_ocman_history.json"
+
+    # Isolate the rollback-backup family: destructive ops compute their backup dir
+    # inline as Path.home()/.local/share/opencode/backups/..., so redirect Path.home()
+    # to tmp_path to avoid writing real backup directories into the developer's HOME.
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: fake_home))
     
     # Wrap deletion functions to print exceptions to stderr
     orig_del_session = ocman.db_delete_session_recursive

@@ -14,7 +14,7 @@ from ocman import (
 )
 
 @pytest.fixture
-def temp_db(tmp_path):
+def temp_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_opencode.db"
     
     # Save original DB path and history path
@@ -23,6 +23,16 @@ def temp_db(tmp_path):
     
     ocman.OPENCODE_DB_PATH = db_path
     ocman.OPENCODE_HISTORY_PATH = tmp_path / "test_ocman_history.json"
+
+    # Isolate the rollback-backup family. Destructive ops (delete/cleanup) compute
+    # their backup dir inline as ``Path.home()/.local/share/opencode/backups/...``,
+    # so without this a test that actually deletes writes real backup directories
+    # into the developer's HOME. Redirect Path.home() to tmp_path for the fixture's
+    # lifetime (monkeypatch auto-reverts). Config-path tests use their own fixtures
+    # and OCMAN_CONFIG_PATH, so they are unaffected.
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: fake_home))
     
     # Initialize SQLite database with opencode schema
     conn = sqlite3.connect(str(db_path))
