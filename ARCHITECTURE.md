@@ -89,10 +89,14 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 
 - **Rollback-safety first.** Every destructive operation (delete, move, restore) takes a
   backup of the affected state *before* acting and restores it if any step fails. Deletes
-  run inside a SQLite transaction and print copy-paste rollback instructions.
+  run inside a SQLite transaction and print copy-paste rollback instructions. For multi-file
+  restores, a single pre-batch safety backup is taken, and if any restore fails, the entire
+  batch is rolled back to that original state.
 - **Untrusted input is validated at the boundary.** Import validates IDs/table/column names;
   restore validates ZIP member paths before extraction (Zip-Slip protection). SQL uses
-  parameterized values with hardcoded/allowlisted identifiers.
+  parameterized values with hardcoded/allowlisted identifiers. During single-session import,
+  generating a new session ID routes through the existing structural ID-remap logic to consistently
+  translate references across tables and sidecar JSON files.
 - **Connections are closed deterministically** via `try/finally` around each DB operation.
 - **Egress guards and safe secret redaction.** Outbound LLM payloads are scanned for secrets/PII. Users can view detections (`--show-secrets` context masked, or `--show-secrets=raw` requiring TTY confirmation). Detections can be redacted outbound via `--expunge-secrets` and optionally scrubbed from on-disk recovery outputs. Redaction runs on copies only; original transcripts, logs, and database records are never modified, and secret values are never logged.
 - **Destructive-confirmation seam.** Destructive commands present their outcome and confirm

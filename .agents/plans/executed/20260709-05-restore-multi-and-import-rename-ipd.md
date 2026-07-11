@@ -1,6 +1,6 @@
 # Implementation Plan 05 - restore multiple files & import session-id rename
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 IPD 05 in the execution order (independent of 01-04). Two small changes:
 `backup restore` accepts multiple input files, and `session import` can

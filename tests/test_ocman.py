@@ -2227,3 +2227,219 @@ def test_allow_and_expunge_mutually_exclusive(temp_db):
     finally:
         sys.argv = orig
 
+
+def test_parse_backup_restore_multiple(monkeypatch):
+    a = _parse(monkeypatch, ["backup", "restore", "file1.zip", "file2.zip"])
+    assert a.restore == ["file1.zip", "file2.zip"]
+
+
+def test_parse_session_import_new_id(monkeypatch):
+    a = _parse(monkeypatch, ["session", "import", "/tmp/x.ocbox", "--new-session-id"])
+    assert a.import_session == "/tmp/x.ocbox"
+    assert a.new_session_id is True
+
+
+def test_restore_multiple_files_success(tmp_path, temp_db):
+    import ocman
+    import sqlite3
+    from pathlib import Path
+    
+    config_file = tmp_path / "ocman_temp.toml"
+    orig_config_path = ocman.OCMAN_CONFIG_PATH
+    ocman.OCMAN_CONFIG_PATH = config_file
+    
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    config_file.write_text(f"""
+db_path = {temp_db}
+history_path = {tmp_path / 'ocman_history.json'}
+default_backup_dir = {backup_dir}
+""", encoding="utf-8")
+    
+    try:
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/p1', 'P1')")
+        conn.commit()
+        conn.close()
+        
+        db_file_1 = tmp_path / "db1.db"
+        conn = sqlite3.connect(str(db_file_1))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj2', '/path/to/p2', 'P2')")
+        conn.commit()
+        conn.close()
+        
+        zip1 = tmp_path / "archive1.zip"
+        import zipfile
+        with zipfile.ZipFile(zip1, "w") as zf:
+            zf.write(db_file_1, "opencode.db")
+            
+        db_file_2 = tmp_path / "db2.db"
+        conn = sqlite3.connect(str(db_file_2))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj3', '/path/to/p3', 'P3')")
+        conn.commit()
+        conn.close()
+        
+        zip2 = tmp_path / "archive2.zip"
+        with zipfile.ZipFile(zip2, "w") as zf:
+            zf.write(db_file_2, "opencode.db")
+            
+        ocman.cli_restore([str(zip1), str(zip2)])
+        
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM project")
+        rows = cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == 'proj3'
+        conn.close()
+        
+    finally:
+        ocman.OCMAN_CONFIG_PATH = orig_config_path
+
+
+def test_restore_multiple_files_rollback(tmp_path, temp_db):
+    import ocman
+    import sqlite3
+    from pathlib import Path
+    import pytest
+    
+    config_file = tmp_path / "ocman_temp.toml"
+    orig_config_path = ocman.OCMAN_CONFIG_PATH
+    ocman.OCMAN_CONFIG_PATH = config_file
+    
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    config_file.write_text(f"""
+db_path = {temp_db}
+history_path = {tmp_path / 'ocman_history.json'}
+default_backup_dir = {backup_dir}
+""", encoding="utf-8")
+    
+    try:
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj_init', '/path/to/init', 'PInit')")
+        conn.commit()
+        conn.close()
+        
+        db_file_1 = tmp_path / "db1.db"
+        conn = sqlite3.connect(str(db_file_1))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj2', '/path/to/p2', 'P2')")
+        conn.commit()
+        conn.close()
+        
+        zip1 = tmp_path / "archive1.zip"
+        import zipfile
+        with zipfile.ZipFile(zip1, "w") as zf:
+            zf.write(db_file_1, "opencode.db")
+            
+        zip2 = tmp_path / "archive2_bad.zip"
+        with zipfile.ZipFile(zip2, "w") as zf:
+            zf.writestr("dummy.txt", "hello")
+            
+        with pytest.raises(RecoveryError) as exc:
+            ocman.cli_restore([str(zip1), str(zip2)])
+            
+        assert "Restoration failed for archive2_bad.zip" in str(exc.value)
+        
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM project")
+        rows = cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == 'proj_init'
+        conn.close()
+        
+    finally:
+        ocman.OCMAN_CONFIG_PATH = orig_config_path
+
+
+def test_import_new_session_id_success(tmp_path, temp_db):
+    import ocman
+    import sqlite3
+    from pathlib import Path
+    import json
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/p1', 'P1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess_orig', 'proj1', 'Original Session', 1000, 2000, '/path/to/p1', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    storage_dir = ocman.OPENCODE_STORAGE_DIR
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    diff_file = storage_dir / "sess_orig.json"
+    diff_file.write_text(json.dumps({"session_id": "sess_orig", "data": "test"}, indent=2), encoding="utf-8")
+    
+    bundle_file = tmp_path / "sess_export.ocbox"
+    ocman.bundle_session_data("sess_orig", bundle_file)
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session WHERE id = 'sess_orig'")
+    conn.commit()
+    conn.close()
+    diff_file.unlink()
+    
+    imported_id = ocman.extract_and_import_session(bundle_file, target_project_id="proj1", new_session_id=True)
+    
+    assert imported_id != "sess_orig"
+    assert imported_id.startswith("ses_")
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, project_id FROM session WHERE id = ?", (imported_id,))
+    row = cursor.fetchone()
+    assert row is not None
+    assert row[1] == "proj1"
+    conn.close()
+    
+    new_diff_file = storage_dir / f"{imported_id}.json"
+    assert new_diff_file.exists()
+    new_diff_data = json.loads(new_diff_file.read_text(encoding="utf-8"))
+    assert new_diff_data["session_id"] == imported_id
+
+
+def test_import_new_session_id_refusal(tmp_path, temp_db):
+    import ocman
+    import sqlite3
+    from pathlib import Path
+    import pytest
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("CREATE TABLE IF NOT EXISTS project_directory (id TEXT, project_id TEXT)")
+    cursor.execute("CREATE TABLE IF NOT EXISTS workspace (id TEXT, project_id TEXT)")
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/p1', 'P1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess_orig', 'proj1', 'Original Session', 1000, 2000, '/path/to/p1', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    bundle_file = tmp_path / "project_export.ocbox"
+    ocman.bundle_project_data("proj1", bundle_file)
+    
+    with pytest.raises(RecoveryError) as exc:
+        ocman.extract_and_import_session(bundle_file, target_project_id="proj1", new_session_id=True)
+        
+    assert "session-id rename applies to a single-session bundle only." in str(exc.value)
+

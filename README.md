@@ -272,7 +272,7 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). |
 | `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
 | `ocman session export ID --to FILE` | Export a session and its subagents to a portable `.ocbox` bundle. |
-| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree. |
+| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only). |
 | `ocman session move ID --to DST` | Relocate a single session. `--metadata-only` updates DB paths only, bypassing the disk move. |
 
 **Recovery options** (for `session recover` and `session compact`):
@@ -320,7 +320,7 @@ Global options work on any subcommand and may appear before or after it.
 | Command | Description |
 |:---|:---|
 | `ocman backup create [specs...] [--to DIR]` | Create a system backup archive ZIP (default destination from config), or write per-target `.ocbox` bundles to a directory when targeting projects/sessions with `--to DIR`. Streams progress as it runs. |
-| `ocman backup restore PATH` | Restore configuration, database, and diffs from a backup archive or directory (with rollback safety). Streams the same per-file and byte-level progress as it runs. |
+| `ocman backup restore PATH...` | Restore configuration, database, and session diffs from one or more backup archives or directories (with batch-atomic rollback safety). Streams per-file progress as it runs. |
 | `ocman backup clean [AGE]` | Prune old backups; previews a KEEP/DELETE table before deleting (see Pruning Backups). `--older-than AGE` sets the window (compact `2h`/`5d`/`6w`/`6mo`/`1y`, `"90 days"`, or a bare number of days); a positional duration also works (`ocman backup clean 90 days`). `--days N` is a deprecated alias. `--dry-run` previews. |
 
 ### `history` (activity ledger)

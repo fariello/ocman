@@ -5520,6 +5520,7 @@ def _legacy_defaults(config: dict) -> dict:
         "export_session": None,
         "export_project": None,
         "import_session": None,
+        "new_session_id": False,
         "to_project": None,
         "new_project_path": None,
         # backup / restore / config
@@ -5763,6 +5764,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Remap to an existing project ID.")
     sp.add_argument("--new-project-path", default=None, metavar="PATH",
                     help="Remap to a newly created project worktree.")
+    sp.add_argument("--new-session-id", action="store_true",
+                    help="Regenerate a fresh session ID for the imported session (single-session bundle only).")
 
     sp = new_action(p_session, s_sub, "move", help="Relocate a session.")
     sp.add_argument("session", help="Session ID to move.")
@@ -5818,7 +5821,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Destination directory (required if specs are provided).")
 
     sp = new_action(p_backup, b_sub, "restore", help="Restore from a ZIP archive or directory.")
-    sp.add_argument("path", help="Archive or directory to restore from.")
+    sp.add_argument("paths", nargs="+", help="Archive or directory files to restore from (applied in order).")
 
     sp = new_action(p_backup, b_sub, "clean", help="Prune old backup archives.")
     _add_clean_opts(sp, with_name=False)
@@ -6102,6 +6105,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["import_session"] = g("path")
             out["to_project"] = g("to_project")
             out["new_project_path"] = g("new_project_path")
+            out["new_session_id"] = bool(g("new_session_id", False))
         elif action == "move":
             out["move_session"] = g("session")
             out["to"] = g("to")
@@ -6158,7 +6162,11 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             else:
                 out["backup_opencode"] = ""
         elif action == "restore":
-            out["restore"] = g("path")
+            paths = g("paths")
+            if paths and len(paths) == 1:
+                out["restore"] = paths[0]
+            else:
+                out["restore"] = paths
         elif action == "clean":
             out["clean_backups"] = True
             _name, days = _resolve_clean_args(ns, g, with_name=False, default_days=out["days"])
@@ -8144,6 +8152,7 @@ def extract_and_import_session(
     bundle_path: Path, 
     target_project_id: str | None = None, 
     new_project_path: str | None = None,
+    new_session_id: bool = False,
     progress_callback = None
 ) -> str:
     """
@@ -8175,9 +8184,14 @@ def extract_and_import_session(
     for sid in all_ids:
         if not isinstance(sid, str) or not sid_regex.match(sid):
             raise RecoveryError(f"Invalid session ID format in bundle metadata: {sid}")
+    if new_session_id:
+        if meta.get("kind") == "project" or not meta.get("main_session_id"):
+            raise RecoveryError("session-id rename applies to a single-session bundle only.")
+
     main_sid = meta.get("main_session_id")
     if not main_sid or not isinstance(main_sid, str) or not sid_regex.match(main_sid):
         raise RecoveryError(f"Invalid main session ID format in bundle metadata: {main_sid}")
+
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
@@ -8194,13 +8208,15 @@ def extract_and_import_session(
         if cursor.fetchall():
             collision = True
 
-        # Generate translation map if collisions occur
+        # Generate translation map if collisions occur or forced by --new-session-id
         id_map = {}
         for sid in all_ids:
-            id_map[sid] = f"ses_{uuid.uuid4().hex}" if collision else sid
+            id_map[sid] = f"ses_{uuid.uuid4().hex}" if (collision or new_session_id) else sid
 
         if progress_callback:
-            if collision:
+            if new_session_id:
+                progress_callback(f"{info_prefix()} Regenerating session IDs as requested by --new-session-id.")
+            elif collision:
                 progress_callback(f"{info_prefix()} Collision detected in session IDs; rewriting IDs for safety.")
             else:
                 progress_callback(f"{info_prefix()} No session ID collisions detected.")
@@ -8348,7 +8364,7 @@ def extract_and_import_session(
                     diff_data = json.loads(zipf.read(zip_member).decode("utf-8"))
                     # Rewrite session ID references inside JSON structure if colliding.
                     # Exact-id structural remap (single pass); does not corrupt substrings.
-                    if collision:
+                    if collision or new_session_id:
                         diff_data = _remap_ids_in_json(diff_data, id_map)
 
                     target_file = storage_dir / f"{new_id}.json"
@@ -10153,39 +10169,26 @@ def cli_backup(dest: str = None) -> Path:
     return dest_path
 
 
-def cli_restore(source: str) -> None:
+def cli_restore(sources: list[str] | str) -> None:
     """Restore opencode active state from a ZIP archive or directory with rollback safety."""
-    source_path = Path(source).expanduser()
-    if not source_path.exists():
-        raise RecoveryError(f"Restore source path not found: {source_path}")
+    if isinstance(sources, str):
+        sources = [sources]
+    if not sources:
+        raise RecoveryError("No restore sources provided.")
 
-    temp_dir = None
-    restore_dir = None
+    source_paths = []
+    for src in sources:
+        p = Path(src).expanduser()
+        if not p.exists():
+            raise RecoveryError(f"Restore source path not found: {p}")
+        if p.is_file():
+            if not zipfile.is_zipfile(p):
+                raise RecoveryError(f"Source file is not a valid ZIP archive: {p}")
+        elif not p.is_dir():
+            raise RecoveryError(f"Source path is not a file or directory: {p}")
+        source_paths.append(p)
 
-    if source_path.is_file():
-        if not zipfile.is_zipfile(source_path):
-            raise RecoveryError(f"Source file is not a valid ZIP archive: {source_path}")
-        temp_dir = tempfile.mkdtemp(prefix="ocman-restore-")
-        restore_dir = Path(temp_dir)
-        try:
-            print(f"{info_prefix()} Extracting archive...")
-            with zipfile.ZipFile(source_path, "r") as zipf:
-                _safe_extract_zip(zipf, restore_dir)
-        except Exception as e:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-            raise RecoveryError(f"Failed to extract ZIP archive: {e}")
-    elif source_path.is_dir():
-        restore_dir = source_path
-    else:
-        raise RecoveryError(f"Source path is not a file or directory: {source_path}")
-
-    db_file = restore_dir / "opencode.db"
-    if not db_file.exists():
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        raise RecoveryError("Invalid backup structure: opencode.db not found in source.")
-
-    print(f"{info_prefix()} Restoring opencode state from: {source_path}")
+    # 1. Create a single rollback safety backup of current state
     print(f"{info_prefix()} Creating rollback safety backup of current state...")
     rollback_file = None
     try:
@@ -10232,77 +10235,105 @@ def cli_restore(source: str) -> None:
 
         print(f"{info_prefix()} Rollback safety backup created: {rollback_file}")
     except Exception as e:
-        if temp_dir:
-            shutil.rmtree(temp_dir, ignore_errors=True)
         raise RecoveryError(f"Failed to create rollback safety backup. Restoration aborted: {e}")
 
-    db_restored = False
-    history_restored = False
-    configs_restored = 0
-    sessions_restored = 0
+    total_db_restored = False
+    total_history_restored = False
+    total_configs_restored = 0
+    total_sessions_restored = 0
 
+    current_source = None
+    temp_dir = None
     try:
-        new_toml = restore_dir / "ocman.toml"
-        if new_toml.exists():
-            OCMAN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(new_toml, OCMAN_CONFIG_PATH)
-            configs_restored += 1
+        for idx, source_path in enumerate(source_paths, start=1):
+            current_source = source_path
+            print(f"\n{info_prefix()} [{idx}/{len(source_paths)}] Restoring opencode state from: {source_path}")
+            temp_dir = None
+            restore_dir = None
 
-        for config_p in OPENCODE_CONFIG_PATHS:
-            new_cfg = restore_dir / config_p.name
-            if new_cfg.exists():
-                config_p.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(new_cfg, config_p)
-                configs_restored += 1
+            if source_path.is_file():
+                temp_dir = tempfile.mkdtemp(prefix="ocman-restore-")
+                restore_dir = Path(temp_dir)
+                try:
+                    print(f"{info_prefix()} Extracting archive...")
+                    with zipfile.ZipFile(source_path, "r") as zipf:
+                        _safe_extract_zip(zipf, restore_dir)
+                except Exception as e:
+                    raise RecoveryError(f"Failed to extract ZIP archive: {e}")
+            else:
+                restore_dir = source_path
 
-        config = load_ocman_config()
-        target_db = Path(config["db_path"])
-        target_history = Path(config["history_path"])
+            db_file = restore_dir / "opencode.db"
+            if not db_file.exists():
+                raise RecoveryError("Invalid backup structure: opencode.db not found in source.")
 
-        target_db.parent.mkdir(parents=True, exist_ok=True)
-        active_wal = target_db.parent / f"{target_db.name}-wal"
-        active_shm = target_db.parent / f"{target_db.name}-shm"
-        if active_wal.exists():
-            active_wal.unlink()
-        if active_shm.exists():
-            active_shm.unlink()
+            new_toml = restore_dir / "ocman.toml"
+            if new_toml.exists():
+                OCMAN_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(new_toml, OCMAN_CONFIG_PATH)
+                total_configs_restored += 1
 
-        print(f"{info_prefix()} Restoring database "
-              f"({human_size_local(db_file.stat().st_size)})...")
-        copy_file_with_progress(db_file, target_db, label="restoring opencode.db")
-        db_restored = True
+            for config_p in OPENCODE_CONFIG_PATHS:
+                new_cfg = restore_dir / config_p.name
+                if new_cfg.exists():
+                    config_p.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(new_cfg, config_p)
+                    total_configs_restored += 1
 
-        new_wal = restore_dir / "opencode.db-wal"
-        new_shm = restore_dir / "opencode.db-shm"
-        if new_wal.exists():
-            shutil.copy2(new_wal, active_wal)
-        if new_shm.exists():
-            shutil.copy2(new_shm, active_shm)
+            # reload config as db_path might have changed in ocman.toml
+            config = load_ocman_config()
+            target_db = Path(config["db_path"])
+            target_history = Path(config["history_path"])
 
-        hist_file = restore_dir / "ocman_history.json"
-        if hist_file.exists():
-            target_history.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(hist_file, target_history)
-            history_restored = True
+            target_db.parent.mkdir(parents=True, exist_ok=True)
+            active_wal = target_db.parent / f"{target_db.name}-wal"
+            active_shm = target_db.parent / f"{target_db.name}-shm"
+            if active_wal.exists():
+                active_wal.unlink()
+            if active_shm.exists():
+                active_shm.unlink()
 
-        backup_storage = restore_dir / "session_diff"
-        target_storage = OPENCODE_STORAGE_DIR
-        target_storage.mkdir(parents=True, exist_ok=True)
+            print(f"{info_prefix()} Restoring database ({human_size_local(db_file.stat().st_size)})...")
+            copy_file_with_progress(db_file, target_db, label="restoring opencode.db")
+            total_db_restored = True
 
-        for f in target_storage.iterdir():
-            if f.is_file() and f.suffix == ".json":
-                f.unlink()
+            new_wal = restore_dir / "opencode.db-wal"
+            new_shm = restore_dir / "opencode.db-shm"
+            if new_wal.exists():
+                shutil.copy2(new_wal, active_wal)
+            if new_shm.exists():
+                shutil.copy2(new_shm, active_shm)
 
-        if backup_storage.exists() and backup_storage.is_dir():
-            diff_files = [f for f in backup_storage.iterdir()
-                          if f.is_file() and f.suffix == ".json"]
-            print(f"{info_prefix()} Restoring {len(diff_files)} session-diff file(s)...")
-            for f in diff_files:
-                shutil.copy2(f, target_storage / f.name)
-                sessions_restored += 1
+            hist_file = restore_dir / "ocman_history.json"
+            if hist_file.exists():
+                target_history.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(hist_file, target_history)
+                total_history_restored = True
+
+            backup_storage = restore_dir / "session_diff"
+            target_storage = OPENCODE_STORAGE_DIR
+            target_storage.mkdir(parents=True, exist_ok=True)
+
+            # Delete target storage files ONLY for JSON session diffs
+            for f in target_storage.iterdir():
+                if f.is_file() and f.suffix == ".json":
+                    f.unlink()
+
+            if backup_storage.exists() and backup_storage.is_dir():
+                diff_files = [f for f in backup_storage.iterdir()
+                              if f.is_file() and f.suffix == ".json"]
+                print(f"{info_prefix()} Restoring {len(diff_files)} session-diff file(s)...")
+                for f in diff_files:
+                    shutil.copy2(f, target_storage / f.name)
+                    total_sessions_restored += 1
+
+            if temp_dir:
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                temp_dir = None
 
     except Exception as e:
-        print(color_red(f"Restoration failed: {e}. Triggering rollback safety..."))
+        failed_src_name = current_source.name if current_source else "unknown"
+        print(color_red(f"Restoration failed on {failed_src_name}: {e}. Triggering rollback safety..."))
         try:
             with zipfile.ZipFile(rollback_file, "r") as zipf:
                 target_storage = OPENCODE_STORAGE_DIR
@@ -10355,17 +10386,18 @@ def cli_restore(source: str) -> None:
         finally:
             if temp_dir:
                 shutil.rmtree(temp_dir, ignore_errors=True)
-            raise RecoveryError(f"Restoration failed and rolled back: {e}")
+            raise RecoveryError(f"Restoration failed for {failed_src_name} and rolled back: {e}")
 
     finally:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    print()
     print(color_green("System restoration completed successfully."))
-    print(f"  Database restored:  {'Yes' if db_restored else 'No'}")
-    print(f"  History restored:   {'Yes' if history_restored else 'No'}")
-    print(f"  Configs restored:   {configs_restored}")
-    print(f"  Sessions restored:  {sessions_restored}")
+    print(f"  Database restored:  {'Yes' if total_db_restored else 'No'}")
+    print(f"  History restored:   {'Yes' if total_history_restored else 'No'}")
+    print(f"  Configs restored:   {total_configs_restored}")
+    print(f"  Sessions restored:  {total_sessions_restored}")
 
 
 def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
@@ -10671,6 +10703,10 @@ def main() -> None:
         except Exception:
             kind = None
 
+        new_session_id = getattr(args, "new_session_id", False)
+        if new_session_id and kind == "project":
+            die("Error: session-id rename applies to a single-session bundle only.")
+
         try:
             if kind == "project":
                 print(f"{info_prefix()} Importing project from '{bundle_path}'...")
@@ -10687,6 +10723,7 @@ def main() -> None:
                     bundle_path,
                     target_project_id=to_project,
                     new_project_path=new_project_path,
+                    new_session_id=new_session_id,
                     progress_callback=print
                 )
                 print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
