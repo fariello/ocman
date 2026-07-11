@@ -102,6 +102,13 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   `project_directory`/`workspace` rows) happens inside that same transaction, but only for
   projects the user explicitly targeted (passed as `remove_project_ids`), never inferred
   from "0 sessions remain".
+- **Formatting is centralized.** `fmt_int` (comma-separated integers with optional width) and
+  `fmt_cost` (`$` + comma-separated, fixed decimals) are the shared number/currency formatters used by
+  the listing and disk-reporting output; both coalesce `None`/bad input to 0 so display never crashes.
+- **Historical metrics are global-only.** Deleted-session cost/token totals come from the deletion
+  history sidecar, which has no `project_id`, so they are never attributed per project; per-project
+  reporting (`list projects`, `disk --by-project`) shows *active* figures only, with historical kept as
+  a single global line in `db info`'s Usage Metrics.
 - **Untrusted input is validated at the boundary.** Import validates IDs/table/column names;
   restore validates ZIP member paths before extraction (Zip-Slip protection). SQL uses
   parameterized values with hardcoded/allowlisted identifiers. During single-session import,

@@ -434,7 +434,7 @@ def test_db_show_info(temp_db, capsys):
     assert "OPENCODE SYSTEM INFORMATION" in captured.out
     assert "Projects:        1" in captured.out
     assert "Sessions:        1" in captured.out
-    assert "Total Cost:      $0.0500" in captured.out
+    assert "Total Cost:      $0.05" in captured.out
     assert "Tokens Input:    1,000" in captured.out
     assert "gpt-4 (openai)" in captured.out
 
@@ -511,9 +511,11 @@ def test_db_show_info_by_project(temp_db, capsys, monkeypatch, tmp_path):
     out = capsys.readouterr().out
     assert "Per-Project Disk Usage (session-diff files):" in out
     assert "single shared file" in out  # honest-docs note, no per-project DB bytes
-    # p1 (500 B) must be listed before p2 (10 B) — sorted by diff bytes desc.
-    assert out.index("Proj One") < out.index("Proj Two")
-    assert "Sessions: 1" in out
+    # Per-project rows are now a vistab table keyed by project DIRECTORY (worktree),
+    # sorted by diff bytes desc: p1 (500 B, /w1) before p2 (10 B, /w2).
+    assert out.index("/w1") < out.index("/w2")
+    # Split-token + cost columns are present in the table header.
+    assert "Tokens In" in out and "Cache" in out and "Cost" in out
 
 
 def test_disk_alias_parses_to_info_by_project(monkeypatch):
@@ -1177,7 +1179,8 @@ def test_db_before_verb_used_for_target_resolution(monkeypatch, tmp_path):
     conn = sqlite3.connect(str(db))
     conn.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
     conn.execute("CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, parent_id TEXT, "
-                 "title TEXT, directory TEXT, time_updated INTEGER)")
+                 "title TEXT, directory TEXT, time_updated INTEGER, "
+                 "cost REAL, tokens_input INTEGER, tokens_output INTEGER, tokens_cache_read INTEGER)")
     conn.execute("INSERT INTO project (id, worktree, name) VALUES ('pX', '/some/where', 'X')")
     # resolve_project (via db_list_projects) only surfaces projects with >=1
     # session and reads MAX(session.time_updated), so the column must exist.
@@ -1642,7 +1645,8 @@ def _make_empty_db(tmp_path):
     cur.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
     cur.execute(
         "CREATE TABLE session (id TEXT PRIMARY KEY, project_id TEXT, title TEXT, "
-        "time_created INTEGER, time_updated INTEGER, directory TEXT, parent_id TEXT)"
+        "time_created INTEGER, time_updated INTEGER, directory TEXT, parent_id TEXT, "
+        "cost REAL, tokens_input INTEGER, tokens_output INTEGER, tokens_cache_read INTEGER)"
     )
     cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/proj', 'Proj')")
     cur.execute(
@@ -1864,10 +1868,87 @@ def test_list_sessions_approximate_stats(temp_db, capsys):
 
     captured = capsys.readouterr()
     assert "Test Session" in captured.out
-    assert "~msgs: 2" in captured.out
-    assert "~interactions: 1" in captured.out
-    assert "~parts: 3" in captured.out
+    # No-project listing uses the rich multi-line stanza (Msgs/Interactions/DB Parts).
+    assert "Msgs:" in captured.out and "2" in captured.out
+    assert "Interactions:" in captured.out
+    assert "DB Parts:" in captured.out
+    assert "First active:" in captured.out and "Last active:" in captured.out
     assert "Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts." in captured.out
+
+
+def test_fmt_int_and_fmt_cost():
+    from ocman import fmt_int, fmt_cost
+    assert fmt_int(1234567) == "1,234,567"
+    assert fmt_int(0) == "0"
+    assert fmt_int(None) == "0"
+    assert fmt_int(42, 8) == "      42"
+    assert fmt_int(-5) == "-5"
+    assert fmt_cost(0) == "$0.00"
+    assert fmt_cost(None) == "$0.00"
+    assert fmt_cost(4231.5578) == "$4,231.56"
+    assert fmt_cost(12.5, decimals=4) == "$12.5000"
+
+
+def _seed_global_and_project(temp_db):
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('g', '/', '')")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/x/proj', 'Proj1')")
+    cur.execute(
+        "INSERT INTO session (id, project_id, title, time_created, time_updated, directory, "
+        "cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+        "VALUES ('ses_home', 'g', 'Home task', 1715000000000, 1715500000000, '/home/gfariello', "
+        "0.42, 500, 200, 0, '')"
+    )
+    conn.commit(); conn.close()
+
+
+def test_global_mapping_notice_on_dir_scope(temp_db, capsys, monkeypatch):
+    """A dir-scoped listing whose sessions map to global (/) prints the loud NOTICE once."""
+    import ocman, sys
+    _seed_global_and_project(temp_db)
+    monkeypatch.setattr(ocman.Path, "cwd", staticmethod(lambda: Path("/home/gfariello")))
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "list", "sessions"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert out.count("NOTICE:") == 1
+    assert "global (/) project" in out
+    assert "ocman list sessions in /" in out
+    # New stanza fields present.
+    assert "First active:" in out and "Cost: $0.42" in out
+
+
+def test_list_projects_shows_per_project_metrics(temp_db, capsys, monkeypatch):
+    import ocman, sys
+    _seed_global_and_project(temp_db)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "list", "projects"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "Cost: $0.42" in out
+    assert "500 in / 200 out / 0 cache" in out
+
+
+def test_list_sessions_omits_interactions_when_absent(temp_db, capsys, monkeypatch):
+    """When a session has no interaction data, the Interactions column is omitted."""
+    import ocman, sys
+    _seed_global_and_project(temp_db)
+    # Force db_get_session_stats to report has_interactions False.
+    monkeypatch.setattr(ocman, "db_get_session_stats",
+                        lambda: {"ses_home": {"msgs": 3, "parts": 9, "has_interactions": False}})
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "list", "sessions"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "DB Parts:" in out
+    assert "Interactions:" not in out
 
 
 def test_e2e_list_models_word_order(tmp_path):

@@ -2,7 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+- **Richer multi-project `list sessions` output.** When no single project is in scope, each session is
+  shown with its ID and project directory, first/last active timestamps, cost, and split
+  input/output/cache token counts (alongside the approximate message/interaction/part counts).
+  Single-project listings keep the compact one-line-per-session form.
+- **Loud global-mapping NOTICE.** Listing sessions from a home/ad-hoc directory whose sessions are filed
+  under OpenCode's global (`/`) project now prints a highly visible NOTICE explaining the mapping and how
+  to view the true global project (`ocman list sessions in /`).
+- **Per-project cost and tokens.** `ocman list projects` shows each project's active cost and split
+  input/output/cache tokens; `ocman disk` (`db info --by-project`) renders an aligned table keyed by
+  project directory with sessions, messages, cost, split tokens, and session-diff file count/size.
+- **WAL/SHM explanation** in `db info` output, clarifying the SQLite write-ahead-log and shared-memory
+  sidecar files under "Size on disk".
+- **`fmt_int` / `fmt_cost` helpers** for consistent comma-separated integer and currency formatting.
+
 ### Changed
+- **Total/accumulated cost figures** in `db info` and history totals are now comma-separated (e.g.
+  `$4,231.56`) instead of a bare four-decimal number.
 - **Batch session delete is now one consolidated operation.** Deleting multiple sessions
   (an explicit list, or a project expansion) no longer repeats the backup, `VACUUM`, and
   rollback report once per session. It now takes a single family backup, runs one

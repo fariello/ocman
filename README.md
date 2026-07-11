@@ -212,8 +212,14 @@ This matters because OpenCode files sessions started in your home directory (or 
 a catch-all project whose worktree is `/`. ocman labels that project **`global (/)`** to avoid confusing
 it with the filesystem root, and does not treat `/` as a normal parent directory (it would match
 everything). Directory scoping is what lets `ocman list sessions` run from `~` still find those
-home-directory sessions; ocman prints a one-line note when results include sessions from the
-`global (/)` project.
+home-directory sessions; when results include sessions from the `global (/)` project, ocman prints a
+loud, multi-line **NOTICE** explaining the mapping and how to view the true global project
+(`ocman list sessions in /`).
+
+When no single project is in scope (a directory scope, or all-projects), `ocman list sessions` prints a
+richer per-session stanza: the session ID and its project directory, first/last active timestamps, cost,
+and split input / output / cache token counts, plus the approximate message/interaction/part counts.
+Single-project listings keep the compact one-line-per-session form.
 
 ### Database & Storage Status (`ocman db info`)
 Prints a breakdown of your current database state on disk, including the SQLite database
@@ -232,6 +238,13 @@ ocman disk
 > [!NOTE]
 > Per-project figures cover **session-diff files only**. The SQLite database is a single
 > shared file, so its bytes are not attributable to an individual project.
+
+The `--by-project` breakdown is rendered as an aligned table keyed by each project's
+**directory** (worktree), with session/message counts, cost, split input/output/cache tokens, and
+session-diff file count and size. The "Size on disk" line also explains the SQLite WAL/SHM sidecar
+files (write-ahead log and its shared-memory index), which are normal and shrink after a checkpoint.
+Per-project cost and tokens are **active** figures only; deleted (historical) cost is not attributable
+per project and is shown as a single global line in the Usage Metrics summary.
 
 ### Historical Auditing (`ocman history show`)
 Outputs a list of past cleanups and recoveries in reverse chronological order, ending with a comprehensive all-time totalization card:

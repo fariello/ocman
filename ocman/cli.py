@@ -3871,7 +3871,11 @@ def db_list_projects() -> list[dict[str, Any]]:
         cursor = conn.cursor()
         cursor.execute("""
             SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
-                   COALESCE(MAX(s.time_updated), 0) as last_updated
+                   COALESCE(MAX(s.time_updated), 0) as last_updated,
+                   COALESCE(SUM(s.cost), 0.0) as cost,
+                   COALESCE(SUM(s.tokens_input), 0) as tokens_input,
+                   COALESCE(SUM(s.tokens_output), 0) as tokens_output,
+                   COALESCE(SUM(s.tokens_cache_read), 0) as tokens_cache_read
             FROM project p
             LEFT JOIN session s ON s.project_id = p.id
             GROUP BY p.id
@@ -3886,6 +3890,10 @@ def db_list_projects() -> list[dict[str, Any]]:
                 "name": row[2] or "",
                 "session_count": row[3],
                 "last_updated": row[4],
+                "cost": row[5],
+                "tokens_input": row[6],
+                "tokens_output": row[7],
+                "tokens_cache_read": row[8],
             })
         return projects
     except Exception:
@@ -4385,6 +4393,28 @@ def db_search_sessions(
                 pass
 
 
+def fmt_int(n, width: int = 0) -> str:
+    """Comma-separated integer, optionally right-padded to ``width``.
+
+    ``None`` is coalesced to 0. Non-integer inputs are coerced via int() when
+    possible, else rendered as-is (so callers never crash on unexpected data).
+    """
+    try:
+        value = int(n or 0)
+    except (TypeError, ValueError):
+        return f"{str(n):>{width}}" if width else str(n)
+    return f"{value:>{width},}" if width else f"{value:,}"
+
+
+def fmt_cost(x, decimals: int = 2) -> str:
+    """Format a cost as ``$`` + comma-separated with fixed decimals. ``None`` -> $0.00."""
+    try:
+        value = float(x or 0.0)
+    except (TypeError, ValueError):
+        value = 0.0
+    return f"${value:,.{decimals}f}"
+
+
 def _fmt_ts(epoch_ms) -> str:
     """Format an epoch-ms timestamp as YYYY-MM-DD HH:MM."""
     if not epoch_ms:
@@ -4431,6 +4461,15 @@ def print_projects(
         count = p["session_count"]
         print(f"  {idx:>3}. {color_bold(directory)}")
         print(f"       {count} sessions, last active: {updated}")
+        # Per-project metrics (Active only; historical is global-only, not
+        # attributable per project). Older callers/rows may lack these keys.
+        if "cost" in p:
+            print(
+                f"       Cost: {fmt_cost(p['cost'])}"
+                f"  Tokens: {fmt_int(p.get('tokens_input'))} in"
+                f" / {fmt_int(p.get('tokens_output'))} out"
+                f" / {fmt_int(p.get('tokens_cache_read'))} cache"
+            )
 
 
 def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
@@ -9868,7 +9907,7 @@ def cli_show_logs() -> None:
             print("    - Database Rows Deleted: Rows removed successfully")
             print(f"    - Subagent Sessions:     {sub_cnt}")
             print(f"    - Messages Deleted:      {msg_cnt}")
-            print(f"    - Accumulated Cost:      ${cost:.4f}")
+            print(f"    - Accumulated Cost:      {fmt_cost(cost)}")
             print(f"    - Disk Space Saved:      {human_size_local(space_saved)}")
             print("--------------------------------------------------------")
 
@@ -9888,7 +9927,7 @@ def cli_show_logs() -> None:
     print(f"  - Sessions Deleted:        {sessions_deleted}")
     print(f"  - Subagent Sessions:       {subagents_deleted}")
     print(f"  - Messages Deleted:        {messages_deleted}")
-    print(f"  - Total Cost Reclaimed:    ${cost_deleted:.4f}")
+    print(f"  - Total Cost Reclaimed:    {fmt_cost(cost_deleted)}")
     print(f"  - Total Disk Space Saved:  {human_size_local(space_saved_deleted)}")
     print(color_green("========================================================"))
 
@@ -9899,7 +9938,8 @@ def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[d
     Session-diff files are named ``<session_id>.json`` and each session has a
     ``project_id``, so on-disk diff bytes ARE exactly attributable to a project. The
     shared SQLite DB is deliberately excluded (its bytes are not per-project).
-    Returns a list of dicts: id, name, sessions, messages, tokens, diff_files, diff_bytes.
+    Returns a list of dicts: id, name, directory, sessions, messages, tokens,
+    tokens_input, tokens_output, tokens_cache_read, cost, diff_files, diff_bytes.
     """
     if not db_path.exists():
         return []
@@ -9907,24 +9947,33 @@ def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[d
     try:
         conn = sqlite3.connect(str(db_path))
         cursor = conn.cursor()
-        # Project id -> name
+        # Project id -> (name, worktree)
         try:
-            cursor.execute("SELECT id, name FROM project;")
-            proj_names = {row[0]: row[1] for row in cursor.fetchall()}
+            cursor.execute("SELECT id, name, worktree FROM project;")
+            proj_meta = {row[0]: (row[1], row[2]) for row in cursor.fetchall()}
         except Exception:
-            proj_names = {}
-        # Per-project session ids + aggregate counts.
+            proj_meta = {}
+        # Per-project session ids + aggregate token/cost counts.
         cursor.execute(
             "SELECT project_id, id, "
-            "COALESCE(tokens_input,0)+COALESCE(tokens_output,0) "
+            "COALESCE(tokens_input,0), COALESCE(tokens_output,0), "
+            "COALESCE(tokens_cache_read,0), COALESCE(cost,0.0) "
             "FROM session"
         )
         sessions_by_project: dict[str, list[str]] = {}
         tokens_by_project: dict[str, int] = {}
-        for project_id, session_id, tok in cursor.fetchall():
+        tin_by_project: dict[str, int] = {}
+        tout_by_project: dict[str, int] = {}
+        tcache_by_project: dict[str, int] = {}
+        cost_by_project: dict[str, float] = {}
+        for project_id, session_id, tin, tout, tcache, cost in cursor.fetchall():
             pid = project_id or "(no project)"
             sessions_by_project.setdefault(pid, []).append(session_id)
-            tokens_by_project[pid] = tokens_by_project.get(pid, 0) + (tok or 0)
+            tokens_by_project[pid] = tokens_by_project.get(pid, 0) + (tin or 0) + (tout or 0)
+            tin_by_project[pid] = tin_by_project.get(pid, 0) + (tin or 0)
+            tout_by_project[pid] = tout_by_project.get(pid, 0) + (tout or 0)
+            tcache_by_project[pid] = tcache_by_project.get(pid, 0) + (tcache or 0)
+            cost_by_project[pid] = cost_by_project.get(pid, 0.0) + (cost or 0.0)
         # Message counts per project (join through session).
         msg_by_project: dict[str, int] = {}
         try:
@@ -9957,12 +10006,18 @@ def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[d
                     diff_files += 1
             except OSError:
                 pass
+        name, worktree = proj_meta.get(pid, ("", None))
         rows.append({
             "id": pid,
-            "name": proj_names.get(pid, ""),
+            "name": name or "",
+            "directory": _display_worktree(worktree) if pid != "(no project)" else "(no project)",
             "sessions": len(sess_ids),
             "messages": msg_by_project.get(pid, 0),
             "tokens": tokens_by_project.get(pid, 0),
+            "tokens_input": tin_by_project.get(pid, 0),
+            "tokens_output": tout_by_project.get(pid, 0),
+            "tokens_cache_read": tcache_by_project.get(pid, 0),
+            "cost": cost_by_project.get(pid, 0.0),
             "diff_files": diff_files,
             "diff_bytes": diff_bytes,
         })
@@ -10170,6 +10225,8 @@ def db_show_info(args) -> None:
     else:
         print(f"  Integrity:       {color_red(integrity)}")
     print(f"  Size on disk:    {color_yellow(db_family_size_str)}")
+    print(color_dim("    (WAL holds writes not yet checkpointed into the .db; SHM is its"))
+    print(color_dim("     shared-memory index. Both are normal and shrink after a checkpoint.)"))
     print()
 
     print(color_bold("Database Statistics:"))
@@ -10197,13 +10254,13 @@ def db_show_info(args) -> None:
     grand_tokens_out = total_tokens_out + hist_tokens_out
 
     if hist_cost > 0.0 or hist_tokens_in > 0 or hist_tokens_out > 0:
-        print(f"  Total Cost:      {color_green(f'${grand_cost:.4f}')} (Active: ${total_cost:.4f}, Historical: ${hist_cost:.4f})")
-        print(f"  Tokens Input:    {grand_tokens_in:,} (Active: {total_tokens_in:,}, Historical: {hist_tokens_in:,})")
-        print(f"  Tokens Output:   {grand_tokens_out:,} (Active: {total_tokens_out:,}, Historical: {hist_tokens_out:,})")
+        print(f"  Total Cost:      {color_green(fmt_cost(grand_cost))} (Active: {fmt_cost(total_cost)}, Historical: {fmt_cost(hist_cost)})")
+        print(f"  Tokens Input:    {fmt_int(grand_tokens_in)} (Active: {fmt_int(total_tokens_in)}, Historical: {fmt_int(hist_tokens_in)})")
+        print(f"  Tokens Output:   {fmt_int(grand_tokens_out)} (Active: {fmt_int(total_tokens_out)}, Historical: {fmt_int(hist_tokens_out)})")
     else:
-        print(f"  Total Cost:      {color_green(f'${total_cost:.4f}')}")
-        print(f"  Tokens Input:    {total_tokens_in:,}")
-        print(f"  Tokens Output:   {total_tokens_out:,}")
+        print(f"  Total Cost:      {color_green(fmt_cost(total_cost))}")
+        print(f"  Tokens Input:    {fmt_int(total_tokens_in)}")
+        print(f"  Tokens Output:   {fmt_int(total_tokens_out)}")
 
     if top_models:
         print(f"  Top Models:")
@@ -10263,14 +10320,25 @@ def db_show_info(args) -> None:
         if not rows:
             print("  (no projects / no per-project data)")
         else:
+            table = vistab.Vistab(header=[
+                "Project", "Sessions", "Messages", "Cost",
+                "Tokens In", "Tokens Out", "Cache", "Diff Files", "Diff Size",
+            ])
             for r in rows:
-                name = r["name"] or r["id"]
-                print(f"  {color_cyan(name)}")
-                print(
-                    f"    Diff files: {r['diff_files']} ({human_size_local(r['diff_bytes'])})"
-                    f" | Sessions: {r['sessions']} | Messages: {r['messages']:,}"
-                    f" | Tokens: {r['tokens']:,}"
-                )
+                directory = r.get("directory") or r["name"] or r["id"]
+                table.add_row([
+                    directory,
+                    fmt_int(r["sessions"]),
+                    fmt_int(r["messages"]),
+                    fmt_cost(r["cost"]),
+                    fmt_int(r["tokens_input"]),
+                    fmt_int(r["tokens_output"]),
+                    fmt_int(r["tokens_cache_read"]),
+                    fmt_int(r["diff_files"]),
+                    human_size_local(r["diff_bytes"]),
+                ])
+            table.set_cols_align(["l", "r", "r", "r", "r", "r", "r", "r", "r"])
+            print(table.draw())
     print(title_bar)
 
 
@@ -11366,8 +11434,17 @@ def main() -> None:
         _no_project_match = False
         if _dir_scope:
             print(color_bold(f"Sessions in {_dir_scope} ({top_count} sessions, {child_count} subagent):"))
+            # LOUD notice about the home/ad-hoc -> global (/) mapping. Keyed off the
+            # worktree (not a hardcoded home path). NOTE: a SEPARATE loud footer for
+            # the "no project matched at all" case lives further down, gated by
+            # `_no_project_match`; keep the two in sync if you change either.
             if any(s["project_dir"] in ("/", "", None) for s in all_sessions):
-                print(color_dim("  (Some ran under OpenCode's global project, worktree 'global (/)'.)"))
+                print(color_bold(color_yellow(
+                    "  NOTICE: Sessions run from a home/ad-hoc directory generally map to OpenCode's")))
+                print(color_bold(color_yellow(
+                    "          global (/) project. These are shown here by directory. To see the")))
+                print(color_bold(color_yellow(
+                    "          true global project: ocman list sessions in /")))
         elif _project_dir:
             print(color_bold(f"Sessions for {_project_dir} ({top_count} sessions, {child_count} subagent):"))
         else:
@@ -11383,21 +11460,43 @@ def main() -> None:
             title = s["title"]
             if len(title) > 60:
                 title = title[:57] + "..."
-            updated = _fmt_ts(s["updated"])
-            project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
-            prefix = "⤷ " if s["parent_id"] else ""
-            print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')}{project_hint}")
             sid = s["id"]
             stat = session_stats.get(sid, {})
             msgs = stat.get("msgs", 0)
             interactions = stat.get("interactions", 0)
             parts = stat.get("parts", 0)
             has_interactions = stat.get("has_interactions", True)
+            prefix = "⤷ " if s["parent_id"] else ""
+
+            if _project_id:
+                # Single-project listing: keep the compact, characterized form.
+                updated = _fmt_ts(s["updated"])
+                if has_interactions:
+                    stats_str = f"~msgs: {msgs}  ~interactions: {interactions}  ~parts: {parts}"
+                else:
+                    stats_str = f"~msgs: {msgs}  ~parts: {parts}"
+                print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')}")
+                print(f"       ID: {sid}  Updated: {updated}  {color_dim(stats_str)}")
+                continue
+
+            # Multi-project (dir-scope / all-projects) listing: rich multi-line
+            # stanza. Users pick sessions by directory + content, so surface the
+            # project dir, first/last active, cost, and split tokens.
+            proj_dir = _display_worktree(s["project_dir"]) if s["project_dir"] else "(no project)"
+            first = _fmt_ts(s["created"])
+            last = _fmt_ts(s["updated"])
             if has_interactions:
-                stats_str = f"~msgs: {msgs}  ~interactions: {interactions}  ~parts: {parts}"
+                counts = (f"Msgs: {fmt_int(msgs, 8)}  Interactions: {fmt_int(interactions, 8)}"
+                          f"  DB Parts: {fmt_int(parts, 8)}")
             else:
-                stats_str = f"~msgs: {msgs}  ~parts: {parts}"
-            print(f"       ID: {sid}  Updated: {updated}  {color_dim(stats_str)}")
+                counts = f"Msgs: {fmt_int(msgs, 8)}  DB Parts: {fmt_int(parts, 8)}"
+            print(f"  {idx:>3}. ID: {color_bold(sid)} in {proj_dir}. Name: {color_bold(f'{prefix}{title}')}")
+            print(f"       {color_dim(counts)}")
+            print(color_dim(
+                f"       First active: {first}, Last active: {last}, Cost: {fmt_cost(s['cost'])}, "
+                f"Tokens: {fmt_int(s['tokens_input'], 11)} in / {fmt_int(s['tokens_output'], 11)} out"
+                f" / {fmt_int(s['tokens_cache_read'], 11)} cache"
+            ))
         print()
         if _no_project_match:
             # Loud footer (the header scrolls off the top of a long list) placed

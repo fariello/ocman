@@ -1,6 +1,26 @@
 # Implementation Plan - Session/project listing UX, global-dir notice, disk reporting
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED (2026-07-11)
+
+Implemented: `fmt_int`/`fmt_cost` helpers (F); loud global-mapping NOTICE upgrading
+the former dim note (A); rich multi-line multi-project `list sessions` stanza
+sourcing counts from `db_get_session_stats`, honoring `has_interactions`, and
+coalescing nulls (B); `_per_project_disk_usage` extended with worktree + split
+tokens + cost, rendered as a vistab table keyed by directory (C); per-project
+active cost/tokens on `list projects` (both `list projects` and the no-project nav
+screen, per the "enrich both" decision) and comma-formatted totals in `db info`
+(D); Historical kept global-only (E, confirmed); WAL/SHM explanatory line in
+`db info` with the `checkpoint` command deferred to a future IPD (G). Tests added
+(`test_fmt_int_and_fmt_cost`, `test_global_mapping_notice_on_dir_scope`,
+`test_list_projects_shows_per_project_metrics`,
+`test_list_sessions_omits_interactions_when_absent`) plus updated characterization
+assertions; the minimal e2e/test DB fixtures now include the cost/token columns
+that the real schema always has. Docs updated (README, ARCHITECTURE, CHANGELOG).
+Full suite: 285 passed, 2 skipped.
+
+Deferred to its own IPD: the actual `ocman checkpoint` command
+(`PRAGMA wal_checkpoint(TRUNCATE)`), and per-project historical attribution
+(would require adding `project_id` to the deletion-metrics sidecar).
 
 Improves the no-project navigation screen, the multi-project `list sessions`
 format, and the `disk` / `list projects` per-project reporting, based on a real
