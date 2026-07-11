@@ -1,6 +1,6 @@
 # Implementation Plan - Multi-session compact UX + import-hygiene hardening
 
-Status: PROPOSED (not yet executed)
+Status: EXECUTED
 
 Follow-up to the executed gap-closure work
 (`.agents/plans/executed/20260710-gap-closure-ipd-01-05-followup.md`). Verification

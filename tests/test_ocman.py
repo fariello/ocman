@@ -1631,7 +1631,7 @@ import sys as _sys
 import shutil as _shutil
 
 
-_OCMAN_PY = str(Path(__file__).resolve().parent.parent / "ocman.py")
+_OCMAN_PY = str(Path(__file__).resolve().parent.parent / "ocman" / "cli.py")
 
 
 def _make_empty_db(tmp_path):
@@ -2619,6 +2619,8 @@ def test_compact_batch_mid_failure_and_estimates(temp_db, monkeypatch, capsys):
     assert "Success: 1  Failed: 1" in captured
     assert "Actual tokens (successes): input 100, output 50" in captured
     assert "Actual cost (successes):   $0.0003" in captured
+    assert "Session tail preview" not in captured
+    assert "Extracted turns" not in captured
 
 
 def test_check_egress_guards_interactive_and_yes(monkeypatch, capsys):
@@ -2737,4 +2739,48 @@ def test_compact_yes_with_secrets_refuses(temp_db, monkeypatch):
         assert exc.value.code != 0
     finally:
         sys.argv = orig
+
+
+def test_no_local_shutil_imports():
+    import ast
+    from pathlib import Path
+    
+    cli_path = Path(__file__).resolve().parent.parent / "ocman" / "cli.py"
+    tree = ast.parse(cli_path.read_text(encoding="utf-8"))
+    
+    local_shutil_imports = []
+    
+    class LocalImportVisitor(ast.NodeVisitor):
+        def __init__(self):
+            self.in_function = False
+            
+        def visit_FunctionDef(self, node):
+            old_in_function = self.in_function
+            self.in_function = True
+            self.generic_visit(node)
+            self.in_function = old_in_function
+            
+        def visit_AsyncFunctionDef(self, node):
+            old_in_function = self.in_function
+            self.in_function = True
+            self.generic_visit(node)
+            self.in_function = old_in_function
+            
+        def visit_Import(self, node):
+            if self.in_function:
+                for alias in node.names:
+                    if alias.name == "shutil":
+                        local_shutil_imports.append(node.lineno)
+            self.generic_visit(node)
+            
+        def visit_ImportFrom(self, node):
+            if self.in_function:
+                if node.module == "shutil":
+                    local_shutil_imports.append(node.lineno)
+            self.generic_visit(node)
+            
+    visitor = LocalImportVisitor()
+    visitor.visit(tree)
+    
+    assert not local_shutil_imports, f"Found local 'shutil' imports in ocman/cli.py at lines: {local_shutil_imports}"
 

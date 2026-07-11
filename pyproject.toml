@@ -29,19 +29,16 @@ ocman = "ocman:main"
 
 [tool.hatch.build.targets.wheel]
 packages = [
+    "ocman",
     "ocman_tui",
 ]
 
 [tool.hatch.build.targets.wheel.force-include]
-"ocman.py" = "ocman.py"
 "scripts/migrate_recovery_names.py" = "scripts/migrate_recovery_names.py"
 
-# NOTE (editable installs): hatchling honors the force-include above even in
-# editable mode, so `pip install -e .` copies ocman.py into site-packages in
-# addition to writing the redirect .pth. That copy shadows the .pth and goes
-# stale on every edit. After an editable install, remove the copy so the .pth
-# serves the working tree:  rm -f "$(python -c 'import site;print(site.getsitepackages()[0])')/ocman.py"
-# (see scripts/dev-editable-install.sh).
+# NOTE (editable installs): packaging as a clean directory layout (ocman package)
+# prevents editable mode from creating a stale shadow copy of ocman.py in site-packages.
+# The console script and working tree files will correctly track edits.
 [tool.hatch.build.targets.editable]
 dev-mode-dirs = ["."]
 

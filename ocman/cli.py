@@ -3399,8 +3399,6 @@ def _backup_if_exists(path: Path) -> Path | None:
             try:
                 path.rename(backup_path)
             except OSError:
-                # If rename fails, try copy + delete as fallback.
-                import shutil
                 try:
                     shutil.copy2(path, backup_path)
                     path.unlink()
@@ -3584,7 +3582,6 @@ def _backup_compacted_bu(path: Path) -> Path | None:
             try:
                 path.rename(bu)
             except OSError:
-                import shutil
                 try:
                     shutil.copy2(path, bu)
                     path.unlink()
@@ -3626,7 +3623,6 @@ def maybe_copy_compacted_to_project(
         pending.mkdir(parents=True, exist_ok=True)  # only under an existing .agents
         if dest.exists():
             _backup_compacted_bu(dest)
-        import shutil
         shutil.copy2(compacted_path, dest)
         print(f"{info_prefix()} Copied compacted file to project prompts: {dest}")
         return dest
@@ -3648,6 +3644,7 @@ def recover_from_export(
     output_transcript: Path | None = None,
     output_restart: Path | None = None,
     output_compact: Path | None = None,
+    quiet: bool = False,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -3794,8 +3791,9 @@ def recover_from_export(
         ),
     )
 
-    print(f"\nExtracted turns: {color_bold(str(len(selected_turns)))} Session tail preview:")
-    display_turn_preview(selected_turns)
+    if not quiet:
+        print(f"\nExtracted turns: {color_bold(str(len(selected_turns)))} Session tail preview:")
+        display_turn_preview(selected_turns)
 
     generated = [transcript_path, restart_path, compact_prompt_path]
     return generated
@@ -7215,7 +7213,6 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
 
         # Create backup directory and backup database file family
         from datetime import datetime
-        import shutil
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -7450,7 +7447,6 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
 
         # Create backup directory and backup database file family
         from datetime import datetime
-        import shutil
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -7567,7 +7563,6 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
 def db_create_rollback_backup() -> Path:
     """Create a temporary rollback backup of the database."""
     from datetime import datetime
-    import shutil
     backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups"
     try:
         backup_dir.mkdir(parents=True, exist_ok=True)
@@ -7589,7 +7584,6 @@ def db_create_rollback_backup() -> Path:
 
 def db_restore_rollback_backup(backup_file: Path) -> None:
     """Restore database from a rollback backup."""
-    import shutil
     try:
         if backup_file.exists():
             shutil.copy2(backup_file, OPENCODE_DB_PATH)
@@ -7615,7 +7609,6 @@ def move_directory_structure(old_path: Path, new_path: Path) -> None:
     Physically move a directory structure from old_path to new_path.
     Raises RecoveryError if validations fail.
     """
-    import shutil
     try:
         old_path_abs = old_path.expanduser().resolve()
         new_path_abs = new_path.expanduser().resolve()
@@ -9006,7 +8999,6 @@ def db_run_cleanup(
 
         # 4. Create database backup family
         from datetime import datetime
-        import shutil
         backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
         try:
             backup_dir.mkdir(parents=True, exist_ok=True)
@@ -10500,7 +10492,6 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
 
     deleted_count = 0
     reclaimed_space = 0
-    import shutil
     for item, mtime, size in backups_to_delete:
         try:
             if item.is_file():
@@ -10522,7 +10513,6 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
 
 def main() -> None:
     import sys
-    import shutil
     """
     Run the interactive opencode recovery workflow.
 
@@ -10828,7 +10818,6 @@ def main() -> None:
             if physical_moved:
                 print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
                 try:
-                    import shutil
                     shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
                 except Exception as re:
                     print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
@@ -10912,7 +10901,6 @@ def main() -> None:
             if physical_moved:
                 print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
                 try:
-                    import shutil
                     shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
                 except Exception as re:
                     print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
@@ -11789,6 +11777,7 @@ def main() -> None:
                     output_transcript=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "transcript"),
                     output_restart=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "restart"),
                     output_compact=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "prompt"),
+                    quiet=True,
                 )
 
                 compact_prompt_file = next(
