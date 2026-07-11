@@ -6571,9 +6571,7 @@ def redact_secrets(text: str, hits: list[SecretHit]) -> str:
 
         line_chars = list(line_content)
         for col_start, col_end, kind in reversed(merged):
-            # Sanitize kind to prevent re-triggering scanner keywords
-            safe_kind = kind.replace("api", "a_p_i").replace("key", "k_e_y").replace("secret", "sec_ret").replace("private", "pri_vate").replace("token", "to_ken").replace("password", "pass_word")
-            placeholder = f"<REDACTED:{safe_kind}>"
+            placeholder = "[REDACTED]"
             line_chars[col_start:col_end] = list(placeholder)
 
         new_lines.append("".join(line_chars) + ending)
@@ -10392,6 +10390,12 @@ def cli_restore(sources: list[str] | str) -> None:
         if temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
 
+    if rollback_file and rollback_file.exists():
+        try:
+            rollback_file.unlink()
+        except Exception:
+            pass
+
     print()
     print(color_green("System restoration completed successfully."))
     print(f"  Database restored:  {'Yes' if total_db_restored else 'No'}")
@@ -10518,6 +10522,7 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
 
 def main() -> None:
     import sys
+    import shutil
     """
     Run the interactive opencode recovery workflow.
 
@@ -10600,7 +10605,7 @@ def main() -> None:
     # Handle --restore early.
     if args.restore is not None:
         try:
-            cli_restore(source=args.restore)
+            cli_restore(args.restore)
         except Exception as e:
             die(str(e))
         return
@@ -11305,7 +11310,8 @@ def main() -> None:
                     session_id=s["id"],
                     dry_run=args.dry_run,
                     force=args.force,
-                    verbosity=verbosity
+                    verbosity=verbosity,
+                    confirm=False
                 )
                 print(color_green(f"[+] Deleted session {s['id']}"))
         except RecoveryError as e:

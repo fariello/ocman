@@ -1327,8 +1327,8 @@ class OrsessionApp(App):
                 self._safe_call_from_thread(status_lbl.update, f"Calling completions API ({model_info.name})...")
                 
                 # Execute API Call. call_compaction_api(model, prompt, verbosity) returns
-                # the response content as a str.
-                compacted_text = call_compaction_api(model_info, prompt_content, verbosity=0)
+                # the response content and usage metadata as a tuple (str, dict).
+                compacted_text, _usage_info = call_compaction_api(model_info, prompt_content, verbosity=0)
 
                 # Write compacted result file, using the CLI's canonical naming + configured
                 # output dir so CLI and TUI produce identical, migratable names.

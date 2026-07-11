@@ -2186,8 +2186,7 @@ def test_scan_and_redact_secrets():
     redacted = redact_secrets(text, hits)
     assert "AKIA1234567890123456" not in redacted
     assert "ghp_12345678901234567890" not in redacted
-    assert "<REDACTED:aws-access-k_e_y-id>" in redacted
-    assert "<REDACTED:github-to_ken>" in redacted
+    assert "[REDACTED]" in redacted
     
     # Re-scan yields no hits
     assert len(scan_for_secrets(redacted)) == 0
@@ -2199,7 +2198,7 @@ def test_redact_overlapping_secrets():
     hits = scan_for_secrets(text, mode="aggressive")
     
     redacted = redact_secrets(text, hits)
-    assert redacted.count("<REDACTED") == 1
+    assert redacted.count("[REDACTED]") == 1
     assert len(scan_for_secrets(redacted, mode="aggressive")) == 0
 
 
@@ -2442,4 +2441,300 @@ def test_import_new_session_id_refusal(tmp_path, temp_db):
         ocman.extract_and_import_session(bundle_file, target_project_id="proj1", new_session_id=True)
         
     assert "session-id rename applies to a single-session bundle only." in str(exc.value)
+
+
+def test_restore_cli_dispatch_success(tmp_path, temp_db, monkeypatch):
+    import ocman
+    import sys
+    import sqlite3
+    
+    config_file = tmp_path / "ocman_temp.toml"
+    orig_config_path = ocman.OCMAN_CONFIG_PATH
+    ocman.OCMAN_CONFIG_PATH = config_file
+    
+    backup_dir = tmp_path / "backups"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    
+    config_file.write_text(f"""
+db_path = {temp_db}
+history_path = {tmp_path / 'ocman_history.json'}
+default_backup_dir = {backup_dir}
+""", encoding="utf-8")
+    
+    try:
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/p1', 'P1')")
+        conn.commit()
+        conn.close()
+        
+        db_file_1 = tmp_path / "db1.db"
+        conn = sqlite3.connect(str(db_file_1))
+        cursor = conn.cursor()
+        cursor.execute("CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)")
+        cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj2', '/path/to/p2', 'P2')")
+        conn.commit()
+        conn.close()
+        
+        zip1 = tmp_path / "archive1.zip"
+        import zipfile
+        with zipfile.ZipFile(zip1, "w") as zf:
+            zf.write(db_file_1, "opencode.db")
+            
+        orig_argv = sys.argv
+        sys.argv = ["ocman", "--db", str(temp_db), "backup", "restore", str(zip1)]
+        try:
+            ocman.main()
+        finally:
+            sys.argv = orig_argv
+            
+        conn = sqlite3.connect(str(temp_db))
+        cursor = conn.cursor()
+        cursor.execute("SELECT id FROM project")
+        rows = cursor.fetchall()
+        assert len(rows) == 1
+        assert rows[0][0] == 'proj2'
+        conn.close()
+        
+        assert not any(f.name.startswith("rollback-before-restore-") for f in backup_dir.iterdir())
+        
+    finally:
+        ocman.OCMAN_CONFIG_PATH = orig_config_path
+
+
+def test_session_delete_single_confirm(temp_db, monkeypatch):
+    import ocman
+    import sys
+    import sqlite3
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/p1', 'P1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'S1', 1000, 2000, '/path/to/p1', '')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess2', 'proj1', 'S2', 1000, 2000, '/path/to/p1', '')
+    """)
+    conn.commit()
+    conn.close()
+    
+    confirm_calls = []
+    def fake_confirm(preview, *args, **kwargs):
+        if not kwargs.get("assume_yes", False):
+            confirm_calls.append(preview)
+        return True
+        
+    monkeypatch.setattr(ocman, "confirm_destructive", fake_confirm)
+    
+    orig_argv = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "delete", "sess1", "sess2"]
+    try:
+        ocman.main()
+    finally:
+        sys.argv = orig_argv
+        
+    assert len(confirm_calls) == 1
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM session")
+    assert len(cursor.fetchall()) == 0
+    conn.close()
+
+
+def test_compact_batch_mid_failure_and_estimates(temp_db, monkeypatch, capsys):
+    import sqlite3
+    import ocman
+    import sys
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess2', 'proj1', 'Sess 2', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    calls = []
+    def fake_call_api(model, prompt, verbosity):
+        if "sess1" in prompt or "Sess 1" in prompt:
+            calls.append("sess1")
+            return "compaction result", {"prompt_tokens": 100, "completion_tokens": 50, "cost": 0.0003}
+        else:
+            calls.append("sess2")
+            raise Exception("API simulation failure")
+
+    class FakeModel:
+        provider_id = "openai"
+        model_id = "gpt-4"
+        name = "GPT-4"
+        base_url = "https://api.openai.com/v1"
+        api_key = "test"
+        cost_input = 10.0
+        cost_output = 30.0
+        active = True
+        compatible = True
+
+    import subprocess
+    def fake_subprocess_run(cmd, *args, **kwargs):
+        stdout = kwargs.get("stdout")
+        if stdout:
+            stdout.write('{"turns": [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]}')
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocman.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(ocman, "call_compaction_api", fake_call_api)
+    monkeypatch.setattr(ocman, "load_opencode_config", lambda verbosity=0: {})
+    monkeypatch.setattr(ocman, "extract_models_from_config", lambda c: [FakeModel()])
+    monkeypatch.setattr(ocman, "resolve_model", lambda models, spec: FakeModel())
+    monkeypatch.setattr(ocman, "estimate_cost", lambda *a, **k: 0.001)
+    monkeypatch.setattr(ocman, "confirm_destructive", lambda *a, **k: True)
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact", "sess1", "sess2", "model:gpt-4", "--yes"]
+    try:
+        ocman.main()
+    finally:
+        sys.argv = orig
+
+    captured = capsys.readouterr().out
+    assert "sess1" in calls
+    assert "sess2" in calls
+    assert "Compaction success: sess1" in captured
+    assert "Error compacting session sess2: API simulation failure" in captured
+    assert "Compaction Batch Summary" in captured
+    assert "Success: 1  Failed: 1" in captured
+    assert "Actual tokens (successes): input 100, output 50" in captured
+    assert "Actual cost (successes):   $0.0003" in captured
+
+
+def test_check_egress_guards_interactive_and_yes(monkeypatch, capsys):
+    import builtins
+    from ocman import check_egress_guards, RecoveryError
+    import pytest
+    import sys
+    
+    text = "my aws key is AKIA1234567890123456 and token is ghp_12345678901234567890"
+    config = {"filter_secret_scan": "conservative"}
+    
+    with pytest.raises(RecoveryError) as exc:
+        check_egress_guards(
+            text,
+            source_desc="payload",
+            config=config,
+            force=False,
+            allow_secrets=False,
+            expunge_secrets=False,
+            interactive=False
+        )
+    assert "possible secret/PII detected" in str(exc.value)
+
+    user_inputs = ["s", "e"]
+    def fake_input_s_e(prompt):
+        return user_inputs.pop(0)
+    monkeypatch.setattr(builtins, "input", fake_input_s_e)
+    
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr(sys.stdin, "isatty", lambda: True)
+    
+    res = check_egress_guards(
+        text,
+        source_desc="payload",
+        config=config,
+        force=False,
+        allow_secrets=False,
+        expunge_secrets=False,
+        interactive=True
+    )
+    assert "[REDACTED]" in res
+    assert "AKIA" not in res
+    
+    user_inputs = ["r", "reveal", "a"]
+    def fake_input_reveal_abort(prompt):
+        return user_inputs.pop(0)
+    monkeypatch.setattr(builtins, "input", fake_input_reveal_abort)
+    
+    with pytest.raises(SystemExit) as exc:
+        check_egress_guards(
+            text,
+            source_desc="payload",
+            config=config,
+            force=False,
+            allow_secrets=False,
+            expunge_secrets=False,
+            interactive=True
+        )
+    assert exc.value.code == 1
+    
+    captured = capsys.readouterr().out
+    assert "Detections context:" in captured
+    assert "AKIA1234567890123456" in captured
+
+
+def test_compact_yes_with_secrets_refuses(temp_db, monkeypatch):
+    import sqlite3
+    import ocman
+    import sys
+    import pytest
+    
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM session")
+    cursor.execute("DELETE FROM project")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Sess 1', 1000, 2000, '/path/to/proj', '')
+    """)
+    conn.commit()
+    conn.close()
+
+    class FakeModel:
+        provider_id = "openai"
+        model_id = "gpt-4"
+        name = "GPT-4"
+        base_url = "https://api.openai.com/v1"
+        api_key = "test"
+        cost_input = 10.0
+        cost_output = 30.0
+        active = True
+        compatible = True
+
+    from ocman import SecretHit
+    monkeypatch.setattr(ocman, "scan_for_secrets", lambda text, mode="conservative": [
+        SecretHit(kind="aws-access-key-id", line=1, col_start=0, col_end=5)
+    ])
+    import subprocess
+    def fake_subprocess_run(cmd, *args, **kwargs):
+        stdout = kwargs.get("stdout")
+        if stdout:
+            stdout.write('{"turns": [{"role": "user", "content": "hello"}, {"role": "assistant", "content": "hi"}]}')
+        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocman.subprocess, "run", fake_subprocess_run)
+    monkeypatch.setattr(ocman, "load_opencode_config", lambda verbosity=0: {})
+    monkeypatch.setattr(ocman, "extract_models_from_config", lambda c: [FakeModel()])
+    monkeypatch.setattr(ocman, "resolve_model", lambda models, spec: FakeModel())
+
+    orig = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "compact", "sess1", "model:gpt-4", "--yes"]
+    try:
+        with pytest.raises(SystemExit) as exc:
+            ocman.main()
+        assert exc.value.code != 0
+    finally:
+        sys.argv = orig
 

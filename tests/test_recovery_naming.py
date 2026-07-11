@@ -71,7 +71,7 @@ def test_parse_unparseable_timestamp_datetime_none():
 
 def test_run_compaction_uses_local_canonical(tmp_path, monkeypatch):
     """run_compaction writes a canonical local-time .compacted.md (no UTC 'opencode-' prefix)."""
-    monkeypatch.setattr(ocman, "call_compaction_api", lambda **k: "# out")
+    monkeypatch.setattr(ocman, "call_compaction_api", lambda **k: ("# out", None))
     class M:
         provider_id = "p"; model_id = "m"; name = "n"; base_url = "https://x"; api_key = "k"
     monkeypatch.setattr(ocman, "load_opencode_config", lambda verbosity=0: {})
@@ -82,7 +82,7 @@ def test_run_compaction_uses_local_canonical(tmp_path, monkeypatch):
     prompt = tmp_path / "p.prompt.md"
     prompt.write_text("prompt", encoding="utf-8")
     s = ocman.SessionInfo(session_id="ses_x", title="T", created="", updated="", raw={})
-    out = ocman.run_compaction(prompt, tmp_path, s, "", 0)
+    out, _, _ = ocman.run_compaction(prompt, tmp_path, s, "", 0)
     assert out is not None
     assert not out.name.startswith("opencode-")
     sid, dt, kind = parse_recovery_name(out)

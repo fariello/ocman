@@ -161,7 +161,7 @@ def test_restore_rollback_safety(temp_env, monkeypatch):
     monkeypatch.setattr(ocman.shutil, "copy2", mock_copy_fail)
     
     # 3. Restoring should raise RecoveryError due to simulated copy failure
-    with pytest.raises(RecoveryError, match="Restoration failed and rolled back"):
+    with pytest.raises(RecoveryError, match=r"Restoration failed.*rolled back"):
         cli_restore(str(dest_zip))
         
     # 4. Ensure original state is intact (rollback succeeded)

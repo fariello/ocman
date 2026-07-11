@@ -20,7 +20,7 @@ def mock_llm(monkeypatch):
 
     def fake_api(model, prompt, verbosity):
         captured["prompt"] = prompt
-        return "# Filtered\nkept in-scope content"
+        return "# Filtered\nkept in-scope content", None
 
     monkeypatch.setattr(ocman, "call_compaction_api", fake_api)
     monkeypatch.setattr(ocman, "load_opencode_config", lambda verbosity=0: {})

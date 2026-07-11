@@ -143,11 +143,11 @@ def _model(base_url="https://api.example.com/v1"):
 
 
 def test_call_compaction_api_success_returns_content_string(monkeypatch):
-    payload = {"choices": [{"message": {"content": "COMPACTED"}}], "usage": {}}
+    payload = {"choices": [{"message": {"content": "COMPACTED"}}], "usage": {"prompt_tokens": 10, "completion_tokens": 5}}
     monkeypatch.setattr(ocman.urllib.request, "urlopen", lambda *a, **k: _FakeResponse(payload))
-    result = call_compaction_api(_model(), "prompt", verbosity=0)
+    result, usage = call_compaction_api(_model(), "prompt", verbosity=0)
     assert result == "COMPACTED"
-    assert isinstance(result, str)  # pins the contract the TUI caller violated
+    assert usage == {"prompt_tokens": 10, "completion_tokens": 5, "cost": 0.00002}
 
 
 def test_call_compaction_api_refuses_non_https_non_localhost():
