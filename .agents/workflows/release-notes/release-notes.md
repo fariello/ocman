@@ -24,10 +24,12 @@ publishing.
    existing CHANGELOG, and DECISIONS. Group changes into: Added, Changed, Fixed,
    Deprecated, Removed, Security (Keep a Changelog style), plus Breaking changes called out
    prominently.
-3. **Decide the version bump.** Follow the repo's existing scheme (detect it: SemVer,
-   CalVer, or the framework's `YYYYMMDD-NN`). Recommend the bump from the change content
-   (breaking -> major; features -> minor; fixes -> patch, for SemVer) and explain why.
-   Confirm with the user before applying.
+3. **Decide the version bump.** Follow the repo's existing scheme (detect it: SemVer is
+   the default and is what this framework itself uses via git tags; also handle CalVer or
+   any other convention already in use). Recommend the bump from the change content
+   (breaking -> major; features -> minor; fixes -> patch, for SemVer) and explain why. For
+   a tag-driven repo the "bump" is choosing the next tag. Confirm with the user before
+   applying.
 4. **Draft the notes** in two registers:
    - **CHANGELOG entry:** concise, categorized, for developers.
    - **Release notes:** a short human narrative for users - highlights, breaking changes

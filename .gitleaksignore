@@ -1,0 +1,9 @@
+# gitleaks false-positive baseline (created by agent-workflows).
+#
+# gitleaks ignores findings by FINGERPRINT, printed in its report as:
+#   <commit-sha>:<file-path>:<rule-id>:<line-number>
+# Paste a confirmed false positive's fingerprint on its own line to suppress it.
+# Do NOT suppress a real secret: rotate it, then purge it from history.
+#
+# This baseline starts empty. Example (commented out):
+# 0a1b2c3d4e5f6a7b8c9d:tests/fixtures/sample.env:generic-api-key:12

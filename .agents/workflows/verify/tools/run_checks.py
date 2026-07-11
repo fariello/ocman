@@ -40,8 +40,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shlex
+import shutil
 import subprocess
 import sys
 import time
@@ -375,9 +377,18 @@ def run_check(check: Check, root: Path, timeout: int) -> Result:
     """Execute one eligible check and capture evidence."""
 
     start = time.monotonic()
+    cmd = check.command
+    if os.name == "nt" and cmd:
+        resolved = shutil.which(cmd[0])
+        if resolved:
+            if resolved.lower().endswith((".cmd", ".bat")):
+                cmd = ["cmd.exe", "/c", resolved] + cmd[1:]
+            else:
+                cmd = [resolved] + cmd[1:]
+
     try:
         proc = subprocess.run(
-            check.command,
+            cmd,
             cwd=str(root),
             capture_output=True,
             text=True,

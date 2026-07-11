@@ -460,7 +460,7 @@ def _framework_version() -> str:
     """Return the agent-workflows framework version this tool ships with.
 
     The VERSION file lives at the framework root (.agents/workflows/VERSION); this script
-    is at .agents/workflows/assess/tools/scan_secrets.py, so it is two directories up.
+    is at .agents/workflows/assess/tools/scan_secrets.py, so it is three directories up.
     Returns "unknown" if the file is absent (e.g. run standalone outside the framework).
     """
 

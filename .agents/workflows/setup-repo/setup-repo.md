@@ -48,7 +48,8 @@ Before proposing anything, determine and briefly report:
 2. Project type / stack (languages, package manager, frameworks, whether it has an app /
    library / CLI / UI / just docs). This tailors the .gitignore, CI, and hygiene steps.
 3. What is already present: `.agents/workflows/`, `.agents/plans/` (and its
-   `pending/` + terminal `executed/` or `done/` subdirs), `.github/workflows/`,
+   `pending/` + `executed/` + `superseded/` + `not-executed/` + `reusable/` subdirs;
+   `done/` is an accepted alias for `executed/`), `.github/workflows/`,
    `.pre-commit-config.yaml`, `.gitignore`, `.gitleaksignore`, `README`, `CONTRIBUTING`,
    `AGENTS.md` (and whether it documents the plan lifecycle), `LICENSE`, `.editorconfig`,
    lockfiles, `GUIDING_PRINCIPLES.md`.
@@ -85,18 +86,54 @@ lifecycle. Establish it so any coding agent working in the repo follows it, not 
 these workflows:
 
 - **Directories:** discover the existing convention and respect it; otherwise offer to
-  create `.agents/plans/pending/` (new/awaiting-approval IPDs) and
-  `.agents/plans/executed/` (completed IPDs) - each with a committed `.gitkeep` so the
-  empty dirs are tracked. If the repo already uses a terminal dir named `done/` (or
-  another), keep it - do not rename; just record which is canonical for this repo.
+  create the canonical five-state lifecycle, each with a committed `.gitkeep` so the empty
+  dirs are tracked:
+  - `.agents/plans/pending/` - new/awaiting-approval IPDs.
+  - `.agents/plans/executed/` - terminal; implemented, verified, and tested.
+  - `.agents/plans/superseded/` - replaced by a better/subsequent plan; kept for the
+    record, not the live path.
+  - `.agents/plans/not-executed/` - deliberately decided against, no replacement
+    (explored/rejected or overtaken by events).
+  - `.agents/plans/reusable/` - recurring plans meant to be re-run repeatedly (e.g. a
+    periodic audit or rollout runbook); they stay here rather than moving on after a run.
+
+  Plan files are named `YYYYMMDD-HHMM-NN-<slug>.md` (UTC date + time; `NN` a two-digit
+  per-minute sequence, `00` reserved by convention for an orchestrator plan and `01+` for
+  ordinary/child plans; `<slug>` lowercase kebab-case). If the repo already uses a terminal
+  dir named `done/` (or another), keep it - do not rename; just record which is canonical
+  for this repo.
 - **Documented contract (this is the part that makes agents pick it up):** offer to add
   a short, marker-delimited "Plan/IPD lifecycle" note to `AGENTS.md` (and/or
   `CONTRIBUTING.md`) stating: proposals are dated IPDs in `.agents/plans/pending/`; they
-  are reviewed (optionally via `plan-review`), approved by a human, executed, then moved
-  to the terminal dir. Marker-delimited so re-running updates it in place without
-  duplicating (same discipline as the AGENTS workflow pointer).
+  are reviewed (optionally via `plan-review`), approved by a human, then EITHER executed
+  (moved to `executed/` once implemented+verified), retired to `superseded/` (replaced) or
+  `not-executed/` (deliberately not run) with a `RETIRED YYYY-MM-DD: <reason>; superseded
+  by <path/commit>` header + `git mv` (never a silent delete; never file an un-run plan in
+  `executed/`), or kept in `reusable/` if recurring. Marker-delimited so re-running updates
+  it in place without duplicating (same discipline as the AGENTS workflow pointer).
 - **Conformance:** if the dirs exist but the contract is undocumented, that is
   "partial" - offer to add the doc. If both exist, "conformant" - skip.
+- **Filename normalization:** run the deterministic checker
+  `python3 .agents/workflows/setup-repo/tools/normalize_plan_names.py --repo .` (check mode).
+  By default it scans `.agents/plans/` and `.agents/prompts/` and lists any file not matching
+  `YYYYMMDD-HHMM-NN-<slug>.md` with its proposed `old -> new` name or a status. The date is the
+  file's CREATION proxy: a date already in the name wins; otherwise the EARLIEST of its
+  git-first-commit / birthtime / mtime (UTC). Statuses to relay to the user:
+  - `to-rename` - ready; the tool will `git mv` it (staged, not committed).
+  - `imported?` - the chosen date disagrees with the git-commit date by more than a day (a copied/
+    imported file); held unless you pass `--assume-dates`. Confirm the date with the user first.
+  - `non-numeric` - has no leading date; renamed only with `--rename-non-numeric`.
+  - `nested` - a `*.md` below (not directly in) a lifecycle dir, e.g. a plan's reference inputs;
+    left alone unless `--include-nested`. Usually you should NOT rename these.
+  - `excluded` - matched a `--exclude` glob or the built-in `README.md` default.
+  Also available: `--area <name>` (repeatable; scan exactly those top-level `.agents/` areas),
+  `--all` (every area under `.agents/`, never `workflows/`), `--exclude PATTERN`,
+  `--no-default-excludes`. If any files are nonconforming, SHOW the user the full preview and ASK
+  whether to normalize (and, for `imported?`/non-numeric/nested items, whether to pass
+  `--assume-dates`/`--rename-non-numeric`/`--include-nested`). On yes, re-run with `--apply` (+ the
+  agreed flags); it performs history-preserving `git mv`, staged NOT committed - remind the user to
+  review and commit. On no, leave everything and record it as a noted gap. Classify: conformant /
+  files-need-normalizing / not-applicable.
 
 ### 2. Secret scanning (CI + local hook)
 

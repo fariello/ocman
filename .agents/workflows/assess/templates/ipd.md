@@ -73,6 +73,11 @@ and it is NOT auto-executed. Recommended next steps:
 
 1. Review this IPD (optionally run the `plan-review` workflow to harden it).
 2. On approval, execute the ordered changes, run the validation, and sync specs/docs.
-3. Only then move this IPD from the pending dir to the terminal dir per the project's
-   lifecycle convention (canonical: `.agents/plans/pending/` -> `.agents/plans/executed/`;
-   a repo already using `done/` keeps `done/`).
+3. Only then move this IPD from the pending dir to the right terminal dir per the
+   project's lifecycle convention (canonical: `.agents/plans/pending/` ->
+   `.agents/plans/executed/` when implemented+verified; `superseded/` if replaced by a
+   better plan or `not-executed/` if deliberately not run - retire with a
+   `RETIRED YYYY-MM-DD: <reason>; superseded by <path/commit>` header + `git mv`, never a
+   delete; recurring plans live in `.agents/plans/reusable/`; a repo already using `done/`
+   keeps `done/`). Plan files are named `YYYYMMDD-HHMM-NN-<slug>.md` (UTC date+time; `NN`
+   per-minute two-digit sequence, `00` reserved for an orchestrator; lowercase-kebab slug).
