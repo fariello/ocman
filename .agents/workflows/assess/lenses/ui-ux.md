@@ -13,13 +13,17 @@ without crippling experts), with the stakeholder view on whether it serves its g
 ## Rubric
 
 - **Flows & task completion:** can a user accomplish core tasks with minimal steps and
-  no dead ends? Are common tasks fast and obvious; rare ones discoverable?
+  no dead ends? Are common tasks fast and obvious; rare ones discoverable? Every
+  unnecessary action is a defect (friction is a defect, not a nicety).
 - **Information architecture:** logical grouping, navigation, naming that matches the
   user's mental model (not the implementation's).
 - **Defaults:** sensible, safe defaults; the common case requires the least work.
+  Do not require the user to select the only available option. Prefill known/likely
+  values when safe; validate early; PRESERVE entered data after an error.
 - **Feedback & states:** clear loading/empty/success/error states; never silent
   failure; progress for slow operations; confirmation for destructive actions; undo
-  where feasible.
+  where feasible. Encourage automatic progression for safe intermediate steps, but
+  never auto-commit a consequential final action.
 - **Consistency:** consistent terminology, layout, controls, and interaction patterns;
   no synonyms for the same concept.
 - **Error prevention & recovery:** hard to make mistakes; easy to recover; validation

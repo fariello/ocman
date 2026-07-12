@@ -61,7 +61,7 @@ Unless the user opts out, save a short session summary to:
 workflow-artifacts/advise-<persona>/<RUN_ID>/
 ```
 
-`<RUN_ID>` is a UTC timestamp `YYYYMMDD-HHMMSS`. Write `session-summary.md`:
+`<RUN_ID>` is a local-time timestamp `YYYYMMDD-HHMMSS`. Write `session-summary.md`:
 
 - which persona and what artifact/context was examined;
 - the key questions raised and the author's answers/decisions;

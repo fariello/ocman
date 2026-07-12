@@ -22,7 +22,7 @@ whether the structure supports future goals.
 - **Configurability over hardcoding:** business rules/thresholds/routing in config or
   data, not scattered constants - where the domain warrants it.
 - **State & data flow:** where state lives; single source of truth; avoidable shared
-  mutable state; clear data flow.
+  mutable state; clear data flow. (Cross-reference data-modeling lens.)
 - **Boundaries:** internal vs. public surface; what is encapsulated; stable contracts.
 - **Consistency:** consistent patterns across the codebase; one way to do a thing.
 - **KISS / anti-bloat (Complexity axis):** flag accidental complexity, unnecessary

@@ -1,235 +1,425 @@
 # Plan Review (pre-execution plan / IPD reviewer)
+Treat this file as the controlling instruction for reviewing a proposed plan
+before implementation, then improving that plan in place.
 
-Treat this file as the controlling instruction for reviewing a **proposed plan
-before any code is written**, and then **improving that plan in place** so it is
-materially safer and more likely to produce a reliable, usable, secure, intuitive,
-and principle-aligned outcome.
-
-This is the plan-time sibling of the release review. Where the release review reviews
-finished code before shipping, this reviews a written implementation plan before
-building. Catching a missing transaction boundary, an authorization gap, or an
-over-scoped feature on paper is far cheaper than catching it in code.
-
-It shares this framework's policies rather than redefining them (the release-review
-runbook is its sibling directory):
-
-- **Fix decisions are governed by `../release-review/fix-decision-policy.md`** (the
-  Fix Bar): fix by default; defer only when the *Remediation Risk* of the fix itself
-  is Medium-High or higher (complexity / usability / security / functionality).
-  Severity is for reporting, not for deciding. Effort/time/token cost are never a
-  reason to defer.
-- **Review through the eight personas** defined in
-  `../release-review/00-run-protocol.md` (QA/QC, testing/regression, UI/UX, architect,
-  software engineer, power user, novice, stakeholder), led here by the architect,
-  software-engineer, security, and stakeholder views.
-
-If those files are not present (for example this prompt was copied on its own), apply
-the same rules from memory: fix-by-default gated by Remediation Risk, and
-multi-perspective review.
-
----
-
-## What this command does NOT do
-
-You review and revise **planning documents only**. You never change application code,
-tests, or configuration from this command. Producing or editing the plan is not
+Review planning documents only. Do not change code, tests, runtime
+configuration, infrastructure, or production data. Editing a plan is not
 executing it.
 
----
+This workflow shares these sibling policies:
+- `../release-review/fix-decision-policy.md`
+- `../release-review/00-run-protocol.md`
 
-## Step 0: Discover the project's conventions (do not hardcode)
-
-Before reviewing, discover and read what the project actually uses; do not assume any
-particular filenames or stack:
-
-1. **Guiding principles:** `GUIDING_PRINCIPLES.md`, `PRINCIPLES.md`, a "Principles"
-   section in `README.md`/`CONTRIBUTING.md`, or whatever `AGENTS.md` names. The plan
-   must conform to these. If none exist, use the universal fallback principles in
-   `../release-review/00-run-protocol.md` (intuitive/self-documenting,
-   general-case/configurable, KISS, honest docs) and record that you did so.
-2. **Agent/contributor contract:** `AGENTS.md`, `CONTRIBUTING.md`, or equivalent, for
-   required plan sections, spec-sync obligations, and lifecycle rules.
-3. **Plan location and format:** where plans live (e.g. `.agents/plans/`, `docs/rfcs/`,
-   ADRs, a `PLAN.md`) and the required structure (goal, target files, proposed
-   changes, architecture/drivers, validation steps). Review the plan against its own
-   contract.
-4. **Project type, stack, and production database/runtime**, so the rubric below is
-   applied to the real target (e.g. the production DB dialect, not just the test one).
-5. **Domain invariants:** the business/correctness truths this project must never
-   violate. Discover them from specs, principles, existing code, and the conversation;
-   do not assume a fixed domain. These become anti-regression check targets.
-
-If the plan proposes user-visible behavior changes, confirm it also plans to sync the
-project's specification/docs (whatever the project uses, e.g. a functional spec or
-`README`); if that is missing, add it.
+If either is absent, apply these rules from memory:
+- Fix findings by default.
+- Defer only when the fix itself has Medium-High or High Remediation Risk on
+  complexity, usability, security, or functionality.
+- Severity is for reporting only.
+- Effort, time, cost, and tokens never justify deferral.
+- Review through QA/QC, testing/regression, UI/UX, architect, software
+  engineer, power user, novice, and stakeholder views.
+- Apply security as a mandatory cross-cutting lens.
 
 ---
-
-## Operating mode (review AND revise)
-
-1. **Review** the target plan(s) against the rubric below. Read the actual referenced
-   source files (`file:line`) to verify the plan's claims rather than trusting its
-   self-description. (This is the same "re-open the evidence" discipline as
-   `release-review` Section 7.)
-2. **Record every finding**, however small: bug, gap, ambiguity, missing-but-required
-   capability, over-scoped/gold-plated feature, or polish. Assign each a **Severity**
-   (for reporting/ordering only) and a **Remediation Risk**, then apply the Fix Bar.
-3. **Revise the plan in place, fix by default.** Make surgical, well-anchored edits
-   that preserve the plan's existing valid content and its required structure. Add
-   guardrails, missing sections, and specificity; do not weaken or delete valid
-   content. For over-scoped findings, the "fix" is to recommend removal/deferral
-   (itself low Remediation Risk, so do it). When a finding spans multiple plans, fix
-   it in the owning plan and cross-reference the others.
-4. For any finding you do **not** fix, record it in the plan's Open Questions (or
-   equivalent) with the explicit Remediation-Risk justification: which axis
-   (complexity / usability / security / functionality) and why it is Medium-High or
-   higher. "Too much effort/time" is never a valid reason to defer.
-5. **Report back** using the format below: the verdict, the findings table, and the
-   exact edits made to each plan, with enough detail for a human to audit. Do not mark
-   the plan as executed; reviewing/revising is not executing.
+## Memory kernel
+Re-read this before each step and before the final report:
+1. Review plans only.
+2. Verify claims from repository evidence.
+3. Fix by default. Severity never decides.
+4. Resolve open questions interactively when possible.
+5. Never guess a human decision.
+6. Preserve valid plan content and required structure.
+7. Make at most two local commits. Never push.
+8. The reviewed/not-reviewed enumeration is the literal final output.
+9. A gate or interactive question MUST NOT assert or imply the verdict it precedes (readiness, approval, GO); it states what was found and asks what to do. The verdict is formed only from the reviewed work's evidence.
 
 ---
+## Step 0: Scope and project contract
+Complete this before judging or editing a plan.
 
-## Cross-cutting engineering rubric (applies to every plan)
+### 0.1 Build the review-scope ledger
+List every plan explicitly requested or selected by the project workflow.
 
-For each item, verify the plan addresses it **or** explicitly and correctly scopes it
-out (and does not regress it). "Not applicable" must be justified, never assumed.
-Apply only the items relevant to the project type discovered in Step 0.
+Classify each as:
+- `ELIGIBLE` - review it.
+- `NOT REVIEWED` - skip it, with the exact reason.
 
-### A. Data-layer correctness and integrity
+Use project eligibility and status rules when present. Otherwise review an
+explicitly requested plan unless it is missing, unreadable, malformed beyond
+review, or not a planning document.
 
-- **Atomicity:** any operation with multiple dependent writes is wrapped in a real
-  transaction with rollback. Flag no-op or sequential-callback patterns that can leave
-  orphaned partial state.
-- **Idempotency and single-response:** request handlers cannot double-respond or
-  double-apply; retries are idempotent.
-- **Dialect/parameter safety:** parameterization is correct on the *production* data
-  store, not just the test one.
-- **Migrations:** schema changes are versioned and reversible (expand/contract for
-  zero-downtime where relevant); hot/queried columns are indexed.
-- **Audit/immutability:** if audit or append-only data is touched, the append is
-  concurrency-safe and queried by an indexed key.
+A file referenced only as evidence is not in scope unless explicitly added.
 
-### B. Security baseline
+The final enumeration MUST contain every ledger item and no incidental file.
 
-- **Authentication:** no trust of unverified input for identity; no defaulting to a
-  privileged user; mocks for an MVP step are explicitly gated to non-production.
-- **Authorization:** default-deny; route-level and object/row-level checks; tenancy
-  scoping so no query crosses tenants; reconsider blanket "admin bypasses everything".
-- **Secrets:** none hardcoded; via a secrets manager; fail-fast if absent in prod.
-- **Inputs/uploads:** validation at the boundary (reject unknown fields); upload
-  type/size/scan hardening; rate limiting that works across a stateless fleet; safe
-  error envelopes (no internals/stack traces to clients).
+### 0.2 Discover controlling instructions
+Read the applicable repository and directory-scoped instructions, guiding
+principles, contributor rules, plan lifecycle, specification obligations, plan
+templates, and the target plan.
 
-### C. Scalability seams ("architect the seam, provision for today")
+Do not assume filenames.
 
-- **Stateless tier:** no request-path local state that assumes a single node.
-- **Externalized state:** connection pooling; read/write split where read-heavy;
-  partition/tenancy key designed in.
-- **Async side effects:** notifications, integration sync, scans, report precompute
-  moved off the request path onto a durable, retryable, idempotent queue with a
-  dead-letter path.
-- **Cache correctness:** hot reads cached with explicit invalidation;
-  correctness-critical derived status is a strong read and synchronously invalidated,
-  so stale data never shows a wrong "OK".
-- **No anti-scale constants:** no hardcoded "today"/clock; clock is injectable.
+If instructions conflict, use the project's precedence rules. If none resolve
+the conflict, record an open question. Do not silently choose.
 
-### D. Anti-regression / preserve invariants
+### 0.3 Discover the plan contract and implementation context
+Determine:
+- Plan location, structure, front matter, status lifecycle, approval rules,
+  traceability, workflow history, and commit rules.
+- Project type, languages, frameworks, production runtime and data store,
+  deployment model, integrations, security model, and test stack.
+- Domain invariants from specifications, principles, ADRs, accepted plans,
+  code, tests, constraints, and authoritative conversation context.
 
-- If the plan refactors, moves, or rewrites code that enforces business/correctness
-  truth, it must require **characterization/regression tests that pin current correct
-  behavior before the change**, green after. Name the at-risk invariants (from Step 0)
-  and route each to a test. Treat behavior diffs as blockers unless explicitly
-  approved as bug fixes.
+Apply the rubric to the real production target.
 
-### E. Observability and operability
+If the plan changes behavior, policy, workflow, API, authorization, state, or
+domain rules, require specification and documentation synchronization.
 
-- Structured logs with a correlation ID propagated across request/worker/integration;
-  metrics for new paths; meaningful health/readiness; alerts for new failure modes,
-  each mapped to a runbook.
-
-### F. Testing, verification, and seeding
-
-- Concrete unit + integration tests for happy path, validation errors, the
-  authorization matrix (role x resource, including cross-tenant denial), constraints,
-  and failure/rollback paths. Integration tests run against the production-equivalent
-  data store to catch dialect drift. Accessibility and, where relevant,
-  contract/e2e/load coverage. Test seed/fixtures retain realistic edge-case scenarios.
-
-### G. KISS and cost discipline
-
-- New dependencies, services, or abstraction layers must be justified (why necessary,
-  why this one). Prefer the simplest correct design and managed primitives. Flag
-  premature complexity AND missing seams. This is the Fix Bar's complexity axis acting
-  as the counterweight to fix-by-default.
-
-### H. Guiding-principles and UX conformance
-
-- Verify the plan is checkable against each of the project's stated principles
-  (Step 0) and does not regress any. Where principles cover usability/accessibility,
-  require concrete, verifiable targets (e.g. contrast ratios, keyboard operability,
-  loading/empty/error states, no silent failure), not vague claims.
-
-### I. Domain invariants (project-specific)
-
-- For each domain invariant discovered in Step 0, verify the plan preserves it and
-  routes it to a test. Do not silently change a currently-correct domain outcome while
-  "fixing" logic.
+If no project principles exist, use these fallbacks and record that choice:
+- Intuitive and self-documenting.
+- General-case and configurable.
+- KISS.
+- Honest documentation.
 
 ---
+## Step 1: Evidence and pre-review snapshot
+For each eligible plan:
+1. Read the whole plan.
+2. List material files, requirements, issues, ADRs, APIs, schemas, tests, and
+   behaviors it relies on.
+3. Open the referenced evidence.
+4. Verify material claims with `path:line` evidence.
+5. Record missing, stale, contradictory, or inaccessible evidence.
+6. Do not infer unsupported implementation details.
 
-## Severity (reporting and ordering only; does not gate the fix decision)
+If missing evidence prevents reliable review, file a finding or open question.
 
-- **BLOCKER** - will corrupt/lose data, breach security, crash on a normal path,
-  silently break an existing rule/invariant, or violate a core principle.
-- **HIGH** - materially harms reliability, scalability headroom, accessibility,
-  maintainability, or omits a required test/guardrail on an exercised path.
-- **MEDIUM** - a real gap or ambiguity on a non-critical path or under unlikely
-  conditions.
-- **LOW** - polish, wording, nice-to-have.
+### Pre-review commit
+Before editing:
+1. Inspect repository status.
+2. Isolate the eligible plan files.
+3. If any target plan is untracked or modified, commit those plan files
+   verbatim as:
 
-Because the Fix Bar (not severity) decides whether to act, LOW and MEDIUM findings are
-fixed by default too; they are left undone only if their *fix* clears the Medium-High
-Remediation-Risk bar.
+   `plan: pre-review snapshot of <scope>`
 
-**Scope axis (always check):** OVER-SCOPE (untraceable to a stated driver/requirement;
-default action: recommend removal/deferral) and UNDER-SCOPE (a required capability the
-plan omits; default action: add it).
+4. If all target plans are committed and unchanged, skip the snapshot.
+
+Never stage unrelated files. Never amend, reset, rebase, discard user changes,
+or push.
+
+If Git is unavailable or a commit fails, continue only when safe and record the
+reason. Do not bypass hooks or safety controls unless project rules permit it.
 
 ---
+## Step 2: Review and revise
+### 2.1 Apply all required views
+Review against:
+- The engineering rubric below.
+- Project principles.
+- Domain invariants.
+- Plan goals and acceptance criteria.
+- The eight personas.
+- The security lens.
 
-## Verdict (state one explicitly)
+### 2.2 Record findings
+Record each distinct actionable issue. Combine duplicate symptoms under one
+root cause. Do not invent findings.
 
-- `APPROVE` - no findings remain that should have been fixed; any deferrals are
-  justified by Medium-High-or-higher Remediation Risk.
-- `APPROVE WITH REVISIONS APPLIED` - you found and fixed issues; summarize them.
-- `REJECT - NEEDS REPLAN` - the fundamental approach is unsound and cannot be patched
-  with edits; explain why and what a sounder approach looks like.
+Classify each finding with:
+- **Severity:** `BLOCKER`, `HIGH`, `MEDIUM`, or `LOW`.
+- **Scope:** `IN-SCOPE`, `OVER-SCOPE`, or `UNDER-SCOPE`.
+- **Area:** rubric or project rule.
+- **Evidence:** `path:line`.
+- **Remediation Risk:** complexity, usability, security, functionality, and
+  overall.
+- **Decision:** `FIXED`, `DEFERRED`, `OPEN`, or `REPLAN`.
+
+### 2.3 Remediation Risk and Fix Bar
+Overall Remediation Risk is the highest applicable axis rating.
+
+- **Low:** Local, understood, easy to verify, unlikely to harm behavior.
+- **Medium:** Bounded uncertainty with a clear verification path.
+- **Medium-High:** Material chance of significant complexity, usability harm,
+  security weakness, or functional regression.
+- **High:** Likely major harm, a foundational unresolved decision, or no safe
+  fix from available evidence.
+
+Fix every finding unless overall Remediation Risk is Medium-High or High.
+
+Every deferral MUST state:
+- Axis or axes.
+- Why the risk reaches the threshold.
+- Required decision or evidence.
+- Consequence of leaving it unresolved.
+
+Effort, time, cost, and tokens are never valid deferral reasons.
+
+For over-scope, the default fix is removal or explicit deferral from the plan.
+That is normally Low risk.
+
+### 2.4 Revise the plan in place
+Make surgical edits:
+- Preserve valid content and required structure.
+- Replace ambiguity instead of appending duplicate prose.
+- Add missing guardrails, sequencing, acceptance criteria, tests, validation,
+  specification updates, and traceability.
+- Remove unsupported or gold-plated scope.
+- Keep the plan concise and executable.
+- Do not weaken valid requirements.
+
+When a finding spans plans, fix it in the owning plan and cross-reference it
+from dependent plans.
+
+If the approach is fundamentally unsound and cannot be repaired with bounded
+edits, mark `REPLAN`, explain why, and describe the minimum shape of a sound
+replacement. Do not invent decisions that require the human.
 
 ---
+## Step 3: Resolve open questions
+Complete this before the final report.
 
-## Required report format
+### 3.1 Build the question set
+Collect and deduplicate:
+- Pre-existing open questions.
+- Questions created by findings.
+- Instruction conflicts.
+- Decisions needed to repair or replan.
 
+Resolve questions from authoritative evidence first. Cite the source. Do not
+ask the human what the repository already answers.
+
+Mark which questions block correctness, security, scope, architecture, or GO.
+
+### 3.2 Ask interactively
+In an interactive run, ask one to three related questions per prompt.
+
+For each question provide:
+1. **Decision needed**
+2. **Context**
+3. **Why it matters**
+4. **Options**
+5. **Trade-offs**
+6. **Recommendation**
+
+Use plain language. Define acronyms and identifiers. Ask and wait before the
+final report. Do not guess or bury the recommendation.
+
+After each answer:
+1. Record it in the owning plan.
+2. Resolve or rewrite the open question.
+3. Apply resulting edits.
+4. Re-check affected rubric areas.
+5. Continue until no resolvable question remains.
+
+### 3.3 Non-interactive exception
+A run is non-interactive only when the environment explicitly has no human
+interaction channel. A delayed reply is not non-interactive.
+
+In a genuinely non-interactive or interrupted run:
+- Leave questions explicitly `OPEN`.
+- State the required decision.
+- Use verdict `REVIEWED - OPEN QUESTIONS`.
+- Recommend `NO-GO`.
+
+---
+## Step 4: Finalize state and commit
+For each reviewed plan confirm:
+- Every finding is `FIXED`, `DEFERRED`, `OPEN`, or `REPLAN`.
+- Every deferral meets the Fix Bar.
+- Resolved decisions are written into the plan.
+- Required specification and documentation work is included.
+- Tests and validation map to affected invariants.
+- The plan does not claim execution.
+- The plan's gate carries an execution contract (resolved open questions, a scope fence,
+  the hard-MUST "paste the actual runner output" honesty rule, path-scoped commit and
+  never-push, and the lifecycle move). If any element is missing, ADD it as an in-place
+  revision and record it as a finding.
+
+If the project uses `Status`, set it to `reviewed` unless its contract requires
+another review-complete value.
+
+`reviewed` means the review occurred. It does not mean approved, GO, ready to
+execute, or executed. Only the human or project approval process may approve.
+
+Append or update:
+
+```markdown
+## Workflow history
+- <date> /plan-review (<agent/model>): <verdict>; <finding IDs>
 ```
+
+Use the real agent/model name, or `unknown`.
+
+### Hardened-result commit
+After revisions and interactive decisions:
+1. Commit only reviewed plan files and any required review record.
+2. Use:
+
+   `plan-review: harden <scope> (revisions applied)`
+
+3. Never push.
+
+Report a skipped, failed, or inapplicable commit exactly.
+
+---
+## Engineering rubric
+For each item, verify the plan addresses it or justifies `Not applicable`.
+
+### A. Correctness and data integrity
+- Dependent writes are atomic; retries and handlers are idempotent.
+- Concurrency, uniqueness, ordering, and partial-failure risks are handled.
+- Production data-store syntax, types, constraints, and migrations are valid.
+- Public data, audit, and serialized formats preserve required history and
+  compatibility when relevant.
+
+### B. Security and privacy
+- Identity is verified; authorization is default-deny and resource-scoped.
+- Secrets are not hardcoded; trust-boundary inputs are validated.
+- Queries, commands, files, uploads, and outbound calls are safe when present.
+- Sensitive data collection, logging, exposure, retention, and errors are
+  minimized.
+- Privileged bypasses and abuse controls are justified when relevant.
+
+### C. Architecture and operability
+- The design uses existing canonical mechanisms and avoids duplicate paths.
+- New dependencies, services, abstractions, and async work are justified.
+- State, caching, time, retries, failure handling, observability, rollout, and
+  recovery are explicit when relevant.
+- The plan provisions for real needs, not hypothetical scale.
+
+### D. Anti-regression and domain invariants
+- Name each affected invariant and map it to a test.
+- Preserve intended correct behavior unless an approved change fixes it.
+- Add characterization coverage for risky refactors.
+- Do not freeze accidental behavior that project policy says to replace.
+- Treat unexplained behavior changes as blockers.
+
+### E. Testing and verification
+Require concrete tests for applicable happy, validation, authorization,
+constraint, failure, rollback, retry, concurrency, integration, accessibility,
+and compatibility paths.
+
+Use production-equivalent dependencies where differences matter.
+
+State exact validation commands, environments, and expected evidence.
+
+### F. KISS, principles, and UX
+- Prefer the smallest correct design and reuse existing mechanisms.
+- Variation should be data or configuration when appropriate.
+- Map the plan to each project principle with verifiable outcomes.
+- Minimize user effort and define loading, empty, error, success, and recovery
+  states when user-facing.
+- Include keyboard, semantic, focus, naming, contrast, and assistive feedback
+  when accessibility applies.
+- Prevent silent failure.
+
+### G. Plan executability
+Verify the plan states:
+- Problem, driver, goals, non-goals, scope, and exclusions.
+- Acceptance criteria and ordered implementation steps.
+- Target components and existing mechanisms to reuse.
+- Dependencies, sequencing, and data/API/workflow effects.
+- Security, privacy, migration, documentation, and specification effects.
+- Validation, rollout or recovery when relevant.
+- Assumptions, open questions, ownership, and follow-up work.
+- An execution contract in the gate: resolved open questions, a scope fence, the hard-MUST
+  honesty rule (paste the actual runner output), path-scoped commit and never-push, and the
+  lifecycle move.
+
+Another qualified agent or developer must be able to execute the plan without
+inventing missing architecture.
+
+---
+## Severity and scope
+Severity is for reporting only:
+- **BLOCKER:** likely data loss, breach, normal-path failure, silent invariant
+  violation, or core-principle violation.
+- **HIGH:** material reliability, security, accessibility, maintainability, or
+  required-coverage gap.
+- **MEDIUM:** real gap on a non-critical path or uncommon condition.
+- **LOW:** polish or small clarity improvement.
+
+LOW and MEDIUM findings are fixed by default too.
+
+Scope:
+- **IN-SCOPE:** flaw in proposed work.
+- **OVER-SCOPE:** not traceable to a driver or requirement.
+- **UNDER-SCOPE:** required capability, guardrail, test, migration, or
+  documentation is missing.
+
+---
+## Verdict and readiness
+Verdict describes review outcome. Readiness is separate.
+
+Use one verdict:
+- **`APPROVE`** - no revisions needed, no open questions, valid deferrals only.
+- **`APPROVE WITH REVISIONS APPLIED`** - findings fixed, no open questions,
+  valid deferrals only.
+- **`REVIEWED - OPEN QUESTIONS`** - review completed but decisions remain.
+- **`REJECT - NEEDS REPLAN`** - approach is unsound and not repairable with
+  bounded edits.
+
+Readiness:
+- **GO:** verdict is `APPROVE` or `APPROVE WITH REVISIONS APPLIED`, all
+  questions are resolved, and no unfixed BLOCKER or HIGH remains.
+- **NO-GO:** any open question or unfixed BLOCKER/HIGH remains, or verdict is
+  `REVIEWED - OPEN QUESTIONS` or `REJECT - NEEDS REPLAN`.
+
+A plan may be `Status: reviewed` and still be `NO-GO`.
+
+---
+## Required final report
+Do not issue the final report until the question loop is complete, unless the
+run is genuinely non-interactive or interrupted.
+
+Use this exact order. Cite evidence as `path:line`. Use one row per finding.
+
+```markdown
 ## Plan Review - <plan name(s)>
-Verdict: <APPROVE | APPROVE WITH REVISIONS APPLIED | REJECT - NEEDS REPLAN>
+Verdict: <APPROVE | APPROVE WITH REVISIONS APPLIED | REVIEWED - OPEN QUESTIONS | REJECT - NEEDS REPLAN>
+
+### Review scope
+ELIGIBLE:
+- <plan file>
+
+NOT REVIEWED:
+- <plan file>: <reason>
 
 ### Findings
-| ID | Severity | Scope | Area (rubric ref) | Finding | Remediation Risk | Decision | Resolution |
-|----|----------|-------|-------------------|---------|------------------|----------|------------|
+| ID | Severity | Scope | Area | Evidence | Finding | Remediation Risk | Decision | Resolution |
+|----|----------|-------|------|----------|---------|------------------|----------|------------|
+| PR-001 | <level> | <scope> | <ref> | <path:line> | <finding> | C:<rating>; U:<rating>; S:<rating>; F:<rating>; Overall:<rating> | <FIXED|DEFERRED|OPEN|REPLAN> | <resolution or next step> |
 
-### Edits applied (per plan)
-- <file>: <concise description of each edit>
+### Edits applied
+- `<plan file>` - `<section>`: <edit>
 
-### Deferred / open (with reasons)
-- <finding>: deferred - Remediation Risk <Medium-High|High> on
-  <complexity|usability|security|functionality> because <reason>.
-  (Effort/time is never a reason.)
+### Deferred and open
+- `<finding ID>` - `<DEFERRED | OPEN>`:
+  - Reason: <reason>
+  - Remediation Risk: <Medium-High | High>
+  - Axis: <complexity | usability | security | functionality>
+  - Required decision or evidence: <need>
+  - Consequence if unresolved: <impact>
+
+### Commit result
+- Pre-review snapshot: <hash | skipped unchanged | not applicable | failed: reason>
+- Hardened result: <hash | not applicable | failed: reason>
+- Push: not performed
+
+### Plans reviewed and not reviewed
+REVIEWED:
+- `<plan file>`: <GO | NO-GO> - <reason>.
+  Verdict: <verdict>.
+  Open questions: all resolved interactively | <N open, blocks GO>.
+  Required next step: <approval | decision | replan | other>.
+
+NOT REVIEWED:
+- `<plan file>`: <exact reason>.
 ```
 
-Be rigorous and specific, cite `file:line` evidence, and do not invent issues where
-there are none. Default to fixing - even small bugs, nits, and polish - because the
-only justification for leaving a finding unaddressed is that the *fix itself* carries
-Medium-High-or-higher risk to complexity, usability, security, or functionality.
-Never let a finding pass merely because it was effortful, and never let a real
-BLOCKER pass because it was inconvenient to fix.
+The `### Plans reviewed and not reviewed` section MUST be the literal final
+output.
+
+Enumerate every file from the Step 0 ledger. Print nothing after it.

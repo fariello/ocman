@@ -21,7 +21,7 @@ first-use clarity and the stakeholder on compatibility commitments.
 - **Error contract:** predictable, typed/structured errors; clear status codes;
   actionable messages; no leaking internals.
 - **Data contracts/schemas:** explicit, validated, documented; inputs validated at the
-  boundary; outputs stable.
+  boundary; outputs stable. (Cross-reference data-modeling lens.)
 - **Versioning & compatibility:** is there a versioning strategy? Are breaking changes
   identifiable and avoided/managed? Deprecation path with warnings. (Cross-reference
   compatibility lens.)

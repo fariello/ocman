@@ -163,7 +163,7 @@ sharing. The tool makes no network calls; sharing is always the user's explicit 
 
 ## Run record
 
-Create `workflow-artifacts/benchmark/<RUN_ID>/` (RUN_ID = UTC `YYYYMMDD-HHMMSS`), a
+Create `workflow-artifacts/benchmark/<RUN_ID>/` (RUN_ID = local-time `YYYYMMDD-HHMMSS`), a
 committed deliverable. Write:
 
 - `environment.json` - the full `bench_env.py --format json` capture (the context).

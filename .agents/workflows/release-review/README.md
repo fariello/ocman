@@ -12,7 +12,7 @@ After installation (via `install-workflows.py` at the agent-workflows repo root,
 /release-review
 ```
 
-Runs the full workflow, including audit, implementation, validation, final report, and push/no-push decision.
+Runs the full workflow, including audit, implementation, validation, final report, and push/no-push decision. The final report ENDS with an unmissable, ruled `RELEASE REVIEW DECISION` block (recommendation + named blocking/pending items + an explicit "AWAITING YOUR GO/NO-GO ... nothing is pushed until you do" line) as the literal last output. Nothing is pushed without your explicit GO; on approval, Section 9 release execution pushes and then VERIFIES CI via `gh` (bounded-timeout poll, reporting every failing job on red, degrading gracefully when `gh` is unavailable or the remote is not GitHub).
 
 ```text
 /release-review-plan
@@ -65,6 +65,7 @@ This review must also, on every run:
 
 - **Reconcile any `TODO.md`/backlog/roadmap and `TODO`/`FIXME` code markers** against the release: triage each item, fix or escalate the ones that should not ship, update `TODO.md` to stay honest, and record the triage in `todo-reconciliation.md`.
 - **Loudly warn about pending agent plans and staged prompts**: discover any prepared-but-unexecuted plans/IPDs (`.agents/plans/pending/`, IPDs marked pending) or queued prompt files, and surface in-scope pending items as a prominent WARNING in the Go/No-Go and summary. Such items block a clean GO until the user decides on them; the review never auto-executes them.
+- **Early pre-flight gate**: before the audit, take a cursory look at `TODO.md`/backlog items and pending plans/prompts and, when interactive AND a real signal exists (a pending plan/prompt, a status/location mismatch, or an obviously risky item), ask ONCE whether to handle it first - naming the items, verdict-free (never asserting readiness). When the look is clean, skip the ask and proceed silently. On "yes" the review ABORTS so you can discuss/address them first (saving a full run); on "no" it forgets the glance and proceeds. When non-interactive it skips the ask and relies on the loud Go/No-Go warning. This is an early safety net in addition to the thorough final-report reconciliation.
 - **Honor the repository's guiding principles** (`GUIDING_PRINCIPLES.md` or equivalent) as a binding contract, or apply the universal fallback principles in `00-run-protocol.md`; record per-principle adherence in `guiding-principles-assessment.md`.
 - **Hold the self-documenting / learn-as-you-go bar**: file and, where safe, fix anything that forces a user to read the manual to do a basic task.
 - **Ensure durable cold-start knowledge exists**: establish/maintain intent, philosophy, architecture, and design-decision rationale in the project's own docs (respecting its existing convention), so a no-context LLM or engineer can orient. Recover intent from the current conversation as a guarded secondary source; verify material claims with the user or mark them as assumptions.

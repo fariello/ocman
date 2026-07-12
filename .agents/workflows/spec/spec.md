@@ -21,7 +21,7 @@ hand off.
 ## Where the spec goes
 
 Detect the project's convention (ask if unclear): a specs/RFC/ADR directory
-(`docs/specs/`, `docs/rfcs/`, `.agents/plans/`), or create `docs/specs/` if none exists.
+(`.agents/docs/specs/`, `docs/rfcs/`, `.agents/plans/`), or create `.agents/docs/specs/` if none exists.
 Name the file `YYYY-MM-DD-<slug>.md`. Confirm the location with the user before writing.
 
 ## Protocol
@@ -39,9 +39,10 @@ Name the file `YYYY-MM-DD-<slug>.md`. Confirm the location with the user before 
    rather than guessing.
 4. **Review with the user** section by section; revise. Get confirmation before writing
    the file.
-5. **Write the file** to the confirmed location. Point the user at the next steps:
-   `/advise spec-editor <file>` to harden it, then `/plan-review` on the implementation
-   plan when one exists.
+5. **Write the file** to the confirmed location, add a `## Workflow history` line
+   (`- <date> /spec (<agent/model>): drafted spec`), then **commit** it and NEVER push
+   (commit-only). Point the user at the next steps: `/advise spec-editor <file>` to harden
+   it, then `/plan-review` on the implementation plan when one exists.
 
 ## Spec structure
 

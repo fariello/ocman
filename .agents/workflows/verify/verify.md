@@ -65,7 +65,7 @@ Create:
 workflow-artifacts/verify/<RUN_ID>/
 ```
 
-`<RUN_ID>` is a UTC timestamp `YYYYMMDD-HHMMSS`. Write:
+`<RUN_ID>` is a local-time timestamp `YYYYMMDD-HHMMSS`. Write:
 
 - `verify-results.json` - the structured evidence from the helper (per-check command,
   exit code, duration, metrics, log excerpt, and the summary).

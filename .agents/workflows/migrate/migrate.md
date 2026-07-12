@@ -37,8 +37,11 @@ still hold afterward, move in reversible steps, verify at each.
    - **Data migrations:** dry-run, backup, and reversibility explicitly addressed.
 5. **Risk and rollback:** the highest-risk stages, the point of no return (if any, flag it
    loudly), and the rollback for each stage.
-6. **Write the IPD** with the structure below and place it in pending/. Recommend
-   `plan-review` before execution given the risk.
+6. **Write the IPD** with the structure below and place it in pending/. Set its front-matter
+   `Status: to-review` (or `draft` if deliberately a stub) and add a `## Workflow history`
+   line (`- <date> /migrate (<agent/model>): assessed migration; emitted IPD`). **Commit**
+   the IPD and NEVER push (commit-only). Recommend `plan-review` before execution given the
+   risk.
 
 ## Migration IPD structure
 

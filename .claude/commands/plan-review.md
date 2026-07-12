@@ -1,5 +1,5 @@
 ---
-description: Pre-execution plan reviewer: review and improve a proposed implementation plan before any code is written (edits planning documents only).
+description: Pre-execution plan reviewer: review and improve a proposed implementation plan before any code is written (edits planning documents only). Single-file version.
 argument-hint: "[optional target path or flags]"
 ---
 

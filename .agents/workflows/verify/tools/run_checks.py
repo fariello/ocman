@@ -59,9 +59,18 @@ ALLOWED_CATEGORIES = ("test", "lint", "build", "typecheck")
 
 # Keyword -> category. Checked against the task NAME first (most reliable), then the text.
 CATEGORY_KEYWORDS: list[tuple[str, str]] = [
-    (r"\btype[-_ ]?check\b|\btypecheck\b|\bmypy\b|\bpyright\b|\btsc\b|\bflow\b", "typecheck"),
-    (r"\btest\b|\btests\b|\bpytest\b|\bunittest\b|\bjest\b|\bvitest\b|\bmocha\b|\bgo test\b|\bcargo test\b|\bspec\b", "test"),
-    (r"\blint\b|\bflake8\b|\bruff\b|\beslint\b|\bpylint\b|\bclippy\b|\bvet\b|\bfmt[-_ ]?check\b|\bcheck[-_ ]?format\b|\bstyle\b", "lint"),
+    (
+        r"\btype[-_ ]?check\b|\btypecheck\b|\bmypy\b|\bpyright\b|\btsc\b|\bflow\b",
+        "typecheck",
+    ),
+    (
+        r"\btest\b|\btests\b|\bpytest\b|\bunittest\b|\bjest\b|\bvitest\b|\bmocha\b|\bgo test\b|\bcargo test\b|\bspec\b",
+        "test",
+    ),
+    (
+        r"\blint\b|\bflake8\b|\bruff\b|\beslint\b|\bpylint\b|\bclippy\b|\bvet\b|\bfmt[-_ ]?check\b|\bcheck[-_ ]?format\b|\bstyle\b",
+        "lint",
+    ),
     (r"\bbuild\b|\bcompile\b|\bdist\b|\bbundle\b|\bwebpack\b|\bmake\b", "build"),
 ]
 
@@ -72,15 +81,30 @@ DENY_PATTERNS: list[tuple[str, str]] = [
     (r"\bdeploy\b", "deploy step"),
     (r"\brelease\b", "release step"),
     (r"\bnpm\s+publish\b|\byarn\s+publish\b|\bpnpm\s+publish\b", "package publish"),
-    (r"\btwine\s+upload\b|\bpoetry\s+publish\b|\bcargo\s+publish\b|\bgem\s+push\b", "package publish"),
+    (
+        r"\btwine\s+upload\b|\bpoetry\s+publish\b|\bcargo\s+publish\b|\bgem\s+push\b",
+        "package publish",
+    ),
     (r"\bgit\s+push\b", "git push"),
-    (r"\bpush\b.*\b(origin|remote|registry|docker|ghcr|ecr)\b", "push to remote/registry"),
+    (
+        r"\bpush\b.*\b(origin|remote|registry|docker|ghcr|ecr)\b",
+        "push to remote/registry",
+    ),
     (r"\bdocker\s+push\b|\bdocker\s+login\b", "docker push/login"),
-    (r"\bkubectl\b|\bhelm\s+(install|upgrade|delete)\b|\bterraform\s+(apply|destroy)\b", "infra deploy"),
-    (r"\bnpm\s+(i|install|ci)\b|\byarn\s+install\b|\bpnpm\s+(i|install)\b|\bpip\s+install\b|\bpoetry\s+install\b", "dependency install"),
+    (
+        r"\bkubectl\b|\bhelm\s+(install|upgrade|delete)\b|\bterraform\s+(apply|destroy)\b",
+        "infra deploy",
+    ),
+    (
+        r"\bnpm\s+(i|install|ci)\b|\byarn\s+install\b|\bpnpm\s+(i|install)\b|\bpip\s+install\b|\bpoetry\s+install\b",
+        "dependency install",
+    ),
     (r"\bcurl\b|\bwget\b|\bnc\b|\bssh\b|\bscp\b|\brsync\b", "network transfer"),
     (r"\brm\s+-rf\b|\bmkfs\b|\bdd\s+if=|:\(\)\{", "destructive"),
-    (r"\baws\s+(s3|ecr|lambda|deploy)\b|\bgcloud\s+\w+\s+deploy\b|\baz\s+\w+\s+create\b", "cloud action"),
+    (
+        r"\baws\s+(s3|ecr|lambda|deploy)\b|\bgcloud\s+\w+\s+deploy\b|\baz\s+\w+\s+create\b",
+        "cloud action",
+    ),
 ]
 
 
@@ -110,17 +134,18 @@ def denied_reason(command: str) -> str:
 
 # ---- Discovery -------------------------------------------------------------
 
+
 @dataclass
 class Check:
     """A discovered check command and its metadata."""
 
-    name: str                 # human label, e.g. "npm:test" or "make:lint"
-    command: list[str]        # argv to execute
-    command_str: str          # display form
-    source: str               # where it was discovered (package.json, Makefile, ...)
-    category: str = ""        # test|lint|build|typecheck, or "" if unclassified
-    eligible: bool = False    # classified into an allowed category AND not denied
-    deny_reason: str = ""     # non-empty if denylisted
+    name: str  # human label, e.g. "npm:test" or "make:lint"
+    command: list[str]  # argv to execute
+    command_str: str  # display form
+    source: str  # where it was discovered (package.json, Makefile, ...)
+    category: str = ""  # test|lint|build|typecheck, or "" if unclassified
+    eligible: bool = False  # classified into an allowed category AND not denied
+    deny_reason: str = ""  # non-empty if denylisted
 
 
 def _mk(name: str, argv: list[str], source: str, text: str) -> Check:
@@ -211,7 +236,9 @@ def _discover_makefile(root: Path) -> list[Check]:
             if not m:
                 continue
             target = m.group(1)
-            if target in ("PHONY", ".PHONY", "default", "all") and target.startswith("."):
+            if target in ("PHONY", ".PHONY", "default", "all") and target.startswith(
+                "."
+            ):
                 continue
             # Peek at the recipe body for denylist context.
             recipe = ""
@@ -245,7 +272,9 @@ def _discover_pyproject_tox(root: Path) -> list[Check]:
             text = ""
         for m in re.finditer(r"^\[testenv:([A-Za-z0-9._-]+)\]", text, re.MULTILINE):
             env = m.group(1)
-            out.append(_mk(f"tox:{env}", ["tox", "-e", env], "tox.ini", f"tox -e {env}"))
+            out.append(
+                _mk(f"tox:{env}", ["tox", "-e", env], "tox.ini", f"tox -e {env}")
+            )
         if re.search(r"^\[testenv\]", text, re.MULTILINE):
             out.append(_mk("tox", ["tox"], "tox.ini", "tox"))
     # A pyproject with pytest configured implies a runnable test suite.
@@ -258,7 +287,14 @@ def _discover_pyproject_tox(root: Path) -> list[Check]:
         if "[tool.pytest" in text or "pytest" in text:
             out.append(_mk("pytest", ["pytest"], "pyproject.toml", "pytest"))
         if "[tool.ruff" in text:
-            out.append(_mk("ruff:check", ["ruff", "check", "."], "pyproject.toml", "ruff check ."))
+            out.append(
+                _mk(
+                    "ruff:check",
+                    ["ruff", "check", "."],
+                    "pyproject.toml",
+                    "ruff check .",
+                )
+            )
         if "[tool.mypy" in text:
             out.append(_mk("mypy", ["mypy", "."], "pyproject.toml", "mypy ."))
     return out
@@ -310,7 +346,9 @@ def _discover_ci(root: Path) -> list[Check]:
             if not category:
                 continue  # only surface CI steps that look like checks
             rel = path.relative_to(root).as_posix()
-            c = _mk(f"ci:{cmd[:40]}", shlex.split(cmd) if _safe_split(cmd) else [], rel, cmd)
+            c = _mk(
+                f"ci:{cmd[:40]}", shlex.split(cmd) if _safe_split(cmd) else [], rel, cmd
+            )
             # CI steps are context-only: never eligible for auto-run (may need services).
             c.eligible = False
             out.append(c)
@@ -327,6 +365,7 @@ def _safe_split(cmd: str) -> bool:
 
 # ---- Execution -------------------------------------------------------------
 
+
 @dataclass
 class Result:
     """The outcome of one check (ran or skipped)."""
@@ -335,7 +374,7 @@ class Result:
     command_str: str
     source: str
     category: str
-    status: str               # passed | failed | timed-out | skipped
+    status: str  # passed | failed | timed-out | skipped
     exit_code: "int | None" = None
     duration_s: float = 0.0
     skip_reason: str = ""
@@ -367,7 +406,11 @@ def _extract_metrics(text: str) -> dict:
     if m and "total_tests" not in metrics:
         metrics["total_tests"] = int(m.group(1))
     # coverage percentage (pytest-cov / jest / istanbul style "TOTAL ... 87%" or "87.5%")
-    m = re.search(r"(?:TOTAL|All files|coverage)[^\n%]*?(\d{1,3}(?:\.\d+)?)\s*%", text, re.IGNORECASE)
+    m = re.search(
+        r"(?:TOTAL|All files|coverage)[^\n%]*?(\d{1,3}(?:\.\d+)?)\s*%",
+        text,
+        re.IGNORECASE,
+    )
     if m:
         metrics["coverage_pct"] = float(m.group(1))
     return metrics
@@ -396,16 +439,24 @@ def run_check(check: Check, root: Path, timeout: int) -> Result:
         )
     except subprocess.TimeoutExpired:
         return Result(
-            name=check.name, command_str=check.command_str, source=check.source,
-            category=check.category, status="timed-out", exit_code=None,
+            name=check.name,
+            command_str=check.command_str,
+            source=check.source,
+            category=check.category,
+            status="timed-out",
+            exit_code=None,
             duration_s=round(time.monotonic() - start, 2),
             skip_reason=f"exceeded {timeout}s time bound",
             log_excerpt="(timed out)",
         )
     except (OSError, ValueError) as exc:
         return Result(
-            name=check.name, command_str=check.command_str, source=check.source,
-            category=check.category, status="skipped", exit_code=None,
+            name=check.name,
+            command_str=check.command_str,
+            source=check.source,
+            category=check.category,
+            status="skipped",
+            exit_code=None,
             duration_s=round(time.monotonic() - start, 2),
             skip_reason=f"could not execute: {exc}",
         )
@@ -413,9 +464,15 @@ def run_check(check: Check, root: Path, timeout: int) -> Result:
     combined = (proc.stdout or "") + "\n" + (proc.stderr or "")
     excerpt = combined.strip()
     if len(excerpt) > LOG_EXCERPT_BYTES:
-        excerpt = excerpt[:LOG_EXCERPT_BYTES // 2] + "\n...[truncated]...\n" + excerpt[-LOG_EXCERPT_BYTES // 2:]
+        excerpt = (
+            excerpt[: LOG_EXCERPT_BYTES // 2]
+            + "\n...[truncated]...\n"
+            + excerpt[-LOG_EXCERPT_BYTES // 2 :]
+        )
     return Result(
-        name=check.name, command_str=check.command_str, source=check.source,
+        name=check.name,
+        command_str=check.command_str,
+        source=check.source,
         category=check.category,
         status="passed" if proc.returncode == 0 else "failed",
         exit_code=proc.returncode,
@@ -426,6 +483,7 @@ def run_check(check: Check, root: Path, timeout: int) -> Result:
 
 
 # ---- Consent ---------------------------------------------------------------
+
 
 def confirm(check: Check, assume_yes: bool) -> bool:
     """Decide whether to run a check. Denied is never run; unclassified needs explicit y."""
@@ -452,6 +510,7 @@ def _ask(prompt: str) -> bool:
 
 # ---- Output ----------------------------------------------------------------
 
+
 def summarize(results: list[Result]) -> dict:
     ran = [r for r in results if r.status in ("passed", "failed", "timed-out")]
     return {
@@ -474,22 +533,52 @@ def emit(results: list[Result], fmt: str, out) -> None:
     )
     if fmt == "json":
         json.dump(
-            {"summary": s, "honesty_note": honesty, "results": [asdict(r) for r in results]},
-            out, indent=2,
+            {
+                "summary": s,
+                "honesty_note": honesty,
+                "results": [asdict(r) for r in results],
+            },
+            out,
+            indent=2,
         )
         out.write("\n")
     elif fmt == "csv":
         import csv
+
         w = csv.writer(out)
-        w.writerow(["name", "category", "status", "exit_code", "duration_s", "source",
-                    "skip_reason", "metrics", "command"])
+        w.writerow(
+            [
+                "name",
+                "category",
+                "status",
+                "exit_code",
+                "duration_s",
+                "source",
+                "skip_reason",
+                "metrics",
+                "command",
+            ]
+        )
         for r in results:
-            w.writerow([r.name, r.category, r.status, r.exit_code, r.duration_s, r.source,
-                        r.skip_reason, json.dumps(r.metrics), r.command_str])
+            w.writerow(
+                [
+                    r.name,
+                    r.category,
+                    r.status,
+                    r.exit_code,
+                    r.duration_s,
+                    r.source,
+                    r.skip_reason,
+                    json.dumps(r.metrics),
+                    r.command_str,
+                ]
+            )
     else:
         out.write("Verify / check-run summary (evidence, not self-report)\n")
-        out.write(f"  discovered: {s['discovered']}  ran: {s['ran']}  passed: {s['passed']}  "
-                  f"failed: {s['failed']}  timed_out: {s['timed_out']}  skipped: {s['skipped']}\n")
+        out.write(
+            f"  discovered: {s['discovered']}  ran: {s['ran']}  passed: {s['passed']}  "
+            f"failed: {s['failed']}  timed_out: {s['timed_out']}  skipped: {s['skipped']}\n"
+        )
         out.write(f"  all-ran-passed: {s['all_ran_passed']}\n\n")
         for r in results:
             line = f"  [{r.status:9}] {r.category or 'unclassified':12} {r.name:28} {r.command_str}"
@@ -522,24 +611,44 @@ def _framework_version() -> str:
 
 # ---- Main ------------------------------------------------------------------
 
+
 def main() -> int:
     ap = argparse.ArgumentParser(
         description="Discover and run a repo's own checks; capture real evidence.",
     )
-    ap.add_argument("--version", action="store_true", help="Print the framework version and exit.")
+    ap.add_argument(
+        "--version", action="store_true", help="Print the framework version and exit."
+    )
     ap.add_argument("--repo", type=Path, default=Path.cwd())
     ap.add_argument("--format", choices=["json", "csv", "text"], default="text")
     ap.add_argument("--out", type=Path, default=None)
-    ap.add_argument("--list", action="store_true",
-                    help="Only discover and list candidate checks; run nothing.")
-    ap.add_argument("--yes", action="store_true",
-                    help="Run all eligible (allowlisted) checks without per-check prompts.")
-    ap.add_argument("--timeout", type=int, default=600,
-                    help="Per-check time bound in seconds (default 600).")
-    ap.add_argument("--only", default=None,
-                    help="Comma-separated categories to consider: test,lint,build,typecheck.")
-    ap.add_argument("--add", action="append", default=[],
-                    help="Add an explicit command to consider (repeatable). Still classified/denied.")
+    ap.add_argument(
+        "--list",
+        action="store_true",
+        help="Only discover and list candidate checks; run nothing.",
+    )
+    ap.add_argument(
+        "--yes",
+        action="store_true",
+        help="Run all eligible (allowlisted) checks without per-check prompts.",
+    )
+    ap.add_argument(
+        "--timeout",
+        type=int,
+        default=600,
+        help="Per-check time bound in seconds (default 600).",
+    )
+    ap.add_argument(
+        "--only",
+        default=None,
+        help="Comma-separated categories to consider: test,lint,build,typecheck.",
+    )
+    ap.add_argument(
+        "--add",
+        action="append",
+        default=[],
+        help="Add an explicit command to consider (repeatable). Still classified/denied.",
+    )
     args = ap.parse_args()
 
     if args.version:
@@ -561,17 +670,26 @@ def main() -> int:
 
     if args.only:
         wanted = {c.strip().lower() for c in args.only.split(",") if c.strip()}
-        checks = [c for c in checks if (c.category in wanted) or c.deny_reason or not c.category]
+        checks = [
+            c
+            for c in checks
+            if (c.category in wanted) or c.deny_reason or not c.category
+        ]
 
     out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
 
     # --list: discovery only, run nothing.
     if args.list:
         results = [
-            Result(name=c.name, command_str=c.command_str, source=c.source,
-                   category=c.category, status="skipped",
-                   skip_reason=(c.deny_reason and f"DENIED: {c.deny_reason}")
-                   or ("unclassified" if not c.category else "discovery-only (--list)"))
+            Result(
+                name=c.name,
+                command_str=c.command_str,
+                source=c.source,
+                category=c.category,
+                status="skipped",
+                skip_reason=(c.deny_reason and f"DENIED: {c.deny_reason}")
+                or ("unclassified" if not c.category else "discovery-only (--list)"),
+            )
             for c in checks
         ]
         emit(results, args.format, out)
@@ -582,16 +700,29 @@ def main() -> int:
     results: list[Result] = []
     for c in checks:
         if c.deny_reason:
-            results.append(Result(
-                name=c.name, command_str=c.command_str, source=c.source, category=c.category,
-                status="skipped", skip_reason=f"DENIED (never run): {c.deny_reason}"))
+            results.append(
+                Result(
+                    name=c.name,
+                    command_str=c.command_str,
+                    source=c.source,
+                    category=c.category,
+                    status="skipped",
+                    skip_reason=f"DENIED (never run): {c.deny_reason}",
+                )
+            )
             continue
         if not confirm(c, args.yes):
-            reason = "declined" if not c.category and args.yes and False else (
-                "unclassified; not run" if not c.category else "declined by user")
-            results.append(Result(
-                name=c.name, command_str=c.command_str, source=c.source, category=c.category,
-                status="skipped", skip_reason=reason))
+            reason = "unclassified; not run" if not c.category else "declined by user"
+            results.append(
+                Result(
+                    name=c.name,
+                    command_str=c.command_str,
+                    source=c.source,
+                    category=c.category,
+                    status="skipped",
+                    skip_reason=reason,
+                )
+            )
             continue
         results.append(run_check(c, root, args.timeout))
 

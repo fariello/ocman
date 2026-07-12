@@ -48,7 +48,10 @@ run through the normal IPD -> plan-review -> approve -> execute pipeline.
    cross-referenced from the post-mortem. Tie preventive actions to the relevant assess
    lens where useful (e.g. add tests -> assess-testing; add alerting -> logging-audit).
 7. **Write and confirm:** review the post-mortem with the user; write it on confirmation;
-   list the emitted action IPDs.
+   list the emitted action IPDs. Each emitted action IPD gets front-matter `Status: to-review`
+   (or `draft` if a stub) and a `## Workflow history` line
+   (`- <date> /incident (<agent/model>): emitted from post-mortem <slug>`). **Commit** the
+   post-mortem and the action IPDs, and NEVER push (commit-only).
 
 ## Post-mortem structure
 

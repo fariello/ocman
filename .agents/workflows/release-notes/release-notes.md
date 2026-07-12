@@ -28,7 +28,10 @@ publishing.
    the default and is what this framework itself uses via git tags; also handle CalVer or
    any other convention already in use). Recommend the bump from the change content
    (breaking -> major; features -> minor; fixes -> patch, for SemVer) and explain why. For
-   a tag-driven repo the "bump" is choosing the next tag. Confirm with the user before
+   a tag-driven repo the "bump" is choosing the next tag. If the release is not yet intended
+   for a registry/production (a candidate, not the final), recommend a `vX.Y.Z-rc.N`
+   pre-release: it sorts before the final `vX.Y.Z` and pip does not install it without
+   `--pre`. A bare `vX.Y.Z` means "intended for the registry". Confirm with the user before
    applying.
 4. **Draft the notes** in two registers:
    - **CHANGELOG entry:** concise, categorized, for developers.

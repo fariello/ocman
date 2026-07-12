@@ -58,6 +58,19 @@ Assess:
 
 Record schema issues using `SCH` IDs.
 
+## Published-version check (registry-published projects)
+
+If the project publishes to a package registry (e.g. a PyPI distribution declared in
+`pyproject.toml`/`setup.cfg`, or an npm/crates/etc. package), determine the CURRENTLY-PUBLISHED
+latest version and confirm the version this release proposes is a valid bump - strictly `>=` the
+published version (a re-used or lower version cannot be published and signals a versioning mistake).
+For PyPI, the packaged CLI exposes this via `agent_workflows.versioning.latest_pypi_version(name)`
+and `next_version_ok(proposed, published)` (stdlib, zero-dep). Degrade gracefully: if the lookup
+fails (offline, timeout, or the package is unpublished / first release), record that the check was
+skipped and why - never block the review on network state. File a `PKG` finding if the proposed
+version is not `>=` the published one, and surface the published-vs-proposed pair in
+`ci-assessment.md` and the Section 8 report so the operator can pick the next version confidently.
+
 ## CI and GitHub Actions assessment
 
 Create or update `ci-assessment.md`. Assess whether CI should include linting, formatting checks, unit tests, type checks, build checks, packaging checks, security/dependency checks, documentation checks, or matrix testing.
