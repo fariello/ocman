@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "ocman"
 version = "1.1.0"
-description = "Interactive TUI for browsing, recovering, and compacting opencode sessions"
+description = "Administer, maintain, and repair your OpenCode agentic environment: sessions, database, and config."
 readme = "README.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
