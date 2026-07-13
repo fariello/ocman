@@ -102,6 +102,17 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   `project_directory`/`workspace` rows) happens inside that same transaction, but only for
   projects the user explicitly targeted (passed as `remove_project_ids`), never inferred
   from "0 sessions remain".
+- **Git-aware, print-first cross-machine move.** `ocman move SPEC to DST` gathers every decision
+  up front into a `MovePlan` (parsed dest, git decisions, transfer style, collision choice), asks a
+  single confirmation, then acts. A local DST keeps the transactional dir-move plus DB-rebase (with
+  rollback), fronted by up-front git-state handling (`git_state`/`run_git`, the first git integration;
+  argv only, never a shell) and a destination-collision menu (existing dest can be backed up to a
+  distinct `move-dest-backup-*`, replaced, or overlaid). A remote DST (`host:/path`) performs NO
+  network I/O: it renders a shell-quoted runbook via `MovePlan.render_runbook()` and an ordered
+  `TransferStep` list (the seam a future execute-mode would reuse). Interpolated values are
+  `shlex.quote`-escaped; the local copy is never auto-deleted on a remote move (a guarded
+  `--confirm-remote-delete` handles that after verification). Git remote/upstream is never guessed;
+  submodule/LFS/bare-repo cases are out of scope.
 - **Formatting is centralized.** `fmt_int` (comma-separated integers with optional width) and
   `fmt_cost` (`$` + comma-separated, fixed decimals) are the shared number/currency formatters used by
   the listing and disk-reporting output; both coalesce `None`/bad input to 0 so display never crashes.

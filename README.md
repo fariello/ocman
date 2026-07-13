@@ -181,6 +181,21 @@ project or a session, so you rarely need to say which:
     `--metadata-only` is still supported. This is equivalent to `ocman project move` /
     `ocman session move`. If `SPEC` matches both a project and a session, or is a bare integer (a
     list number), ocman prompts you on a TTY to select the target, or errors non-interactively. You can disambiguate by using the qualifier `session:SPEC` or `project:SPEC`, or by using the explicit commands `ocman move project SPEC to DST` or `ocman move session SPEC to DST`.
+    * **Git-aware moves.** If the source is a git repository, ocman inspects it up front and, on a
+      TTY, offers to handle the working tree before moving: for a dirty repo it can commit (staged
+      only, or everything), quit so you can fix it, or proceed relying on a bulk copy; for a clean
+      repo that is ahead/behind its upstream it can push and/or pull first. All questions are asked
+      before anything is moved, so a git failure aborts before the point of no return. Chosen local
+      git commands are run (git manages its own auth and output).
+    * **Cross-machine moves (remote DST).** When `DST` is `host:/path` (or `user@host:/path`), ocman
+      does NOT perform any network I/O itself. It gathers your choices, then PRINTS a copy-paste
+      runbook (export the bundle, `scp` it, transfer the repo via git or bulk `tar` over `ssh`, then
+      `ocman session import --new-project-path` on the remote), with every interpolated value
+      shell-quoted. It never deletes the local copy for a remote move; after you have verified the
+      remote import, reclaim local space with `ocman move SPEC to host:/path --confirm-remote-delete`.
+    * **Existing local destination.** If a local `DST` already exists, ocman offers to reconsider,
+      do a metadata-only update, back up and replace, replace without backup, or overlay the source
+      on top (each with the appropriate warning).
 *   `ocman export SPEC to FILE` exports whichever session or project `SPEC` names to a `.ocbox`
     bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session SPEC`,
     `ocman export project SPEC`, or using `session:SPEC`/`project:SPEC` qualifiers. A project bundle contains the full project row, its

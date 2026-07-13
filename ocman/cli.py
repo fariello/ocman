@@ -77,6 +77,7 @@ import argparse
 import json
 import os
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -5800,11 +5801,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--new-session-id", action="store_true",
                     help="Regenerate a fresh session ID for the imported session (single-session bundle only).")
 
-    sp = new_action(p_session, s_sub, "move", help="Relocate a session.")
+    sp = new_action(p_session, s_sub, "move", help="Relocate a session (local or remote DST).")
     sp.add_argument("session", help="Session ID to move.")
-    sp.add_argument("--to", required=True, metavar="DST", help="Destination path.")
+    sp.add_argument("--to", required=True, metavar="DST",
+                    help="Destination path, or a remote 'host:/path' (prints a runbook).")
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--confirm-remote-delete", action="store_true",
+                    help="After verifying a remote move, delete the local session and repo.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
 
     # ---- project -----------------------------------------------------------
     p_project = new_sub("project", help="Work with projects.")
@@ -5817,11 +5823,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
 
-    sp = new_action(p_project, pr_sub, "move", help="Relocate a project.")
+    sp = new_action(p_project, pr_sub, "move", help="Relocate a project (local or remote DST).")
     sp.add_argument("src", help="Project ID or current path.")
-    sp.add_argument("--to", required=True, metavar="DST", help="Destination path.")
+    sp.add_argument("--to", required=True, metavar="DST",
+                    help="Destination path, or a remote 'host:/path' (prints a runbook).")
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--confirm-remote-delete", action="store_true",
+                    help="After verifying a remote move, delete the local project and repo.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
 
     # ---- db ----------------------------------------------------------------
     p_db = new_sub("db", help="Database info and maintenance.")
@@ -7914,6 +7925,540 @@ def db_restore_rollback_backup(backup_file: Path) -> None:
                 shm_dest.unlink()
     except Exception as e:
         print(color_red(f"[-] Critical: Failed to restore database rollback backup: {e}"))
+
+
+def _parse_move_dest(dst: str) -> tuple[bool, str, str]:
+    """Classify a move destination as remote (host:/path) or a local path.
+
+    Returns (is_remote, host, path). For a local path, host is "" and path is the
+    original string. A Windows drive spec (``C:\\proj`` or ``C:/proj``) is LOCAL,
+    not a ``host:`` remote. Remote requires a non-drive host followed by ``:`` and
+    a non-empty remainder, per the plan's parse rule.
+    """
+    s = (dst or "").strip()
+    if not s:
+        return (False, "", s)
+    # Windows drive letter: single alpha char then ':' then '/' or '\'. LOCAL.
+    if len(s) >= 3 and s[0].isalpha() and s[1] == ":" and s[2] in ("\\", "/"):
+        return (False, "", s)
+    # Remote: optional user@, a host with no path separators, then ':', then rest.
+    m = re.match(r"^(?P<host>[^/\\:]+(?:@[^/\\:]+)?):(?P<path>.+)$", s)
+    if m:
+        return (True, m.group("host"), m.group("path"))
+    return (False, "", s)
+
+
+def run_git(repo: Path, args: list[str], *, check: bool = True) -> subprocess.CompletedProcess:
+    """Run a git command in ``repo`` using argv (never a shell). First git use in ocman.
+
+    ``git -C <repo> <args...>`` with every element a discrete argv token, so no path
+    or argument is ever interpreted by a shell (command-safety rule, plan Section G).
+    """
+    cmd = ["git", "-C", str(repo), *args]
+    return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+
+def git_state(repo: Path) -> dict | None:
+    """Inspect the git state of ``repo``. Returns None if not a git work tree.
+
+    Keys: branch, upstream (bool), ahead (int), behind (int), staged (int),
+    modified (int), untracked (int), other (int), dirty (bool), clean (bool).
+    """
+    try:
+        r = run_git(repo, ["rev-parse", "--is-inside-work-tree"], check=False)
+    except (OSError, FileNotFoundError):
+        return None
+    if r.returncode != 0 or r.stdout.strip() != "true":
+        return None
+
+    state = {
+        "branch": None, "upstream": False, "ahead": 0, "behind": 0,
+        "staged": 0, "modified": 0, "untracked": 0, "other": 0,
+    }
+    try:
+        s = run_git(repo, ["status", "--porcelain=v1", "-b"], check=False)
+    except OSError:
+        return None
+    for line in s.stdout.splitlines():
+        if line.startswith("## "):
+            hdr = line[3:]
+            # e.g. "main...origin/main [ahead 2, behind 1]" or "main" (no upstream)
+            state["branch"] = hdr.split("...", 1)[0].split(" ", 1)[0]
+            if "..." in hdr:
+                state["upstream"] = True
+                am = re.search(r"ahead (\d+)", hdr)
+                bm = re.search(r"behind (\d+)", hdr)
+                if am:
+                    state["ahead"] = int(am.group(1))
+                if bm:
+                    state["behind"] = int(bm.group(1))
+            continue
+        if len(line) < 2:
+            continue
+        xy = line[:2]
+        if xy == "??":
+            state["untracked"] += 1
+        else:
+            x, y = xy[0], xy[1]
+            if x != " " and x != "?":
+                state["staged"] += 1
+            if y == "M" or y == "D":
+                state["modified"] += 1
+            if x in ("R", "C") or (x == " " and y not in ("M", "D")):
+                state["other"] += 1
+    state["dirty"] = bool(state["staged"] or state["modified"] or state["untracked"] or state["other"])
+    state["clean"] = not state["dirty"]
+    return state
+
+
+def _move_dest_backup_dir() -> Path:
+    """Timestamped directory-backup location for an existing local move destination.
+
+    Distinct from the DB-family ``opencode-db-cleanup-*`` backups (a directory
+    backup is not a DB backup), per the plan's resolved decision.
+    """
+    root = Path.home() / ".local" / "share" / "opencode" / "backups"
+    return root / f"move-dest-backup-{get_startup_timestamp_local()}"
+
+
+@dataclass
+class TransferStep:
+    """One ordered step of a move runbook. Pure data (the execution seam).
+
+    ``command`` is a ready-to-paste shell string with all values already
+    shell-quoted. ``is_network`` marks steps a future execute-mode would shell out
+    over the network (ssh/scp/tar-over-ssh); print-mode simply renders them.
+    """
+    label: str
+    command: str
+    is_network: bool = False
+
+
+@dataclass
+class MovePlan:
+    """All decisions for one move, gathered UP FRONT, then rendered or executed."""
+    spec: str
+    kind: str  # "session" | "project"
+    source_dir: str
+    is_remote: bool
+    dest_host: str
+    dest_path: str
+    bundle_path: str
+    remap_flag: str  # e.g. "--new-project-path <path>"
+    transfer_style: str | None = None  # "git" | "bulk" | None
+    git_actions: list[str] | None = None  # human labels of chosen local git ops
+    steps: list[TransferStep] | None = None
+
+    def render_runbook(self) -> str:
+        """Render the remote runbook as copy-paste text. All values shell-quoted."""
+        q = shlex.quote
+        lines: list[str] = []
+        lines.append("=" * 56)
+        lines.append("REMOTE MOVE RUNBOOK (ocman performs NO network I/O; you run these)")
+        lines.append("=" * 56)
+        for i, step in enumerate(self.steps or [], start=1):
+            lines.append(f"{i}. {step.label}")
+            lines.append(f"   {step.command}")
+        lines.append("-" * 56)
+        lines.append("Verify on the remote that the session imported and the repo is present,")
+        lines.append("THEN (optionally) reclaim local space with:")
+        lines.append(f"   ocman move {q(self.spec)} to {q(self.dest_host + ':' + self.dest_path)} --confirm-remote-delete")
+        lines.append("=" * 56)
+        return "\n".join(lines)
+
+
+def _build_remote_steps(plan: MovePlan) -> list[TransferStep]:
+    """Build the ordered, shell-quoted TransferStep list for a remote move."""
+    q = shlex.quote
+    host = plan.dest_host
+    remote_spec = f"{host}:{plan.dest_path}"
+    steps: list[TransferStep] = []
+    # 1. Export the bundle locally.
+    export_verb = "session export" if plan.kind == "session" else "project export"
+    steps.append(TransferStep(
+        label=f"Export the {plan.kind} bundle locally",
+        command=f"ocman {export_verb} {q(plan.spec)} --to {q(plan.bundle_path)}",
+        is_network=False,
+    ))
+    # 2. Copy the bundle to the remote.
+    steps.append(TransferStep(
+        label="Copy the bundle to the remote",
+        command=f"scp {q(plan.bundle_path)} {q(host + ':/tmp/')}",
+        is_network=True,
+    ))
+    # 3. Transfer the repo per chosen style.
+    if plan.transfer_style == "git":
+        steps.append(TransferStep(
+            label="Transfer the repo via git (push locally, then clone/pull on remote)",
+            command=(f"git -C {q(plan.source_dir)} push  # then, on the remote: "
+                     f"git clone <your-remote> {q(plan.dest_path)}  (or 'git -C {q(plan.dest_path)} pull')"),
+            is_network=True,
+        ))
+    elif plan.transfer_style == "bulk":
+        bundle_name = Path(plan.bundle_path).name
+        steps.append(TransferStep(
+            label="Transfer the repo via bulk tar over ssh",
+            command=(f"tar -C {q(plan.source_dir)} -cz . | "
+                     f"ssh {q(host)} {q('mkdir -p ' + shlex.quote(plan.dest_path) + ' && tar -C ' + shlex.quote(plan.dest_path) + ' -xz')}"),
+            is_network=True,
+        ))
+    # 4. Import on the remote, remapped to the landed path.
+    import_verb = "session import"
+    bundle_name = Path(plan.bundle_path).name
+    remote_bundle = f"/tmp/{bundle_name}"
+    steps.append(TransferStep(
+        label="Import on the remote, remapped to the landed path",
+        command=(f"ssh {q(host)} {q('ocman ' + import_verb + ' ' + shlex.quote(remote_bundle) + ' ' + plan.remap_flag)}"),
+        is_network=True,
+    ))
+    return steps
+
+
+def _menu(prompt: str, options: list[str], *, default: int = 1, max_tries: int = 5) -> int:
+    """Print a numbered menu and return the chosen 1-based index.
+
+    Empty input selects ``default``. EOF/KeyboardInterrupt aborts. To avoid an
+    unbounded loop on repeated unparseable input (e.g. an automation feeding a
+    fixed non-numeric string), bail out after ``max_tries`` invalid entries.
+    """
+    print()
+    print(color_bold(prompt))
+    for i, opt in enumerate(options, start=1):
+        print(f"  {i}. {opt}")
+    for _ in range(max_tries):
+        try:
+            raw = input(f"Choose [1-{len(options)}] (default {default}): ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print()
+            die("Operation aborted.")
+        if not raw:
+            return default
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return int(raw)
+        print(f"Invalid selection: {raw}")
+    die("Too many invalid selections; aborting.")
+
+
+def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[list[str]], list[str], bool]:
+    """Ask the up-front git-state menus (B1/B2). Returns (git_cmds, labels, needs_bulk).
+
+    ``git_cmds`` is a list of argv lists to run locally (post-confirm). ``labels`` is
+    human descriptions for the summary/runbook. ``needs_bulk`` is True when the user
+    chose an option whose changes only travel via bulk copy (dirty, not committed).
+    """
+    gs = git_state(source_dir)
+    if gs is None:
+        return ([], ["source is not a git repo (bulk file copy only)"], True)
+
+    git_cmds: list[list[str]] = []
+    labels: list[str] = []
+    needs_bulk = False
+
+    # B2: dirty first (pushing requires a committed tree).
+    if gs["dirty"]:
+        parts = []
+        if gs["staged"]:
+            parts.append(f"{gs['staged']} staged")
+        if gs["modified"]:
+            parts.append(f"{gs['modified']} modified")
+        if gs["untracked"]:
+            parts.append(f"{gs['untracked']} untracked")
+        if gs["other"]:
+            parts.append(f"{gs['other']} other")
+        summary = ", ".join(parts) or "uncommitted changes"
+        if not interactive:
+            die("Source repo is dirty and this is non-interactive. Commit/clean it first.")
+        choice = _menu(
+            f"Source repo is DIRTY ({summary}). How should the working tree be handled?",
+            [
+                "Quit and fix the dirty repo myself (SAFEST)",
+                "Commit staged only; leave unstaged/untracked behind (WARNING: those will NOT travel via git push; use bulk copy to include them)",
+                "Stage untracked + all modified and commit everything, then proceed",
+                "Do not commit; proceed anyway (only sound with BULK COPY, since git push omits dirty work) (WARNING)",
+            ],
+        )
+        if choice == 1:
+            die("Operation aborted so you can fix the repo.")
+        elif choice == 2:
+            git_cmds.append(["commit", "-m", "ocman move: commit staged changes"])
+            labels.append("git commit staged changes")
+            needs_bulk = True  # unstaged/untracked left behind -> only bulk carries them
+        elif choice == 3:
+            git_cmds.append(["add", "-A"])
+            git_cmds.append(["commit", "-m", "ocman move: commit all changes"])
+            labels.append("git add -A && git commit (all changes)")
+        elif choice == 4:
+            labels.append("no commit; rely on bulk copy for the dirty tree")
+            needs_bulk = True
+        # Re-inspect after a planned commit would change divergence; we conservatively
+        # still offer push/pull below based on the CURRENT upstream counts.
+
+    # B1: divergence (only meaningful with an upstream).
+    if gs["upstream"] and (gs["ahead"] or gs["behind"]):
+        ahead, behind = gs["ahead"], gs["behind"]
+        if ahead and behind:
+            choice = _menu(
+                f"Repo has {ahead} commit(s) to push and {behind} to pull. Sync before moving?",
+                [
+                    "Push and pull all commits (Recommended before proceeding)",
+                    "Push only",
+                    "Pull only",
+                    "Do not push or pull (WARNING: if something goes wrong, work may be lost)",
+                ],
+            ) if interactive else 1
+            if choice == 1:
+                git_cmds += [["push"], ["pull"]]; labels.append("git push && git pull")
+            elif choice == 2:
+                git_cmds.append(["push"]); labels.append("git push")
+            elif choice == 3:
+                git_cmds.append(["pull"]); labels.append("git pull")
+        elif ahead:
+            choice = _menu(
+                f"Repo has {ahead} commit(s) to push. Push before moving?",
+                ["Push all commits (Recommended)", "Do not push (WARNING: work may be lost if something goes wrong)"],
+            ) if interactive else 1
+            if choice == 1:
+                git_cmds.append(["push"]); labels.append("git push")
+        elif behind:
+            choice = _menu(
+                f"Repo is {behind} commit(s) behind upstream. Pull before moving?",
+                ["Pull all commits (Recommended)", "Do not pull (WARNING)"],
+            ) if interactive else 1
+            if choice == 1:
+                git_cmds.append(["pull"]); labels.append("git pull")
+    elif gs["clean"] and not gs["upstream"]:
+        labels.append("repo clean, no upstream configured (cannot push; not guessing a remote)")
+    elif gs["clean"]:
+        labels.append("repo clean, in sync with upstream")
+
+    return (git_cmds, labels, needs_bulk)
+
+
+def _run_git_actions(source_dir: Path, git_cmds: list[list[str]]) -> None:
+    """Run the chosen local git actions (argv, no shell). Abort on first failure."""
+    for args in git_cmds:
+        print(f"{info_prefix()} git {' '.join(args)}")
+        try:
+            r = run_git(source_dir, args, check=False)
+        except OSError as e:
+            die(f"git is not available or failed to launch: {e}")
+        if r.stdout.strip():
+            print(r.stdout.rstrip())
+        if r.returncode != 0:
+            if r.stderr.strip():
+                print(color_red(r.stderr.rstrip()))
+            die(f"git {args[0]} failed; aborting BEFORE any move (nothing changed).")
+
+
+def _local_transactional_move(kind: str, id_for_metadata: str, old_path: Path,
+                               new_path: Path, metadata_only: bool) -> None:
+    """Today's transactional local move: backup -> move dir -> rebase DB -> rollback on fail."""
+    backup_file = None
+    physical_moved = False
+    try:
+        print(f"{info_prefix()} Creating database rollback backup...")
+        backup_file = db_create_rollback_backup()
+        if not metadata_only:
+            print(f"{info_prefix()} Physically moving directory: {old_path} -> {new_path}")
+            move_directory_structure(old_path, new_path)
+            physical_moved = True
+        print(f"{info_prefix()} Updating database metadata...")
+        if kind == "project":
+            db_move_project_metadata(id_for_metadata, str(old_path), str(new_path))
+        else:
+            db_move_session_metadata(id_for_metadata, str(old_path), str(new_path))
+        if backup_file and backup_file.exists():
+            _unlink_backup_family(backup_file)
+        print(color_green(f"[+] Successfully moved {kind} '{id_for_metadata}' to '{new_path}'!"))
+    except Exception as e:
+        if backup_file and backup_file.exists():
+            print(f"{info_prefix()} " + color_yellow("Rolling back database metadata changes..."))
+            db_restore_rollback_backup(backup_file)
+            _unlink_backup_family(backup_file)
+        if physical_moved:
+            print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
+            try:
+                shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
+            except Exception as re_err:
+                print(color_red(f"[-] Critical: Failed to restore physical directory: {re_err}"))
+        die(f"Failed to move {kind}: {e}")
+
+
+def _unlink_backup_family(backup_file: Path) -> None:
+    """Remove a rollback backup and its -wal/-shm siblings, ignoring errors."""
+    try:
+        backup_file.unlink()
+        for suffix in ("-wal", "-shm"):
+            sib = backup_file.parent / f"{backup_file.name}{suffix}"
+            if sib.exists():
+                sib.unlink()
+    except Exception:
+        pass
+
+
+def _execute_move(*, kind: str, spec: str, id_for_metadata: str, source_dir: str,
+                  project_id: str | None, dst: str, metadata_only: bool,
+                  confirm_remote_delete: bool, assume_yes: bool, force: bool,
+                  verbosity: int) -> None:
+    """Git-aware move: gather decisions up front, confirm once, then act.
+
+    Local dest: transactional dir move + DB rebase (with up-front git prep and
+    destination-collision handling). Remote dest (host:/path): print a runbook;
+    ocman performs NO network I/O.
+    """
+    interactive = sys.stdout.isatty()
+    is_remote, host, remote_path = _parse_move_dest(dst)
+    old_path = Path(source_dir)
+
+    # --confirm-remote-delete: guarded local cleanup AFTER a verified remote move.
+    if confirm_remote_delete:
+        if not is_remote:
+            die("--confirm-remote-delete only applies to a remote destination.")
+        preview = DestructivePreview(
+            remove=[PreviewItem(label=id_for_metadata, detail=source_dir)],
+            keep=[], action_verb="delete", noun=kind, detail_header="Path",
+            irreversible=True, warn_if_all_removed=False,
+        )
+        if not confirm_destructive(preview, assume_yes=assume_yes,
+                                   interactive=interactive, action_verb="delete"):
+            return
+        if kind == "session":
+            db_delete_sessions_batch([id_for_metadata], dry_run=False, force=force,
+                                     verbosity=verbosity)
+        else:
+            db_delete_project_recursive(id_for_metadata, dry_run=False, force=force,
+                                        verbosity=verbosity, confirm=False)
+        if old_path.exists():
+            try:
+                shutil.rmtree(old_path)
+                print(color_green(f"[+] Removed local directory {old_path}"))
+            except OSError as e:
+                print(color_yellow(f"Warning: could not remove {old_path}: {e}"))
+        return
+
+    # ---- Gather all decisions UP FRONT (nothing destructive yet) ----
+    source_exists = old_path.exists()
+    git_cmds: list[list[str]] = []
+    git_labels: list[str] = []
+    needs_bulk = False
+    if source_exists and not metadata_only:
+        git_cmds, git_labels, needs_bulk = _gather_git_decisions(old_path, interactive)
+
+    plan = None
+    collision_choice = None
+    if is_remote:
+        # Choose transfer style (unless the git decision forces bulk).
+        gs = git_state(old_path)
+        if gs is None or needs_bulk:
+            transfer_style = "bulk"
+        elif interactive:
+            c = _menu("How should the repo be transferred to the remote?",
+                      ["git (push locally, then clone/pull on the remote)",
+                       "bulk copy (tar over ssh; includes uncommitted/untracked files)"])
+            transfer_style = "git" if c == 1 else "bulk"
+        else:
+            transfer_style = "bulk"
+        remap_flag = f"--new-project-path {shlex.quote(remote_path)}"
+        bundle_path = str(Path(tempfile.gettempdir()) / f"{id_for_metadata}.ocbox")
+        plan = MovePlan(
+            spec=spec, kind=kind, source_dir=source_dir, is_remote=True,
+            dest_host=host, dest_path=remote_path, bundle_path=bundle_path,
+            remap_flag=remap_flag, transfer_style=transfer_style, git_actions=git_labels,
+        )
+        plan.steps = _build_remote_steps(plan)
+    else:
+        new_path = Path(dst)
+        if not metadata_only and not source_exists:
+            if interactive:
+                print(f"{info_prefix()} " + color_yellow(f"Source directory '{source_dir}' does not exist on disk."))
+                if _menu("Source is missing. Proceed how?",
+                         ["Update database metadata only", "Quit"]) == 1:
+                    metadata_only = True
+                else:
+                    die("Operation aborted.")
+            else:
+                die("Error: source directory does not exist. Use --metadata-only to update the database anyway.")
+        if not metadata_only and new_path.exists():
+            if not interactive:
+                die(f"Error: destination path '{dst}' already exists.")
+            collision_choice = _menu(
+                f"Destination '{dst}' already EXISTS. What should happen?",
+                [
+                    "Don't continue; I want to reconsider (quit, no changes)",
+                    "Don't actually move (SAFEST); update DB metadata only, leave files as-is",
+                    "Back up the destination, remove it, then move source into place",
+                    "Remove the destination, then move source into place (WARNING: cannot recover it)",
+                    "Back up the destination, then copy source files over the top (WARNING: may leave a mixed/unknown repo state)",
+                ],
+            )
+            if collision_choice == 1:
+                die("Operation aborted.")
+
+    # ---- Single final confirmation summarizing the plan ----
+    print()
+    print(color_bold("Move summary:"))
+    print(f"  {kind}: {id_for_metadata}")
+    print(f"  source: {source_dir}")
+    print(f"  destination: {dst}  ({'REMOTE (runbook only)' if is_remote else 'local'})")
+    for lbl in git_labels:
+        print(f"  git: {lbl}")
+    if is_remote and plan is not None:
+        print(f"  transfer: {plan.transfer_style}")
+    if not confirm_destructive(None, assume_yes=assume_yes, render=False,
+                               interactive=interactive, action_verb="move"):
+        return
+
+    # ---- Act (past the point of no prompts) ----
+    if git_cmds:
+        _run_git_actions(old_path, git_cmds)  # aborts before any move on failure
+
+    if is_remote and plan is not None:
+        print()
+        print(plan.render_runbook())
+        print()
+        print(color_yellow("ocman did NOT move anything remotely and did NOT delete the local copy."))
+        return
+
+    # Local move.
+    new_path = Path(dst)
+    if collision_choice in (3, 4, 5):
+        backup_dir = _move_dest_backup_dir()
+        if collision_choice in (3, 5):
+            print(f"{info_prefix()} Backing up existing destination to {backup_dir} ...")
+            try:
+                backup_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(new_path, backup_dir)
+                print("[+] Destination backup created.")
+            except Exception as e:
+                die(f"Failed to back up destination; aborting: {e}")
+        if collision_choice == 5:
+            # Dirty overlay: copy source over the existing destination in place.
+            print(f"{info_prefix()} Copying source over existing destination (overlay)...")
+            try:
+                shutil.copytree(old_path, new_path, dirs_exist_ok=True)
+            except Exception as e:
+                die(f"Overlay copy failed: {e}")
+            print(f"{info_prefix()} Updating database metadata...")
+            bf = db_create_rollback_backup()
+            try:
+                if kind == "project":
+                    db_move_project_metadata(id_for_metadata, str(old_path), str(new_path))
+                else:
+                    db_move_session_metadata(id_for_metadata, str(old_path), str(new_path))
+                _unlink_backup_family(bf)
+            except Exception as e:
+                db_restore_rollback_backup(bf); _unlink_backup_family(bf)
+                die(f"Failed to update metadata after overlay: {e}")
+            print(color_green(f"[+] Overlaid {kind} '{id_for_metadata}' onto '{new_path}'."))
+            return
+        # choices 3 and 4: remove the destination so the transactional move can proceed.
+        print(f"{info_prefix()} Removing existing destination {new_path} ...")
+        try:
+            shutil.rmtree(new_path)
+        except Exception as e:
+            die(f"Failed to remove destination; aborting: {e}")
+
+    _local_transactional_move(kind, id_for_metadata, old_path, new_path, metadata_only)
 
 
 def move_directory_structure(old_path: Path, new_path: Path) -> None:
@@ -11085,167 +11630,35 @@ def main() -> None:
     if args.move_project is not None:
         if not args.to:
             die("Error: 'ocman move' requires a destination, e.g. 'ocman move <project> to <new_path>'.")
-        # Find project
         proj = db_find_project(args.move_project)
         if not proj:
             die(f"Error: Project '{args.move_project}' not found in database.")
         proj_id, worktree = proj
-        
-        old_path = Path(worktree)
-        new_path = Path(args.to)
-        
-        metadata_only = getattr(args, "metadata_only", False)
-        if not metadata_only:
-            if not old_path.exists():
-                # Check interactive prompt
-                import sys
-                if sys.stdout.isatty():
-                    print(f"{info_prefix()} " + color_yellow(f"Source directory '{worktree}' does not exist on disk."))
-                    try:
-                        choice = input("Update database metadata only? [y/N]: ").strip().lower()
-                    except (KeyboardInterrupt, EOFError):
-                        print()
-                        die("Operation aborted.")
-                    if choice in ("y", "yes"):
-                        metadata_only = True
-                    else:
-                        die("Operation aborted.")
-                else:
-                    die("Error: Source directory does not exist on disk. Use --metadata-only to update database anyway.")
-
-        if not metadata_only and new_path.exists():
-            die(f"Error: Destination path '{args.to}' already exists.")
-
-        backup_file = None
-        physical_moved = False
-        try:
-            print(f"{info_prefix()} Creating database rollback backup...")
-            backup_file = db_create_rollback_backup()
-            
-            if not metadata_only:
-                print(f"{info_prefix()} Physically moving directory: {old_path} -> {new_path}")
-                move_directory_structure(old_path, new_path)
-                physical_moved = True
-                
-            print(f"{info_prefix()} Updating database metadata...")
-            db_move_project_metadata(proj_id, str(old_path), str(new_path))
-            
-            if backup_file and backup_file.exists():
-                try:
-                    backup_file.unlink()
-                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
-                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
-                    if wal_backup.exists():
-                        wal_backup.unlink()
-                    if shm_backup.exists():
-                        shm_backup.unlink()
-                except Exception:
-                    pass
-            print(color_green(f"[+] Successfully moved project '{proj_id}' to '{new_path}'!"))
-        except Exception as e:
-            if backup_file and backup_file.exists():
-                print(f"{info_prefix()} " + color_yellow("Rolling back database metadata changes..."))
-                db_restore_rollback_backup(backup_file)
-                try:
-                    backup_file.unlink()
-                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
-                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
-                    if wal_backup.exists():
-                        wal_backup.unlink()
-                    if shm_backup.exists():
-                        shm_backup.unlink()
-                except Exception:
-                    pass
-            if physical_moved:
-                print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
-                try:
-                    shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
-                except Exception as re:
-                    print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
-            die(f"Failed to move project: {e}")
+        _execute_move(
+            kind="project", spec=str(args.move_project), id_for_metadata=proj_id,
+            source_dir=worktree, project_id=proj_id, dst=args.to,
+            metadata_only=getattr(args, "metadata_only", False),
+            confirm_remote_delete=getattr(args, "confirm_remote_delete", False),
+            assume_yes=getattr(args, "yes", False), force=getattr(args, "force", False),
+            verbosity=verbosity,
+        )
         return
 
     if args.move_session is not None:
         if not args.to:
             die("Error: 'ocman move' requires a destination, e.g. 'ocman move <session> to <new_path>'.")
-        # Find session
         sess = db_find_session(args.move_session)
         if not sess:
             die(f"Error: Session '{args.move_session}' not found in database.")
         sess_id, directory, project_id = sess
-        
-        old_path = Path(directory)
-        new_path = Path(args.to)
-        
-        metadata_only = getattr(args, "metadata_only", False)
-        if not metadata_only:
-            if not old_path.exists():
-                # Check interactive prompt
-                import sys
-                if sys.stdout.isatty():
-                    print(f"{info_prefix()} " + color_yellow(f"Source directory '{directory}' does not exist on disk."))
-                    try:
-                        choice = input("Update database metadata only? [y/N]: ").strip().lower()
-                    except (KeyboardInterrupt, EOFError):
-                        print()
-                        die("Operation aborted.")
-                    if choice in ("y", "yes"):
-                        metadata_only = True
-                    else:
-                        die("Operation aborted.")
-                else:
-                    die("Error: Source directory does not exist on disk. Use --metadata-only to update database anyway.")
-
-        if not metadata_only and new_path.exists():
-            die(f"Error: Destination path '{args.to}' already exists.")
-
-        backup_file = None
-        physical_moved = False
-        try:
-            print(f"{info_prefix()} Creating database rollback backup...")
-            backup_file = db_create_rollback_backup()
-            
-            if not metadata_only:
-                print(f"{info_prefix()} Physically moving directory: {old_path} -> {new_path}")
-                move_directory_structure(old_path, new_path)
-                physical_moved = True
-                
-            print(f"{info_prefix()} Updating database metadata...")
-            db_move_session_metadata(sess_id, str(old_path), str(new_path))
-            
-            if backup_file and backup_file.exists():
-                try:
-                    backup_file.unlink()
-                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
-                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
-                    if wal_backup.exists():
-                        wal_backup.unlink()
-                    if shm_backup.exists():
-                        shm_backup.unlink()
-                except Exception:
-                    pass
-            print(color_green(f"[+] Successfully moved session '{sess_id}' to '{new_path}'!"))
-        except Exception as e:
-            if backup_file and backup_file.exists():
-                print(f"{info_prefix()} " + color_yellow("Rolling back database metadata changes..."))
-                db_restore_rollback_backup(backup_file)
-                try:
-                    backup_file.unlink()
-                    wal_backup = backup_file.parent / f"{backup_file.name}-wal"
-                    shm_backup = backup_file.parent / f"{backup_file.name}-shm"
-                    if wal_backup.exists():
-                        wal_backup.unlink()
-                    if shm_backup.exists():
-                        shm_backup.unlink()
-                except Exception:
-                    pass
-            if physical_moved:
-                print(f"{info_prefix()} " + color_yellow(f"Rolling back physical directory move: {new_path} -> {old_path}"))
-                try:
-                    shutil.move(str(new_path.expanduser().resolve()), str(old_path.expanduser().resolve()))
-                except Exception as re:
-                    print(color_red(f"[-] Critical: Failed to restore physical directory: {re}"))
-            die(f"Failed to move session: {e}")
+        _execute_move(
+            kind="session", spec=str(args.move_session), id_for_metadata=sess_id,
+            source_dir=directory, project_id=project_id, dst=args.to,
+            metadata_only=getattr(args, "metadata_only", False),
+            confirm_remote_delete=getattr(args, "confirm_remote_delete", False),
+            assume_yes=getattr(args, "yes", False), force=getattr(args, "force", False),
+            verbosity=verbosity,
+        )
         return
 
     # Bridge --compact to --use-model for backward compatibility.

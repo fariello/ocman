@@ -269,10 +269,15 @@ def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
     conn.commit()
     conn.close()
 
-    # Call main without --metadata-only, mock isatty and input
+    # Call main without --metadata-only, mock isatty and input.
+    # New UX: a missing source shows a menu (1 = metadata-only), then a final
+    # typed-'yes' confirm. Route each input by prompt text.
     monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", "/nonexistent/new"])
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda prompt: "yes")
+
+    def fake_input(prompt):
+        return "yes" if "yes" in prompt.lower() else "1"
+    monkeypatch.setattr("builtins.input", fake_input)
 
     try:
         ocman.main()
@@ -285,3 +290,103 @@ def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
     cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
     assert cursor.fetchone()[0] == str(Path("/nonexistent/new").resolve())
     conn.close()
+
+
+# ---- Git-aware / remote-runbook move (IPD 20260711) ------------------------
+
+def test_parse_move_dest():
+    from ocman import _parse_move_dest
+    assert _parse_move_dest("host:/path") == (True, "host", "/path")
+    assert _parse_move_dest("user@host:/srv/proj") == (True, "user@host", "/srv/proj")
+    assert _parse_move_dest("host:relative/dir") == (True, "host", "relative/dir")
+    # Local paths (including Windows drives) are NOT remote.
+    assert _parse_move_dest("/local/path")[0] is False
+    assert _parse_move_dest("./rel")[0] is False
+    assert _parse_move_dest("~/x")[0] is False
+    assert _parse_move_dest("C:\\proj")[0] is False
+    assert _parse_move_dest("C:/proj")[0] is False
+    assert _parse_move_dest("")[0] is False
+
+
+def _fake_git(monkeypatch, status_lines, is_worktree=True):
+    """Patch run_git so git_state parses canned 'status --porcelain=v1 -b' output."""
+    import subprocess
+
+    def fake_run_git(repo, args, *, check=True):
+        if args[:1] == ["rev-parse"]:
+            out = "true\n" if is_worktree else "false\n"
+            return subprocess.CompletedProcess(args, 0 if is_worktree else 1, stdout=out, stderr="")
+        if args[:1] == ["status"]:
+            return subprocess.CompletedProcess(args, 0, stdout="\n".join(status_lines) + "\n", stderr="")
+        return subprocess.CompletedProcess(args, 0, stdout="", stderr="")
+
+    monkeypatch.setattr(ocman, "run_git", fake_run_git)
+
+
+def test_git_state_clean_in_sync(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, ["## main...origin/main"])
+    gs = ocman.git_state(tmp_path)
+    assert gs["clean"] and gs["upstream"] and gs["ahead"] == 0 and gs["behind"] == 0
+
+
+def test_git_state_ahead_behind(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, ["## main...origin/main [ahead 2, behind 1]"])
+    gs = ocman.git_state(tmp_path)
+    assert gs["ahead"] == 2 and gs["behind"] == 1 and gs["clean"]
+
+
+def test_git_state_dirty(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, ["## main", " M file1.py", "?? new.txt", "A  staged.py"])
+    gs = ocman.git_state(tmp_path)
+    assert gs["dirty"] and gs["modified"] == 1 and gs["untracked"] == 1 and gs["staged"] == 1
+    assert gs["upstream"] is False
+
+
+def test_git_state_not_a_repo(monkeypatch, tmp_path):
+    _fake_git(monkeypatch, [], is_worktree=False)
+    assert ocman.git_state(tmp_path) is None
+
+
+def test_remote_runbook_quotes_and_no_network(monkeypatch, tmp_path, capsys):
+    """A remote move prints a runbook with shell-quoted values and runs NO network I/O."""
+    import subprocess
+    # Guard: local git inspection is allowed, but NO network transfer (ssh/scp/rsync,
+    # or tar piped over ssh) may be spawned during a print-only remote move.
+    real_run = subprocess.run
+    def guarded_run(cmd, *a, **k):
+        argv0 = (cmd[0] if isinstance(cmd, (list, tuple)) else str(cmd)).split("/")[-1]
+        if argv0 in ("ssh", "scp", "rsync", "tar"):
+            raise AssertionError(f"unexpected network subprocess: {cmd}")
+        # Allow local git (source-repo inspection); everything else runs normally.
+        return real_run(cmd, *a, **k)
+    monkeypatch.setattr(subprocess, "run", guarded_run)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)  # non-interactive -> no menus/confirm
+
+    src = tmp_path / "my proj;rm -rf"  # space + shell metacharacters
+    src.mkdir()
+    ocman._execute_move(
+        kind="session", spec="ses_x", id_for_metadata="ses_x", source_dir=str(src),
+        project_id=None, dst="build@host:/srv/dest dir", metadata_only=False,
+        confirm_remote_delete=False, assume_yes=True, force=False, verbosity=0,
+    )
+    out = capsys.readouterr().out
+    assert "REMOTE MOVE RUNBOOK" in out
+    assert "ocman session import" in out and "--new-project-path" in out
+    # The dangerous source path must appear shell-quoted in the tar command
+    # (shlex.quote wraps the whole path because it contains a space + ';').
+    assert f"tar -C '{src}'" in out
+    # The metacharacter must never appear as a bare, unquoted shell token.
+    assert ";rm -rf -cz" not in out
+    # Remote dest with a space is safely quoted inside the ssh payload.
+    assert "'/srv/dest dir'" in out
+
+
+def test_confirm_remote_delete_requires_remote(monkeypatch, tmp_path):
+    """--confirm-remote-delete only applies to a remote destination."""
+    with pytest.raises(SystemExit):
+        ocman._execute_move(
+            kind="session", spec="ses_x", id_for_metadata="ses_x",
+            source_dir=str(tmp_path), project_id=None, dst="/local/only",
+            metadata_only=False, confirm_remote_delete=True, assume_yes=True,
+            force=False, verbosity=0,
+        )

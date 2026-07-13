@@ -1,6 +1,20 @@
 # Implementation Plan - Git-aware `ocman move` with remote runbook
 
-Status: reviewed (plan-review 2026-07-12; not executed, not yet approved for execution)
+Status: EXECUTED (2026-07-13)
+
+Implemented in `ocman/cli.py`: `_parse_move_dest`, `git_state`/`run_git` (first git
+integration, argv only), `TransferStep`/`MovePlan` with `render_runbook`,
+`_build_remote_steps`, `_menu`, `_gather_git_decisions` (B1/B2 menus),
+`_run_git_actions` (aborts before any move on failure), `_move_dest_backup_dir`
+(`move-dest-backup-*`), and `_execute_move` (up-front gather -> single confirm ->
+act; local transactional move with C2 collision menu, remote print-only runbook,
+and `--confirm-remote-delete`). Both `move` handlers reduced to thin dispatchers;
+`--confirm-remote-delete`/`-y`/`--force` added to both `move` subparsers. Command
+safety: `shlex.quote` on all printed values, subprocess list-form for git. Tests
+added in `tests/test_move.py` (parse rule, git_state states, remote runbook
+quoting + no network, confirm-remote-delete gate) and the missing-source test
+updated to the new menu UX. Docs updated (README, ARCHITECTURE, CHANGELOG). Full
+suite: 292 passed, 2 skipped.
 
 Enhances `ocman move SPEC to DST` to be git-aware and cross-machine-friendly.
 When DST is a remote (`host:/path`), ocman gathers all decisions interactively
@@ -330,3 +344,4 @@ metacharacters).
 
 ## Workflow history
 - 2026-07-12 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED), PR-002 (FIXED), PR-003 (FIXED, dest-backup naming), PR-004 (FIXED, remote-delete surface), PR-005 (FIXED, parse rule), PR-006 (FIXED, execution gate added).
+- 2026-07-13 execute (its_direct/pt3-claude-opus-4.8): implemented Sections A-H; 292 passed, 2 skipped; docs updated; moved to executed/.

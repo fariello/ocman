@@ -3,6 +3,15 @@
 ## [Unreleased]
 
 ### Added
+- **Git-aware, cross-machine `ocman move`.** `move SPEC to DST` now inspects a git source repo and,
+  on a TTY, offers to handle the working tree before moving (commit staged/all, or push/pull a clean
+  but diverged repo), asking everything up front so a git failure aborts before anything moves. When
+  `DST` is a remote `host:/path`, ocman performs NO network I/O: it prints a shell-quoted, copy-paste
+  runbook (export bundle, scp, git-or-tar repo transfer, remote import with `--new-project-path`) and
+  never deletes the local copy. A guarded `--confirm-remote-delete` reclaims local space after you
+  verify the remote import. An existing local destination now offers backup/replace/overlay choices
+  instead of a hard error. Git commands ocman runs use argv (never a shell); printed commands are
+  `shlex.quote`-escaped.
 - **Richer multi-project `list sessions` output.** When no single project is in scope, each session is
   shown with its ID and project directory, first/last active timestamps, cost, and split
   input/output/cache token counts (alongside the approximate message/interaction/part counts).
