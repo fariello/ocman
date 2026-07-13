@@ -1,6 +1,6 @@
 # Implementation Plan - Git-aware `ocman move` with remote runbook
 
-Status: PROPOSED (not yet executed)
+Status: reviewed (plan-review 2026-07-12; not executed, not yet approved for execution)
 
 Enhances `ocman move SPEC to DST` to be git-aware and cross-machine-friendly.
 When DST is a remote (`host:/path`), ocman gathers all decisions interactively
@@ -157,6 +157,15 @@ directory backups (distinct from the DB rollback backup).
 proceed to the standard transactional move (today's behavior) plus any git prep.
 Confirm the destination parent is writable up front.
 
+Note (inner guard): `move_directory_structure` (`ocman/cli.py:7919`) itself
+raises when the destination already exists (`7935`), and both move handlers
+already hard-`die` on dest-exists (`11117` project, `11200` session). The C2
+collision choice MUST therefore be resolved and the destination cleared/backed-up
+BEFORE calling `move_directory_structure` (or before the overlay-copy path), so
+the chosen behavior is what happens rather than the existing guard firing. The C2
+overlay option (copy over the top) does NOT go through `move_directory_structure`
+(which requires an absent dest); it is a separate copy path.
+
 ### D. Remote runbook (print-only), pre-filled
 
 After gathering B + C1, print a numbered, copy-paste runbook with real values
@@ -202,7 +211,27 @@ make a future "actually execute remote" IPD cheap:
 - Isolate git calls behind a tiny `git_state(path)` / `run_git(path, args)` helper
   so tests can mock them and a future feature can reuse them.
 
-### G. Non-goals (explicit)
+### G. Command safety (printed and executed)
+
+The runbook interpolates real values (source dir, `host:/path`, bundle path,
+remap path) into shell command strings, and git actions are RUN locally. Both are
+attack/footgun surfaces (a `worktree`/`directory`/DST containing spaces or shell
+metacharacters).
+
+- **Printed commands:** every interpolated value MUST be shell-quoted
+  (`shlex.quote`) so a copy-pasted runbook is correct and safe even for paths with
+  spaces, quotes, `$`, `;`, or `&`. The printed command is data; it must never be
+  a place a crafted path can inject extra shell words.
+- **Executed git:** git commands ocman runs MUST use `subprocess` LIST form
+  (argv), never `shell=True` and never string interpolation into a shell. Pass the
+  repo via `git -C <path> ...` with `<path>` as a discrete argv element.
+- **No secrets in output:** the runbook and any logging must not echo tokens,
+  credentials, or remote auth material; SSH/git auth is the user's environment.
+- Tests MUST include a source path and a DST with spaces and a shell
+  metacharacter, asserting the printed commands are correctly quoted and that no
+  executed git call uses a shell.
+
+### H. Non-goals (explicit)
 
 - ocman performing ssh/scp/rsync or remote git for a REMOTE move (print only).
 - Guessing a git remote/upstream that is not configured.
@@ -216,8 +245,18 @@ make a future "actually execute remote" IPD cheap:
 
 ## Tests
 
-- `_parse_move_dest`: `host:/path` -> remote; `/local/path`, `./rel`, `~/x` ->
-  local; edge cases (`user@host:/p`, drive-like `C:\\` guarded, empty).
+- `_parse_move_dest`: `host:/path`, `user@host:/p`, `host:relative` -> remote;
+  `/local/path`, `./rel`, `~/x`, `C:\\proj`, `C:/proj` -> local; empty/degenerate
+  inputs handled. Assert the Windows-drive readings resolve LOCAL per the rule in
+  Resolved decisions.
+- Command safety: a source path and a DST containing a space and a shell
+  metacharacter produce printed commands whose interpolated values are
+  `shlex.quote`-escaped; assert no executed git call uses `shell=True` (spy the
+  subprocess call and confirm argv list form).
+- `move-dest-backup-*`: the C2 backup options create a directory named
+  `move-dest-backup-<timestamp>` under the backups root (NOT `opencode-db-cleanup-*`).
+- `--confirm-remote-delete`: the flag path performs the same guarded, typed-yes
+  local delete as the inline interactive offer, and is a no-op safe to re-run.
 - `git_state`: mock subprocess to simulate clean+in-sync, clean+ahead,
   clean+behind, clean+ahead+behind, no-upstream, dirty (each file-type mix), and
   not-a-git-repo. Assert the correct menu options are offered for each.
@@ -241,22 +280,53 @@ make a future "actually execute remote" IPD cheap:
 ## Docs
 
 - README + help: document `ocman move SPEC to host:/path` (prints a runbook),
-  the up-front git-state and dest-collision menus, that remote never runs network
-  I/O, and the never-auto-delete-on-remote policy.
+  the up-front git-state and dest-collision menus, the `--confirm-remote-delete`
+  flag, that remote never runs network I/O, and the never-auto-delete-on-remote
+  policy.
 - ARCHITECTURE: record the `MovePlan` / `TransferStep` seam, the new `git_state`
-  helper (first git integration), and that remote transfer is print-only by
+  helper (first git integration), the printed-command quoting / executed-git
+  list-form safety rule (Section G), and that remote transfer is print-only by
   design (execution deferred to a future IPD).
 - CHANGELOG under Unreleased.
 
 ---
 
-## Open Questions (for plan-review)
+## Execution gate (read before implementing)
 
-- Exact backup location/naming for the C2 directory backups (reuse the
-  `opencode-db-cleanup-*`-style timestamp under the backups dir, or a distinct
-  `move-dest-backup-*` prefix?). Decide in review.
-- Whether the guarded remote local-delete (E) should be a follow-up flag on
-  `move` or its own tiny subcommand; lean flag, confirm in review.
-- Windows/`host:` ambiguity in `_parse_move_dest` (a `C:\path` looks like
-  `host:path`); define the rule (require `/` after `host:` and/or a non-drive
-  host) and test it.
+- **Open questions:** all resolved (see below). No unresolved decision blocks execution.
+- **Scope fence:** implement only Sections A-H. Explicitly OUT: ocman running
+  ssh/scp/rsync/remote-git (print-only), guessing a git remote, auto-deleting
+  local after a remote move, submodule/LFS/bare-repo handling, remote schema
+  negotiation. Do not expand scope without a new plan.
+- **Honesty (hard MUST):** when reporting tests, paste the ACTUAL pytest runner
+  output (`PYTHONPATH=. <venv>/bin/pytest -q`). Never claim a pass you did not run.
+- **Commit discipline:** commit ONLY the files you changed, path-scoped
+  (`git commit -m msg -- <paths>`); never `git add -A`/`-a`, never push, never tag.
+- **Lifecycle:** on completion, set `Status: EXECUTED (<date>)` and `git mv` this
+  plan from `pending/` to `executed/`.
+
+## Resolved decisions (plan-review 2026-07-12, maintainer-confirmed)
+
+- **C2 directory-backup location/naming:** back up an existing local DST into the
+  backups root (`~/.local/share/opencode/backups/`) under a DISTINCT prefix
+  `move-dest-backup-<timestamp>` (do NOT reuse the `opencode-db-cleanup-*` prefix;
+  a directory backup is not a DB-family backup). Timestamp via
+  `get_startup_timestamp_local()` for consistency.
+- **Guarded remote local-delete surface (E):** expose it BOTH as the interactive
+  inline offer after the runbook (the normal path) AND as a re-invocable flag
+  `ocman move SPEC to DST --confirm-remote-delete` so the delete can be resumed in
+  a later invocation once the user has verified the remote import. Both routes go
+  through the same typed-yes confirm and reuse `db_delete_sessions_batch` + backup.
+- **`_parse_move_dest` Windows/`host:` rule:** classify as REMOTE only when the
+  string matches `^[^/\\:]+(@[^/\\:]+)?:.+` where the char after `:` is NOT a
+  path-separator that would indicate a Windows drive; concretely, treat
+  `host:/path`, `user@host:/path`, and `host:relative` as remote, but treat a
+  single-letter scheme followed by `:\` or `:/` (e.g. `C:\proj`, `C:/proj`) as a
+  LOCAL Windows path. Require and test both readings.
+
+## Open Questions
+
+- None remaining; all resolved above.
+
+## Workflow history
+- 2026-07-12 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED), PR-002 (FIXED), PR-003 (FIXED, dest-backup naming), PR-004 (FIXED, remote-delete surface), PR-005 (FIXED, parse rule), PR-006 (FIXED, execution gate added).
