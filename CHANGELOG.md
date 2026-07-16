@@ -2,6 +2,18 @@
 
 ## [Unreleased]
 
+### Changed
+- **Consistent destructive-op flags.** `-y/--yes` (skip the typed confirmation) is now
+  accepted by `project delete`, `db clean`, `db clean-orphans`, and `backup clean` (it
+  was previously only on `session delete`/`compact`/`move`), so these can run
+  unattended. `--force` continues to mean "bypass the process-lock check" everywhere;
+  on `history clear` (which has no process lock) `--force` is now a documented
+  back-compat alias for `-y`. The top-level `move` sugar now also accepts
+  `--confirm-remote-delete`, `-y/--yes`, and `--force`, matching `session move` /
+  `project move`.
+- **Corrected `export` help.** The top-level `export` help no longer claims "project
+  export is not yet supported"; project export is supported and auto-detected.
+
 ### Added
 - **Short aliases `ocman ls` and `ocman lp`** for `ocman list sessions [NAME]` and
   `ocman list projects`.

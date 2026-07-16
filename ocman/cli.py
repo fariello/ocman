@@ -5559,6 +5559,7 @@ def _legacy_defaults(config: dict) -> dict:
         "rebase_paths": False,
         "from_prefix": None,
         "metadata_only": False,
+        "confirm_remote_delete": False,
         "export_session": None,
         "export_project": None,
         "import_session": None,
@@ -5702,6 +5703,7 @@ def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
     p.add_argument("--days", type=float, default=None, help=argparse.SUPPRESS)  # deprecated alias
     p.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     p.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    p.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
     p._ocman_clean_has_name = with_name  # type: ignore[attr-defined]
 
 
@@ -5830,6 +5832,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("name", help="Project name, number, ID, or path.")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
     sp = new_action(p_project, pr_sub, "move", help="Relocate a project (local or remote DST).")
     sp.add_argument("src", help="Project ID or current path.")
@@ -5856,6 +5859,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = new_action(p_db, db_sub, "clean-orphans", help="Delete orphaned DB records.")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
     sp = new_action(p_db, db_sub, "rebase", help="Bulk rebase path prefixes in the database.")
     sp.add_argument("--from", dest="from_prefix", required=True, metavar="PREFIX",
@@ -5883,7 +5887,9 @@ def build_parser() -> argparse.ArgumentParser:
     h_sub = p_history.add_subparsers(dest="_action", metavar="<action>")
     new_action(p_history, h_sub, "show", help="Show historical activity (alias: 'ocman logs').")
     sp = new_action(p_history, h_sub, "clear", help="Wipe the historical activity ledger.")
-    sp.add_argument("--force", action="store_true", help="Skip the confirmation prompt.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+    sp.add_argument("--force", action="store_true",
+                    help="Deprecated alias for -y/--yes here (history clear has no process lock).")
 
     p_config = new_sub("config", help="Configuration file management.")
     cfg_sub = p_config.add_subparsers(dest="_action", metavar="<action>")
@@ -5904,11 +5910,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help=argparse.SUPPRESS)  # 'to DST' is the preferred form
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--confirm-remote-delete", action="store_true",
+                    help="After verifying a remote move, delete the local copy.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
+    sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
 
     # 'ocman export [session] SPEC to FILE' (session-scope for now).
     sp = new_sub("export", help="Export a session or project bundle (.ocbox); auto-detects the kind.")
     sp.add_argument("kind", nargs="?", default=None, choices=["project", "session"],
-                    help="Optional: force 'session' (project export is not yet supported).")
+                    help="Optional: force 'project' or 'session' to disambiguate (both are supported).")
     sp.add_argument("spec", help="Session id/number/title to export.")
     sp.add_argument("dst", help="Destination .ocbox file (may be preceded by 'to').")
     sp.add_argument("--to", dest="to_flag", default=None, help=argparse.SUPPRESS)
@@ -6042,6 +6052,11 @@ def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> No
     out["verb"] = verb
     if verb == "move":
         out["metadata_only"] = bool(g("metadata_only", False))
+        # Carry the safety/remote flags from the top-level 'move' sugar so it reaches
+        # parity with the 'session move'/'project move' group forms (F4).
+        out["confirm_remote_delete"] = bool(g("confirm_remote_delete", False))
+        out["yes"] = bool(g("yes", False))
+        out["force"] = bool(g("force", False))
 
 
 def _die_cli(message: str) -> None:
@@ -6173,6 +6188,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["project"] = g("name")
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         elif action == "move":
             out["move_project"] = g("src")
             out["to"] = g("to")
@@ -6191,10 +6207,12 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["days"] = days
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         elif action == "clean-orphans":
             out["clean_orphans"] = True
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         elif action == "rebase":
             out["rebase_paths"] = True
             out["from_prefix"] = g("from_prefix")
@@ -6224,6 +6242,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             _name, days = _resolve_clean_args(ns, g, with_name=False, default_days=out["days"])
             out["days"] = days
             out["dry_run"] = bool(g("dry_run", False))
+            out["yes"] = bool(g("yes", False))
         else:
             _no_action_error("backup")
 
@@ -6233,6 +6252,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         elif action == "clear":
             out["clear_history"] = True
             out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         else:
             _no_action_error("history")
 
@@ -9628,8 +9648,13 @@ def db_run_cleanup(
     force: bool,
     clean_orphans: bool,
     verbosity: int,
+    assume_yes: bool = False,
 ) -> None:
-    """Run OpenCode SQLite database retention cleanup and orphan sweeping."""
+    """Run OpenCode SQLite database retention cleanup and orphan sweeping.
+
+    ``assume_yes`` skips the typed confirmation (the -y/--yes affordance); it is
+    distinct from ``force``, which only bypasses the process-lock check.
+    """
     if days < 0:
         raise RecoveryError("Retention window must be 0 or a positive integer.")
     if days == 0 and not clean_orphans:
@@ -9858,7 +9883,7 @@ def db_run_cleanup(
         # is never derived from `force`, which only bypasses the process-lock).
         print()
         if not confirm_destructive(
-            None, assume_yes=False, render=False, action_verb="database prune and vacuum",
+            None, assume_yes=assume_yes, render=False, action_verb="database prune and vacuum",
         ):
             return
 
@@ -11290,8 +11315,11 @@ def cli_restore(sources: list[str] | str) -> None:
     print(f"  Sessions restored:  {total_sessions_restored}")
 
 
-def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
-    """Remove old backup files and directories in the default backups directory."""
+def cli_clean_backups(days: float, dry_run: bool, verbosity: int, assume_yes: bool = False) -> None:
+    """Remove old backup files and directories in the default backups directory.
+
+    ``assume_yes`` skips the typed confirmation (the -y/--yes affordance).
+    """
     config = load_ocman_config()
     backup_dir = Path(config["default_backup_dir"]).expanduser()
     
@@ -11381,7 +11409,8 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int) -> None:
         show_age=True,
         age_header="Days",
     )
-    if not confirm_destructive(preview, dry_run=dry_run, assume_yes=False, interactive=True):
+    if not confirm_destructive(preview, dry_run=dry_run, assume_yes=assume_yes,
+                               interactive=sys.stdout.isatty()):
         return
 
     deleted_count = 0
@@ -11701,7 +11730,9 @@ def main() -> None:
             },
             "runs": []
         }
-        # Confirm before wiping the ledger + all-time totals. --force bypasses (scriptable).
+        # Confirm before wiping the ledger + all-time totals. -y/--yes skips the prompt
+        # (scriptable); --force is a back-compat alias for -y here (no process lock exists
+        # for this op, so --force cannot mean "bypass process-lock" as it does elsewhere).
         existing = _load_history()
         run_count = len(existing.get("runs", []))
         print(color_red(color_bold(
@@ -11710,7 +11741,7 @@ def main() -> None:
         )))
         if not confirm_destructive(
             None,
-            assume_yes=getattr(args, "force", False),
+            assume_yes=getattr(args, "yes", False) or getattr(args, "force", False),
             render=False,
             action_verb="clearing the activity history",
         ):
@@ -12015,7 +12046,8 @@ def main() -> None:
                 dry_run=args.dry_run,
                 force=args.force,
                 clean_orphans=args.clean_orphans,
-                verbosity=verbosity
+                verbosity=verbosity,
+                assume_yes=getattr(args, "yes", False),
             )
         except RecoveryError as e:
             die(str(e))
@@ -12027,7 +12059,8 @@ def main() -> None:
             cli_clean_backups(
                 days=args.days,
                 dry_run=args.dry_run,
-                verbosity=verbosity
+                verbosity=verbosity,
+                assume_yes=getattr(args, "yes", False),
             )
         except Exception as e:
             die(str(e))
@@ -12044,7 +12077,8 @@ def main() -> None:
                 project_id=_project_id,
                 dry_run=args.dry_run,
                 force=args.force,
-                verbosity=verbosity
+                verbosity=verbosity,
+                confirm=not getattr(args, "yes", False),
             )
         except Exception as e:
             die(str(e))

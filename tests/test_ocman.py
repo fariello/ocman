@@ -1289,6 +1289,41 @@ def test_preprocess_list_word_order():
         ["ocman", "session", "list", "myproj"]
 
 
+def test_move_sugar_carries_safety_flags():
+    """F4: the top-level 'move' sugar exposes --confirm-remote-delete/-y/--force."""
+    import sys
+    from ocman import preprocess_argv, parse_args
+    argv = preprocess_argv(["ocman", "move", "session", "SID", "to", "h:/p",
+                            "--confirm-remote-delete", "-y", "--force"])
+    orig = sys.argv
+    sys.argv = argv
+    try:
+        a = parse_args()
+    finally:
+        sys.argv = orig
+    assert getattr(a, "confirm_remote_delete") is True
+    assert getattr(a, "yes") is True
+    assert getattr(a, "force") is True
+
+
+def test_yes_flag_parses_on_clean_and_delete_ops():
+    """F5: -y/--yes is accepted by project delete, db clean, clean-orphans, backup clean."""
+    def _yes(argv_tail):
+        import sys
+        from ocman import parse_args
+        orig = sys.argv
+        sys.argv = ["ocman", *argv_tail]
+        try:
+            return getattr(parse_args(), "yes", None)
+        finally:
+            sys.argv = orig
+    assert _yes(["project", "delete", "p1", "-y"]) is True
+    assert _yes(["db", "clean", "-y"]) is True
+    assert _yes(["db", "clean-orphans", "-y"]) is True
+    assert _yes(["backup", "clean", "-y"]) is True
+    assert _yes(["history", "clear", "-y"]) is True
+
+
 def test_preprocess_ls_lp_short_aliases():
     from ocman import preprocess_argv
     assert preprocess_argv(["ocman", "ls"]) == ["ocman", "session", "list"]

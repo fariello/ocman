@@ -285,9 +285,11 @@ def _seed_backups(backup_dir):
 
 
 def test_clean_backups_cancel_on_non_yes(temp_env, monkeypatch):
-    """Characterization: any non-'yes' confirmation cancels; nothing is deleted."""
+    """Characterization: on a TTY, any non-'yes' confirmation cancels; nothing is deleted."""
     backup_dir = Path(temp_env["config"]["default_backup_dir"])
     old, new = _seed_backups(backup_dir)
+    # The typed-confirm prompt only fires on an interactive TTY; simulate one.
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
     monkeypatch.setattr("builtins.input", lambda _: "no")
     cli_clean_backups(days=5, dry_run=False, verbosity=0)
     assert old.exists() and new.exists()  # nothing deleted on cancel

@@ -3,7 +3,8 @@
 - Date: 2026-07-15
 - Concern: functionality (completeness vs. user/stakeholder needs)
 - Scope: whole project (ocman CLI/TUI)
-- Status: reviewed
+- Status: approved
+- Approval: approved by maintainer 2026-07-15 (all 8 steps; open questions 1-2 answered below)
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -118,13 +119,14 @@ remove its item from `TODO.md` once shipped.
 
 ## Open questions
 
-1. **`--json` schema stability:** are we willing to treat the JSON output as a
-   semi-stable contract (documented, versioned in CHANGELOG on change)? Recommended yes,
-   since scriptability is the point.
-2. **`ocman spend` data source (from TODO.md):** live session cost columns, the history
-   ledger (`OPENCODE_HISTORY_PATH`), or both, and what exactly "historically saved
-   spend" means (deleted-session cost vs. estimated cost avoided by compaction). This
-   must be decided before Step 8; it is a stakeholder call.
+1. **`--json` schema stability:** RESOLVED (maintainer 2026-07-15): YES, treat JSON
+   output as a documented, semi-stable contract with a `schema_version` field; note
+   breaking schema changes in CHANGELOG. Step 7 proceeds.
+2. **`ocman spend` data source (from TODO.md):** RESOLVED (maintainer 2026-07-15): BOTH
+   live session cost columns AND the deletion history ledger
+   (`OPENCODE_HISTORY_PATH`), with a flag toggling live-only vs. live+historical.
+   "Historically saved spend" = cost of since-deleted sessions/projects recorded in the
+   ledger's cumulative totals (not compaction-avoided estimates). Step 8 proceeds.
 3. **`resume`/`open` a session:** in scope for ocman at all, or explicitly a non-goal
    (ocman = manage/recover, opencode = run)? Deferred pending this decision.
 4. **`--yes` vs `--force` convergence (F6):** acceptable to keep `--force` as a working
