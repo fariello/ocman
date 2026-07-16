@@ -171,8 +171,8 @@ A handful of top-level verbs are kept as convenient aliases for the most common 
 
 **Word-order aliases.** The `list` verb accepts either word order, so you can read it whichever way
 feels natural:
-*   `ocman list projects` = `ocman project list`
-*   `ocman list sessions [NAME]` = `ocman session list [NAME]`
+*   `ocman list projects` = `ocman project list` (short: `ocman lp`)
+*   `ocman list sessions [NAME]` = `ocman session list [NAME]` (short: `ocman ls [NAME]`)
 
 **Auto-detecting `move` and `export` verbs.** Two top-level verbs figure out whether you gave them a
 project or a session, so you rarely need to say which:
@@ -369,7 +369,7 @@ Global options work on any subcommand and may appear before or after it.
 | Command | Description |
 |:---|:---|
 | `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in [project\|session] NAME` (auto-detects; disambiguate with `in project NAME` / `in session NAME`). `-n N`/`--limit N` sets the max matching lines shown per session (default: 10). |
-| `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. |
+| `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. Short forms: `ocman lp` / `ocman ls [NAME]`. |
 | `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |
 | `ocman export SPEC to FILE` | Auto-detects whether `SPEC` is a session or a project and exports it to a `.ocbox` bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session\|project SPEC`. `ocman session import FILE` auto-detects and restores either kind. |
 | `ocman info` | Alias of `ocman db info`. |

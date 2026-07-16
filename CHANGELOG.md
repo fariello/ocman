@@ -3,6 +3,8 @@
 ## [Unreleased]
 
 ### Added
+- **Short aliases `ocman ls` and `ocman lp`** for `ocman list sessions [NAME]` and
+  `ocman list projects`.
 - **Git-aware, cross-machine `ocman move`.** `move SPEC to DST` now inspects a git source repo and,
   on a TTY, offers to handle the working tree before moving (commit staged/all, or push/pull a clean
   but diverged repo), asking everything up front so a git failure aborts before anything moves. When

@@ -1289,6 +1289,17 @@ def test_preprocess_list_word_order():
         ["ocman", "session", "list", "myproj"]
 
 
+def test_preprocess_ls_lp_short_aliases():
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "ls"]) == ["ocman", "session", "list"]
+    assert preprocess_argv(["ocman", "lp"]) == ["ocman", "project", "list"]
+    assert preprocess_argv(["ocman", "ls", "myproj"]) == ["ocman", "session", "list", "myproj"]
+    # Leading globals are preserved and the alias still fires.
+    assert preprocess_argv(["ocman", "--db", "/x", "ls"]) == \
+        ["ocman", "--db", "/x", "session", "list"]
+    assert preprocess_argv(["ocman", "lp", "--foo"]) == ["ocman", "project", "list", "--foo"]
+
+
 def test_preprocess_move_export_to_keyword():
     from ocman import preprocess_argv
     assert preprocess_argv(["ocman", "move", "X", "to", "Y"]) == ["ocman", "move", "X", "Y"]

@@ -5151,8 +5151,8 @@ def build_help(topic: str | None = None) -> str:
         return out
 
     browse = [
-        (f"{prog} list projects", "List all known opencode projects"),
-        (f"{prog} list sessions [NAME]", "List sessions (word order also: 'session list')"),
+        (f"{prog} list projects", "List all known opencode projects (alias: 'lp')"),
+        (f"{prog} list sessions [NAME]", "List sessions (aliases: 'ls [NAME]', 'session list')"),
         (f'{prog} search "some text"', "Search content + title (up to 10 lines/session)"),
         (f'{prog} search "text" in NAME', "Search within a project or session (-n = lines/session)"),
         (f"{prog} session show ID", "Show session details"),
@@ -5315,6 +5315,7 @@ def build_help_reference() -> str:
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
+            ("lp | ls [NAME]", "Short aliases for 'list projects' / 'list sessions'"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
             ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
@@ -5351,6 +5352,7 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     Natural-language sugar layered on top of the subcommand grammar.
 
     Rewrites performed:
+      0. Short aliases: "ls [NAME]" -> "session list [NAME]"; "lp" -> "project list".
       1. Word-order aliases: "list projects" -> "project list";
          "list sessions [NAME]" -> "session list [NAME]".
       2. The "to" keyword in move/export: "move X to Y" -> "move X Y".
@@ -5392,6 +5394,12 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             continue
         break
     rest = rest[i:]
+
+    # (0) short aliases: "ls [NAME]" -> "session list [NAME]"; "lp" -> "project list".
+    if rest and rest[0].lower() == "ls":
+        rest = ["session", "list", *rest[1:]]
+    elif rest and rest[0].lower() == "lp":
+        rest = ["project", "list", *rest[1:]]
 
     # (1) word-order: "list projects|sessions ..."
     if rest and rest[0].lower() == "list" and len(rest) >= 2:
