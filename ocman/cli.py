@@ -5810,6 +5810,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Remap to a newly created project worktree.")
     sp.add_argument("--new-session-id", action="store_true",
                     help="Regenerate a fresh session ID for the imported session (single-session bundle only).")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show the import plan (remaps, target project) without writing.")
 
     sp = new_action(p_session, s_sub, "move", help="Relocate a session (local or remote DST).")
     sp.add_argument("session", help="Session ID to move.")
@@ -5817,6 +5819,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Destination path, or a remote 'host:/path' (prints a runbook).")
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show what would happen (and the remote runbook) without acting.")
     sp.add_argument("--confirm-remote-delete", action="store_true",
                     help="After verifying a remote move, delete the local session and repo.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
@@ -5840,6 +5844,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Destination path, or a remote 'host:/path' (prints a runbook).")
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show what would happen (and the remote runbook) without acting.")
     sp.add_argument("--confirm-remote-delete", action="store_true",
                     help="After verifying a remote move, delete the local project and repo.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
@@ -5910,6 +5916,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help=argparse.SUPPRESS)  # 'to DST' is the preferred form
     sp.add_argument("--metadata-only", action="store_true",
                     help="Update DB paths only; do not move files.")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show what would happen (and the remote runbook) without acting.")
     sp.add_argument("--confirm-remote-delete", action="store_true",
                     help="After verifying a remote move, delete the local copy.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
@@ -6053,10 +6061,11 @@ def _apply_move_or_export(out: dict, ns: argparse.Namespace, g, verb: str) -> No
     if verb == "move":
         out["metadata_only"] = bool(g("metadata_only", False))
         # Carry the safety/remote flags from the top-level 'move' sugar so it reaches
-        # parity with the 'session move'/'project move' group forms (F4).
+        # parity with the 'session move'/'project move' group forms (F4, F7).
         out["confirm_remote_delete"] = bool(g("confirm_remote_delete", False))
         out["yes"] = bool(g("yes", False))
         out["force"] = bool(g("force", False))
+        out["dry_run"] = bool(g("dry_run", False))
 
 
 def _die_cli(message: str) -> None:
@@ -6173,10 +6182,15 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["to_project"] = g("to_project")
             out["new_project_path"] = g("new_project_path")
             out["new_session_id"] = bool(g("new_session_id", False))
+            out["dry_run"] = bool(g("dry_run", False))
         elif action == "move":
             out["move_session"] = g("session")
             out["to"] = g("to")
             out["metadata_only"] = bool(g("metadata_only", False))
+            out["dry_run"] = bool(g("dry_run", False))
+            out["confirm_remote_delete"] = bool(g("confirm_remote_delete", False))
+            out["yes"] = bool(g("yes", False))
+            out["force"] = bool(g("force", False))
         else:
             _no_action_error("session")
 
@@ -6193,6 +6207,10 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["move_project"] = g("src")
             out["to"] = g("to")
             out["metadata_only"] = bool(g("metadata_only", False))
+            out["dry_run"] = bool(g("dry_run", False))
+            out["confirm_remote_delete"] = bool(g("confirm_remote_delete", False))
+            out["yes"] = bool(g("yes", False))
+            out["force"] = bool(g("force", False))
         else:
             _no_action_error("project")
 
@@ -8327,7 +8345,7 @@ def _unlink_backup_family(backup_file: Path) -> None:
 def _execute_move(*, kind: str, spec: str, id_for_metadata: str, source_dir: str,
                   project_id: str | None, dst: str, metadata_only: bool,
                   confirm_remote_delete: bool, assume_yes: bool, force: bool,
-                  verbosity: int) -> None:
+                  verbosity: int, dry_run: bool = False) -> None:
     """Git-aware move: gather decisions up front, confirm once, then act.
 
     Local dest: transactional dir move + DB rebase (with up-front git prep and
@@ -8432,6 +8450,26 @@ def _execute_move(*, kind: str, spec: str, id_for_metadata: str, source_dir: str
         print(f"  git: {lbl}")
     if is_remote and plan is not None:
         print(f"  transfer: {plan.transfer_style}")
+
+    if dry_run:
+        if is_remote and plan is not None:
+            print()
+            print(plan.render_runbook())
+        elif not metadata_only:
+            new_path = Path(dst)
+            action = "overlay-copy onto" if collision_choice == 5 else "move to"
+            print(f"  would {action}: {new_path}")
+            if collision_choice in (3, 5):
+                print(f"  would back up existing destination to {_move_dest_backup_dir()}")
+            elif collision_choice == 4:
+                print(f"  would remove existing destination {new_path} (no backup)")
+        else:
+            print("  would update database metadata only (no file move)")
+        print()
+        print(f"{info_prefix()} Dry run complete. No changes were made"
+              + (" and no git commands were run." if git_labels else "."))
+        return
+
     if not confirm_destructive(None, assume_yes=assume_yes, render=False,
                                interactive=interactive, action_verb="move"):
         return
@@ -9029,11 +9067,15 @@ def extract_and_import_session(
     target_project_id: str | None = None, 
     new_project_path: str | None = None,
     new_session_id: bool = False,
-    progress_callback = None
+    progress_callback = None,
+    dry_run: bool = False,
 ) -> str:
     """
     Import session database rows and diff files from an .ocbox bundle.
     Handles UUID rewriting upon collision and project association.
+
+    When ``dry_run`` is set, report the resolved import plan (id remaps, target
+    project, worktree rebase) and return WITHOUT writing to the database or disk.
     """
     import zipfile
     import json
@@ -9110,15 +9152,16 @@ def extract_and_import_session(
             
             if not proj_id:
                 if new_project_path:
-                    # Create a new project row
+                    # Create a new project row (skipped under dry_run: no writes).
                     proj_id = f"proj_{uuid.uuid4().hex[:8]}"
                     proj_name = orig_proj.get("name", "Imported Project")
-                    cursor.execute(
-                        "INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
-                        (proj_id, str(Path(new_project_path).resolve()), proj_name)
-                    )
-                    if progress_callback:
-                        progress_callback(f"{info_prefix()} Created new project '{proj_name}' ({proj_id}) with worktree '{new_project_path}'.")
+                    if not dry_run:
+                        cursor.execute(
+                            "INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
+                            (proj_id, str(Path(new_project_path).resolve()), proj_name)
+                        )
+                        if progress_callback:
+                            progress_callback(f"{info_prefix()} Created new project '{proj_name}' ({proj_id}) with worktree '{new_project_path}'.")
                 else:
                     raise RecoveryError("Project mapping required. Specify --to-project or --new-project-path.")
 
@@ -9140,6 +9183,25 @@ def extract_and_import_session(
         if isinstance(e, RecoveryError):
             raise
         raise RecoveryError(f"Pre-flight import failed: {e}")
+
+    if dry_run:
+        if conn:
+            conn.close()
+        remapped = sum(1 for k, v in id_map.items() if k != v)
+        print()
+        print(color_bold("Import dry run:"))
+        print(f"  bundle: {bundle_path}")
+        print(f"  sessions in bundle: {len(all_ids)}")
+        print(f"  target project: {proj_id}"
+              + (f" (new, worktree {new_project_path})" if new_project_path and not target_project_id else ""))
+        if remapped:
+            print(f"  session IDs to be regenerated: {remapped} of {len(all_ids)}"
+                  + (" (--new-session-id)" if new_session_id else " (collision avoidance)"))
+        else:
+            print("  session IDs: kept as-is (no collision)")
+        print()
+        print(f"{info_prefix()} Dry run complete. No database or disk changes were made.")
+        return main_sid if not id_map.get(main_sid) else id_map[main_sid]
 
     # Pre-flight backup
     if progress_callback:
@@ -11625,8 +11687,12 @@ def main() -> None:
         if new_session_id and kind == "project":
             die("Error: session-id rename applies to a single-session bundle only.")
 
+        import_dry_run = bool(getattr(args, "dry_run", False))
         try:
             if kind == "project":
+                if import_dry_run:
+                    die("--dry-run is not yet supported for project bundles; "
+                        "it is available for single-session imports.")
                 print(f"{info_prefix()} Importing project from '{bundle_path}'...")
                 imported_id = extract_and_import_project(
                     bundle_path,
@@ -11636,15 +11702,18 @@ def main() -> None:
                 )
                 print(color_green(f"[+] Successfully imported project as '{imported_id}'!"))
             else:
-                print(f"{info_prefix()} Importing session from '{bundle_path}'...")
+                if not import_dry_run:
+                    print(f"{info_prefix()} Importing session from '{bundle_path}'...")
                 imported_id = extract_and_import_session(
                     bundle_path,
                     target_project_id=to_project,
                     new_project_path=new_project_path,
                     new_session_id=new_session_id,
-                    progress_callback=print
+                    progress_callback=print,
+                    dry_run=import_dry_run,
                 )
-                print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
+                if not import_dry_run:
+                    print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
         except Exception as e:
             die(f"Import failed: {e}")
         return
@@ -11677,7 +11746,7 @@ def main() -> None:
             metadata_only=getattr(args, "metadata_only", False),
             confirm_remote_delete=getattr(args, "confirm_remote_delete", False),
             assume_yes=getattr(args, "yes", False), force=getattr(args, "force", False),
-            verbosity=verbosity,
+            verbosity=verbosity, dry_run=getattr(args, "dry_run", False),
         )
         return
 
@@ -11694,7 +11763,7 @@ def main() -> None:
             metadata_only=getattr(args, "metadata_only", False),
             confirm_remote_delete=getattr(args, "confirm_remote_delete", False),
             assume_yes=getattr(args, "yes", False), force=getattr(args, "force", False),
-            verbosity=verbosity,
+            verbosity=verbosity, dry_run=getattr(args, "dry_run", False),
         )
         return
 

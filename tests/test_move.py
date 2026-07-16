@@ -381,6 +381,31 @@ def test_remote_runbook_quotes_and_no_network(monkeypatch, tmp_path, capsys):
     assert "'/srv/dest dir'" in out
 
 
+def test_move_dry_run_changes_nothing(temp_db, monkeypatch, tmp_path, capsys):
+    """F7: --dry-run reports the plan and moves nothing (local dest)."""
+    import ocman
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    src = tmp_path / "srcproj"; src.mkdir()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', ?, 'P1')", (str(src),))
+    conn.commit(); conn.close()
+    dst = tmp_path / "dstproj"
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    ocman._execute_move(
+        kind="project", spec="p1", id_for_metadata="p1", source_dir=str(src),
+        project_id="p1", dst=str(dst), metadata_only=False,
+        confirm_remote_delete=False, assume_yes=True, force=False, verbosity=0,
+        dry_run=True,
+    )
+    out = capsys.readouterr().out
+    assert "Dry run complete" in out
+    assert src.exists() and not dst.exists()  # nothing moved
+    # DB worktree unchanged.
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT worktree FROM project WHERE id='p1'")
+    assert cur.fetchone()[0] == str(src)
+    conn.close()
+
+
 def test_confirm_remote_delete_requires_remote(monkeypatch, tmp_path):
     """--confirm-remote-delete only applies to a remote destination."""
     with pytest.raises(SystemExit):

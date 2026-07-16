@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- **`--dry-run` for `move` and `session import`.** `session move` / `project move` /
+  top-level `move` now accept `--dry-run` (show the plan, and for a remote destination
+  the full runbook, without moving anything or running git); `session import --dry-run`
+  reports the resolved import plan (ID remaps, target project) without writing to the
+  database or disk.
+
 ### Changed
 - **Consistent destructive-op flags.** `-y/--yes` (skip the typed confirmation) is now
   accepted by `project delete`, `db clean`, `db clean-orphans`, and `backup clean` (it

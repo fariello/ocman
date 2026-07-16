@@ -189,6 +189,33 @@ def test_bundle_session_data_no_leftover_temp(temp_db, tmp_path, monkeypatch):
     assert leftovers == [], f"leftover export temp dirs: {leftovers}"
 
 
+def test_import_session_dry_run_writes_nothing(temp_db, tmp_path, capsys):
+    """F7: --dry-run reports the plan and writes nothing to the DB."""
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/path', 'My Project')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1', 'proj-1', 'Root', '/old/path/s1')")
+    conn.commit()
+    conn.close()
+    bundle_file = tmp_path / "bundle.ocbox"
+    bundle_session_data("s1", bundle_file)
+
+    # Clear the DB so a real import would re-create the session.
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session")
+    conn.commit(); conn.close()
+
+    extract_and_import_session(bundle_file, target_project_id="proj-1", dry_run=True)
+    out = capsys.readouterr().out
+    assert "Import dry run" in out and "Dry run complete" in out
+
+    # Nothing written.
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session")
+    assert cur.fetchone()[0] == 0
+    conn.close()
+
+
 def test_import_session_standard(temp_db, tmp_path):
     # 1. Create a bundle
     conn = sqlite3.connect(str(temp_db))
