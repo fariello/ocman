@@ -1289,6 +1289,75 @@ def test_preprocess_list_word_order():
         ["ocman", "session", "list", "myproj"]
 
 
+def test_spend_per_project_default(temp_db, capsys, monkeypatch, mock_history_path):
+    """F2: `ocman spend` shows a per-project table with a live total; --historical adds the ledger."""
+    import ocman, sys
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/projA', 'A')")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/projB', 'B')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'A1', 1, 2, '/projA', 12.5, 1000, 500, 100, '')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s2', 'p2', 'B1', 1, 2, '/projB', 3.25, 200, 100, 0, '')")
+    conn.commit(); conn.close()
+    # Seed a historical ledger.
+    import json as _json
+    mock_history_path.write_text(_json.dumps({"cumulative": {"cost_deleted": 7.0}, "runs": []}))
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "--historical"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "/projA" in out and "/projB" in out
+    assert "$15.75" in out  # live total 12.5 + 3.25
+    assert "$7.00" in out and "$22.75" in out  # historical + grand total
+
+
+def test_spend_json(temp_db, capsys, monkeypatch, mock_history_path):
+    """F2/F1: `ocman spend --json` emits a parseable per-project envelope."""
+    import ocman, sys, json
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/projA', 'A')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'A1', 1, 2, '/projA', 12.5, 1000, 500, 100, '')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "--json"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    d = json.loads(capsys.readouterr().out)
+    assert d["command"] == "spend" and d["spend"]["scope"] == "projects"
+    assert d["spend"]["live_total"] == 12.5
+    assert d["spend"]["projects"][0]["cost"] == 12.5
+
+
+def test_spend_per_session(temp_db, capsys, monkeypatch):
+    """F2: `ocman spend <project> --sessions` drills into per-session spend."""
+    import ocman, sys
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/projA', 'A')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'A1', 1, 2, '/projA', 12.5, 1000, 500, 100, '')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "p1", "--sessions"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "s1" in out and "$12.50" in out and "Total (live): $12.50" in out
+
+
 def test_list_projects_json(temp_db, capsys, monkeypatch):
     """F1: project list --json emits a parseable schema envelope; human path unchanged without it."""
     import ocman, sys, json

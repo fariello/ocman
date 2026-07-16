@@ -355,8 +355,9 @@ Global options work on any subcommand and may appear before or after it.
 
 | Command | Description |
 |:---|:---|
-| `ocman history show` | Show historical activity runs plus all-time totals. Alias: `ocman logs`. |
-| `ocman history clear` | Wipe the historical activity ledger and reset totals (asks for confirmation; `--force` bypasses). |
+| `ocman history show` | Show historical activity runs plus all-time totals. Alias: `ocman logs`. `--limit N` caps the shown runs; `--json` for machine output. |
+| `ocman history clear` | Wipe the historical activity ledger and reset totals (asks for confirmation; `-y`/`--force` skips). |
+| `ocman spend [PROJECT]` | LLM spend report: per-project table by default (cost + split tokens), `PROJECT --sessions` for per-session detail, `--historical` to add saved (deleted) spend from the ledger, `--json` for machine output. |
 
 ### `config` (configuration file)
 

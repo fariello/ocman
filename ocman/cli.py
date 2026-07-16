@@ -5589,6 +5589,9 @@ def _legacy_defaults(config: dict) -> dict:
         "clear_history": False,
         # models / prompt
         "show_models": False,
+        "show_spend": False,
+        "spend_sessions": False,
+        "spend_historical": False,
         "show_compaction_prompt": False,
         # move / rebase / transfer
         "move_project": None,
@@ -5986,6 +5989,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     new_sub("logs", help="Show historical activity (alias of 'history show').")
 
+    sp = new_sub("spend", help="Show per-project (and per-session) LLM spend.")
+    sp.add_argument("project", nargs="?", default=None,
+                    help="Optional project (name/number/id/path) to drill into per-session spend.")
+    sp.add_argument("--sessions", action="store_true",
+                    help="Show per-session spend for the given project.")
+    sp.add_argument("--historical", action="store_true",
+                    help="Also include historically-saved (deleted) spend from the ledger.")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+
     sp = new_sub("filter", help="Re-scope a recovery/compacted document via the LLM.")
     sp.add_argument("file", help="Input Markdown file.")
     sp.add_argument("-P", "--project", default=None, help="Project to scope to.")
@@ -6353,6 +6365,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
 
     elif group == "logs":
         out["show_logs"] = True
+
+    elif group == "spend":
+        out["show_spend"] = True
+        out["project"] = g("project")
+        out["spend_sessions"] = bool(g("sessions", False))
+        out["spend_historical"] = bool(g("historical", False))
+        out["json_output"] = bool(g("json", False))
 
     elif group == "filter":
         out["command"] = "filter"
@@ -10654,6 +10673,96 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
     print(color_green("========================================================"))
 
 
+def cli_spend(project: str | None = None, *, sessions: bool = False,
+              historical: bool = False, json_output: bool = False) -> None:
+    """Show per-project (default) or per-session LLM spend (F2).
+
+    Sources: live per-project/per-session cost + split tokens from the session
+    rows (via db_list_projects / db_list_sessions). "Historically saved" spend is
+    the deletion ledger's cumulative totals (cost of since-deleted sessions); it is
+    GLOBAL only (the ledger has no project_id), so it is shown as a single line,
+    never fabricated per project.
+    """
+    if project or sessions:
+        # Per-session drill-down for one project.
+        target = project
+        if not target:
+            die("'ocman spend --sessions' needs a project (name/number/id/path).")
+        found = db_find_project(target)
+        if not found:
+            die(f"Project '{target}' not found.")
+        proj_id, worktree = found
+        rows = db_list_sessions(proj_id)
+        session_rows = [{
+            "id": s["id"],
+            "title": s["title"],
+            "cost": s["cost"] or 0.0,
+            "tokens_input": s["tokens_input"] or 0,
+            "tokens_output": s["tokens_output"] or 0,
+            "tokens_cache_read": s["tokens_cache_read"] or 0,
+        } for s in rows]
+        total_cost = sum(r["cost"] for r in session_rows)
+        if json_output:
+            emit_json("spend", {
+                "scope": "sessions", "project_id": proj_id,
+                "directory": _display_worktree(worktree),
+                "total_cost": total_cost, "sessions": session_rows,
+            })
+            return
+        print(color_bold(f"Spend for {_display_worktree(worktree)} ({len(session_rows)} sessions):"))
+        table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+        for r in session_rows:
+            title = (r["title"] or "")[:40]
+            table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
+                           fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
+                           fmt_int(r["tokens_cache_read"])])
+        table.set_cols_align(["l", "r", "r", "r", "r"])
+        print(table.draw())
+        print(f"Total (live): {fmt_cost(total_cost)}")
+        return
+
+    # Default: per-project spend table.
+    projects = db_list_projects()
+    proj_rows = [{
+        "id": p["id"],
+        "directory": _display_worktree(p["directory"]),
+        "cost": p.get("cost", 0.0) or 0.0,
+        "tokens_input": p.get("tokens_input", 0) or 0,
+        "tokens_output": p.get("tokens_output", 0) or 0,
+        "tokens_cache_read": p.get("tokens_cache_read", 0) or 0,
+    } for p in projects]
+    proj_rows.sort(key=lambda r: r["cost"], reverse=True)
+    live_total = sum(r["cost"] for r in proj_rows)
+
+    hist = _load_history().get("cumulative", {}) if historical else {}
+    hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
+
+    if json_output:
+        emit_json("spend", {
+            "scope": "projects",
+            "projects": proj_rows,
+            "live_total": live_total,
+            "historical_total": hist_cost if historical else None,
+            "grand_total": (live_total + hist_cost) if historical else live_total,
+        })
+        return
+
+    print(color_bold(f"LLM spend by project ({len(proj_rows)} projects):"))
+    table = vistab.Vistab(header=["Project", "Cost", "Tokens In", "Tokens Out", "Cache"])
+    for r in proj_rows:
+        table.add_row([r["directory"], fmt_cost(r["cost"]), fmt_int(r["tokens_input"]),
+                       fmt_int(r["tokens_output"]), fmt_int(r["tokens_cache_read"])])
+    table.set_cols_align(["l", "r", "r", "r", "r"])
+    print(table.draw())
+    print(f"Live total (active sessions):     {fmt_cost(live_total)}")
+    if historical:
+        print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
+              + color_dim("(global; not attributable per project)"))
+        print(f"Grand total (live + historical):  {fmt_cost(live_total + hist_cost)}")
+    else:
+        print(color_dim("(add --historical to include spend on since-deleted sessions)"))
+
+
 def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[dict]:
     """Compute per-project on-disk session-diff usage and counts, sorted by diff bytes desc.
 
@@ -11865,6 +11974,19 @@ def main() -> None:
             cli_show_logs(limit=getattr(args, "limit", None),
                           json_output=getattr(args, "json_output", False))
         except Exception as e:
+            die(str(e))
+        return
+
+    # Handle spend reporting.
+    if getattr(args, "show_spend", False):
+        try:
+            cli_spend(
+                getattr(args, "project", None),
+                sessions=getattr(args, "spend_sessions", False),
+                historical=getattr(args, "spend_historical", False),
+                json_output=getattr(args, "json_output", False),
+            )
+        except RecoveryError as e:
             die(str(e))
         return
 
