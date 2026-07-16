@@ -1289,6 +1289,55 @@ def test_preprocess_list_word_order():
         ["ocman", "session", "list", "myproj"]
 
 
+def test_list_projects_json(temp_db, capsys, monkeypatch):
+    """F1: project list --json emits a parseable schema envelope; human path unchanged without it."""
+    import ocman, sys, json
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/proj', 'P1')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'T', 1, 2, '/proj', 1.5, 100, 50, 10, '')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "project", "list", "--json"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    d = json.loads(out)
+    assert d["schema_version"] == ocman.JSON_SCHEMA_VERSION
+    assert d["command"] == "projects"
+    assert d["projects"]["count"] == 1
+    p = d["projects"]["projects"][0]
+    assert p["id"] == "p1" and p["directory"] == "/proj" and p["cost"] == 1.5
+    assert p["tokens_input"] == 100
+
+
+def test_session_list_json(temp_db, capsys, monkeypatch):
+    """F1: session list --json emits a parseable envelope with per-session fields."""
+    import ocman, sys, json
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/proj', 'P1')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'MySess', 1000, 2000, '/proj', 2.0, 7, 3, 1, '')")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(sys, "argv",
+                        ["ocman", "--db", str(temp_db), "session", "list", "p1", "--json"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    d = json.loads(out)
+    assert d["command"] == "sessions" and d["sessions"]["count"] == 1
+    s = d["sessions"]["sessions"][0]
+    assert s["id"] == "s1" and s["title"] == "MySess" and s["cost"] == 2.0
+    assert s["created"] == 1000 and s["updated"] == 2000
+
+
 def test_list_projects_limit(temp_db, capsys, monkeypatch):
     """F8: project list --limit caps rows and prints a truncation note."""
     import ocman, sys

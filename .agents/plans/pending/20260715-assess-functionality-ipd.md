@@ -11,6 +11,7 @@
 
 - 2026-07-15 /assess functionality (its_direct/pt3-claude-opus-4.8): assessed; proposed 8 changes.
 - 2026-07-15 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED, characterization mechanism), PR-002 (FIXED, --force/-y semantics matrix), PR-003 (FIXED, --json schema-first sub-step), PR-005 (FIXED, execution contract in gate); PR-004 (acknowledged, no fix). Findings F1-F8 evidence re-verified against ocman/cli.py.
+- 2026-07-15 execute (its_direct/pt3-claude-opus-4.8): Steps 1-7 implemented and committed (bf62ddb Steps 1-4; 2324e58 Step 5; d764a7f Step 6; Step 7 this batch). Step 7 (--json) scoped to session list / project list / history show with a schema_version envelope + shared emit_json helper; search + db info JSON DEFERRED to a follow-up (nested output warrants its own schema, Medium remediation risk on functionality if rushed). Step 8 (ocman spend) next.
 
 ## Goal
 

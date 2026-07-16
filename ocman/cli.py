@@ -4420,6 +4420,26 @@ def fmt_cost(x, decimals: int = 2) -> str:
     return f"${value:,.{decimals}f}"
 
 
+JSON_SCHEMA_VERSION = 1
+"""Version of ocman's --json output contract. Treated as semi-stable: a
+backward-incompatible change to any --json shape bumps this and is noted in
+CHANGELOG. Additive fields do not require a bump."""
+
+
+def emit_json(command: str, payload) -> None:
+    """Print a machine-readable JSON envelope for a read/report command (F1).
+
+    Envelope: ``{"schema_version": N, "command": "<name>", "<name>": <payload>}``.
+    ``payload`` is emitted as-is (dicts/lists of JSON-native values); Python ``None``
+    becomes JSON ``null``. This is the single emit path shared by every --json
+    command so the contract stays consistent.
+    """
+    print(json.dumps(
+        {"schema_version": JSON_SCHEMA_VERSION, "command": command, command: payload},
+        indent=2, default=str,
+    ))
+
+
 def _fmt_ts(epoch_ms) -> str:
     """Format an epoch-ms timestamp as YYYY-MM-DD HH:MM."""
     if not epoch_ms:
@@ -5546,6 +5566,7 @@ def _legacy_defaults(config: dict) -> dict:
         "list_sessions": False,
         "all_sessions": False,
         "limit": None,
+        "json_output": False,
         "search": None,
         "limit": 10,
         "search_session_id": None,
@@ -5768,6 +5789,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Include subagent/child sessions.")
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N sessions (a truncation note reports the rest).")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     sp = new_action(p_session, s_sub, "search", help="Search session content and titles.")
     _add_search_opts(sp)
@@ -5852,6 +5874,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = new_action(p_project, pr_sub, "list", help="List all projects.")
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N projects (a truncation note reports the rest).")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     sp = new_action(p_project, pr_sub, "delete", help="Delete a project and all its sessions.")
     sp.add_argument("name", help="Project name, number, ID, or path.")
@@ -5915,6 +5938,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp = new_action(p_history, h_sub, "show", help="Show historical activity (alias: 'ocman logs').")
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N recent run records (a truncation note reports the rest).")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     sp = new_action(p_history, h_sub, "clear", help="Wipe the historical activity ledger.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
     sp.add_argument("--force", action="store_true",
@@ -6149,6 +6173,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["project"] = g("name")
             out["all_sessions"] = bool(g("all_sessions", False))
             out["limit"] = g("limit", None)
+            out["json_output"] = bool(g("json", False))
         elif action == "search":
             _apply_search(out, ns, g)
         elif action == "show":
@@ -6222,6 +6247,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         if action == "list":
             out["list_projects"] = True
             out["limit"] = g("limit", None)
+            out["json_output"] = bool(g("json", False))
         elif action == "delete":
             out["delete_project"] = True
             out["project"] = g("name")
@@ -6293,6 +6319,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         if action == "show":
             out["show_logs"] = True
             out["limit"] = g("limit", None)
+            out["json_output"] = bool(g("json", False))
         elif action == "clear":
             out["clear_history"] = True
             out["force"] = bool(g("force", False))
@@ -10537,14 +10564,29 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         print(color_yellow(f"Warning: could not save deletion metrics: {e}"))
 
 
-def cli_show_logs(limit: int | None = None) -> None:
+def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
     """Print the historical recovery logs and cumulative grand totals.
 
     ``limit`` shows only the most recent N run records (a truncation note reports
-    the rest); the cumulative grand totals are always shown in full.
+    the rest); the cumulative grand totals are always shown in full. ``json_output``
+    emits the runs (newest first, post-limit) plus the full cumulative totals as JSON.
     """
     history = _load_history()
     runs = history.get("runs", [])
+
+    if json_output:
+        ordered = list(reversed(runs))
+        withheld = 0
+        if limit is not None and limit >= 0 and len(ordered) > limit:
+            withheld = len(ordered) - limit
+            ordered = ordered[:limit]
+        emit_json("history", {
+            "count": len(ordered),
+            "withheld": withheld,
+            "runs": ordered,
+            "cumulative": history.get("cumulative", {}),
+        })
+        return
 
     if not runs:
         print("No historical actions recorded in the sidecar ledger.")
@@ -11820,7 +11862,8 @@ def main() -> None:
     # Handle --show-logs early.
     if getattr(args, "show_logs", False):
         try:
-            cli_show_logs(limit=getattr(args, "limit", None))
+            cli_show_logs(limit=getattr(args, "limit", None),
+                          json_output=getattr(args, "json_output", False))
         except Exception as e:
             die(str(e))
         return
@@ -11886,6 +11929,28 @@ def main() -> None:
         projects = db_list_projects()
         if not projects:
             die("No projects found. Is opencode installed and has it been used?")
+        if getattr(args, "json_output", False):
+            withheld = 0
+            rows = projects
+            if _proj_limit is not None and _proj_limit >= 0 and len(rows) > _proj_limit:
+                withheld = len(rows) - _proj_limit
+                rows = rows[:_proj_limit]
+            emit_json("projects", {
+                "count": len(rows),
+                "withheld": withheld,
+                "projects": [{
+                    "id": p["id"],
+                    "directory": p["directory"],
+                    "name": p["name"] or None,
+                    "session_count": p["session_count"],
+                    "last_updated": p["last_updated"],
+                    "cost": p.get("cost", 0.0),
+                    "tokens_input": p.get("tokens_input", 0),
+                    "tokens_output": p.get("tokens_output", 0),
+                    "tokens_cache_read": p.get("tokens_cache_read", 0),
+                } for p in rows],
+            })
+            return
         print_projects(projects, limit=_proj_limit)
         print()
         print("Use 'ocman list sessions in PROJECT' to see a project's sessions.")
@@ -11997,6 +12062,34 @@ def main() -> None:
         if _limit is not None and _limit >= 0 and len(sessions) > _limit:
             _limit_withheld = len(sessions) - _limit
             sessions = sessions[:_limit]
+
+        # --json: emit the (post-filter, post-limit) session rows and stop (F1).
+        if getattr(args, "json_output", False):
+            session_stats = db_get_session_stats()
+            rows = []
+            for s in sessions:
+                stat = session_stats.get(s["id"], {})
+                rows.append({
+                    "id": s["id"],
+                    "title": s["title"],
+                    "project_dir": s["project_dir"] or None,
+                    "parent_id": s["parent_id"] or None,
+                    "created": s["created"],
+                    "updated": s["updated"],
+                    "cost": s["cost"] or 0.0,
+                    "tokens_input": s["tokens_input"] or 0,
+                    "tokens_output": s["tokens_output"] or 0,
+                    "tokens_cache_read": s["tokens_cache_read"] or 0,
+                    "msgs": stat.get("msgs", 0),
+                    "interactions": stat.get("interactions") if stat.get("has_interactions", True) else None,
+                    "parts": stat.get("parts", 0),
+                })
+            emit_json("sessions", {
+                "count": len(rows),
+                "withheld": _limit_withheld,
+                "sessions": rows,
+            })
+            return
 
         # When neither a project nor a directory scope matched the CWD, we are
         # listing EVERY project's sessions. Track that so we can scream about it

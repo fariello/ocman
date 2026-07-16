@@ -3,6 +3,11 @@
 ## [Unreleased]
 
 ### Added
+- **`--json` machine-readable output** on `session list`, `project list`, and
+  `history show`, via a shared emitter with a `schema_version` field (a documented,
+  semi-stable contract; breaking shape changes bump the version and are noted here).
+  Human output is unchanged when `--json` is absent. (`search` and `db info` JSON are
+  deferred to a follow-up: their output is more nested and warrants its own schema.)
 - **`--limit N` on `session list`, `project list`, and `history show`** to cap long
   output, with a note reporting how many rows were withheld (the cumulative grand
   totals in `history show` still cover all runs). The `db info` top-models count is now
