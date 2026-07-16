@@ -26,7 +26,7 @@ the git-first-commit date differ by more than a day (the tell-tale of an importe
 file, whose git-commit records when it entered THIS repo, not when it was authored), the
 file is flagged `imported?` and held from auto-rename unless `--assume-dates` is passed.
 
-Scope (D50): by default scans `.agents/plans/` and `.agents/prompts/`. `--area NAME`
+Scope (D50): by default scans `.agents/plans/`, `.agents/prompts/`, and `.agents/docs/`. `--area NAME`
 (repeatable) replaces that set with exactly the named top-level areas; `--all` scans every
 top-level area under `.agents/`. Only `*.md` whose IMMEDIATE parent is a lifecycle dir
 (pending/executed/superseded/not-executed/reusable/done) is rename-eligible; files nested
@@ -72,6 +72,8 @@ LIFECYCLE_SUBDIRS = (
 DOCS_SUBDIRS = (
     "research",
     "walkthroughs",
+    "specs",
+    "prompts",
 )
 # The framework tree is never a rename target regardless of flags.
 NEVER_AREA = "workflows"

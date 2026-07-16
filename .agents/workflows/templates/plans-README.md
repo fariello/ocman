@@ -35,12 +35,32 @@ records its READINESS within the lifecycle:
   later" stub.
 - `reviewed` - `/plan-review` done and revisions applied; awaiting human sign-off.
 - `approved` - a human signed off; ready to execute.
+- `auto-approved` - ready to execute, cleared by an automated checker (e.g. `/verify-execution`)
+  rather than a human; used for low-complexity mechanical correctives (D65). NOT human approval;
+  set only by an automated checker, never by an executor fast-tracking its own work.
 - Terminal (`executed` / `superseded` / `not-executed`) mirrors the directory; `reusable` is
   standing.
 
 Each plan also keeps a `## Workflow history` section: an appended, dated line per workflow
 that touched it (assess, plan-review, ...), so you can see the path a plan took. The
 plan-mutating workflows commit (never push) as they go, so `git log` shows the progression.
+
+## Ordered sets (optional `Set:` / `Order:` front-matter)
+
+When several plans form ONE sequence meant to run in a specific order, tag them with two optional
+front-matter fields (D82):
+
+- `- Set: <lowercase-kebab id>` - shared by every plan in the set (e.g. `Set: editor-workflow`).
+- `- Order: <n>` - the 1-based position within that set. Optional; a `Set:` with no `Order:` is an
+  unordered grouping.
+
+These are ADVISORY: they group related plans and make the intended run order queryable and visible
+in the `aw plans` board (a "Sets" section), but they do NOT auto-execute, do NOT gate approval, and do
+NOT change the `Status:` lifecycle. The human still approves and runs each plan. They are ORTHOGONAL
+to the filename convention: the `YYYYMMDD-HHMM-NN-<slug>.md` name and the `NN` same-minute
+disambiguator are unchanged. An agent may GROUP pending plans by adding these fields, but any change to
+a set's membership, order, or id must be surfaced (in Workflow history) and confirmed with the human,
+never done silently; set fields on plans already in a terminal directory are frozen history.
 
 ## Execution contract in every plan's gate
 

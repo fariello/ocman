@@ -343,11 +343,26 @@ If running in OpenCode and TodoWrite is available, use TodoWrite for live progre
 
 Do not use TodoWrite as the official record. If TodoWrite is unavailable, continue without it and record progress in the run directory.
 
-## Optional controlled parallel audit mode
+## Auto-parallel read-only audit lanes (canonical convention; TRIAL)
 
-After Section 1 completes the repository baseline, the main agent may use controlled parallel read-only audit lanes for Sections 2 through 6 when doing so is likely to improve review breadth, reduce missed findings, or manage a large repository more effectively.
+This is the single canonical definition of controlled parallel read-only audit lanes for the whole
+workflow family (release-review AND the plan-review workflows, which reference this file as a shared
+sibling policy). It is marked TRIAL while experience accumulates. Reviewing several independent units
+one at a time single-threads the expensive, parallelizable part (reading source, verifying every
+`path:line` claim, running the rubric / personas / security lens); the WRITES and the interactive human
+decisions are not parallelizable and stay serial through the coordinator.
 
-Parallel audit mode is optional. Do not force it for small or simple repositories.
+AUTO-ENGAGE TRIGGER: after Section 1 completes the repository baseline, the main agent (the
+"coordinator") AUTOMATICALLY fans out read-only audit lanes for the audit phase (release-review Sections
+2 through 6; a plan-review batch's per-plan review/verify phase) WHENEVER there are 2 OR MORE independent
+eligible units to audit (2+ plans in a plan-review batch; or 2+ independent audit surfaces in a
+release-review, from the allowed lane scopes below). With 1 or 0 units, stay fully serial (fan-out is
+pure overhead). A flag or explicit instruction MAY force the mode on or off (e.g. `--parallel` /
+`--no-parallel` or an equivalent instruction), but the DEFAULT is the automatic >=2 rule.
+
+The lanes run in parallel with EACH OTHER; the coordinator BLOCKS until they all return (this is
+concurrent analysis, not fire-and-forget background execution). Do not force fan-out for a small or
+simple single-unit review.
 
 Allowed lane scopes include:
 
@@ -358,9 +373,12 @@ Allowed lane scopes include:
 5. Schemas, data contracts, migrations, examples, fixtures, and serialized outputs.
 6. Deprecated, obsolete, stale, unused, duplicated, or superseded code and artifacts.
 
-Rules for parallel audit lanes:
+Rules for parallel audit lanes (SAFETY RULES; unchanged by the auto-engage promotion, they are the
+reason fan-out is safe). The coordinator is the sole writer and decision-maker: it also runs a
+CROSS-UNIT conflict/overlap pass (lanes cannot see each other's work) and resolves all open questions
+interactively with the human before any edit or commit.
 
-1. The main agent must complete Section 1 before starting parallel lanes.
+1. The main agent (coordinator) must complete Section 1 before starting parallel lanes.
 2. Lanes must be read-only.
 3. Lanes must not edit tracked files.
 4. Lanes must not update official registers directly.
@@ -376,7 +394,12 @@ Rules for parallel audit lanes:
 14. Section 8 final review must remain serial.
 15. Section 9 release execution must remain serial.
 
-If parallel lanes are not used, record that decision in `05-decisions.md` and continue serially.
+When the auto-engage trigger is not met (0 or 1 eligible unit), or a `--no-parallel` instruction forces
+serial, record that decision in `05-decisions.md` and continue serially. HONEST SCOPE REMINDER: parallel
+covers ONLY the read / verify / rubric / propose phase. Synthesis, the cross-unit conflict pass,
+interactive open-question resolution, all in-place edits, all path-scoped commits, and the terminal
+status are serial through the coordinator; the mutation/ship phases (release-review Sections 7, 8, 9)
+never parallelize.
 
 
 ## Live-interaction-surface and data-integrity rule (shared)

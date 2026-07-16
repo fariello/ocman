@@ -72,11 +72,17 @@ This review must also, on every run:
 - **Treat memory/resource and live-interaction-surface correctness as first-class** per `00-run-protocol.md`.
 - **Produce a mandatory per-phase report** for each section covering what was done, why, and what was considered but deliberately not done.
 
-## Optional controlled parallel audit mode
+## Parallel audit mode (auto-engaged; TRIAL)
 
-After Section 1 establishes the repository baseline, the agent may use controlled parallel read-only audit lanes for parts of Sections 2 through 6 when the repository is large, unfamiliar, or has multiple independent surfaces such as code, tests, docs, schemas, packaging, and CI.
+After Section 1 establishes the repository baseline, the review AUTO-ENGAGES controlled parallel
+read-only audit lanes for Sections 2 through 6 whenever there are 2 or more independent audit surfaces
+(code, tests, docs, schemas, packaging, CI, deprecation). Sections 7, 8, and 9 always stay serial. This
+is not a new command; `/release-review` engages the mode per the canonical convention (a `--parallel` /
+`--no-parallel` instruction can force it either way). It is marked TRIAL while experience accumulates.
+The full canonical definition (auto-engage trigger, lane safety rules, coordinator-owns-mutations) lives
+in `00-run-protocol.md` ("Auto-parallel read-only audit lanes"); the rules below are its summary.
 
-Parallelism is optional. Use it only when it improves review quality.
+With fewer than 2 independent surfaces the review stays fully serial (fan-out is pure overhead).
 
 Rules:
 

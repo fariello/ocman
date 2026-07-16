@@ -45,6 +45,20 @@ Execute the steps below in order. At the start of each step:
 Do not load all step files at once unless the environment forces you to.
 Do not work from memory of a step read earlier.
 
+## Parallel review of multi-plan batches (auto-engaged; TRIAL)
+
+When the scope ledger (built in step 1) contains 2 OR MORE ELIGIBLE plans, the per-plan
+review/verify phase AUTO-ENGAGES read-only audit lanes per the canonical convention in
+`../release-review/00-run-protocol.md` ("Auto-parallel read-only audit lanes"): one lane reviews
+each eligible plan in isolation (read it, verify every `path:line` claim against source, apply the
+rubric + personas + security lens) and RETURNS a findings report plus proposed edits as suggestions.
+Lanes are read-only: they do not edit plan files, resolve open questions, commit, or assign final
+IDs. The coordinator (you) then works SERIALLY: synthesize the lane reports, run a CROSS-PLAN
+conflict/overlap pass (lanes cannot see each other), resolve open questions interactively with the
+human, apply all in-place edits, and make all path-scoped commits. With a single eligible plan, review
+serially as usual (fan-out is pure overhead). A `--no-parallel` instruction forces serial. This is a
+TRIAL. The single-file portable `../plan-review/plan-review.md` stays serial by design (see its note).
+
 ## Steps
 
 1. Read and execute `01-discover-and-snapshot.md`.

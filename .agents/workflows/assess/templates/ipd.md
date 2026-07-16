@@ -6,6 +6,8 @@
 - Status: to-review
 - Approval: <set when a human approves, e.g. "approved by <name> <date>"; omit until then>
 - Author: <agent/model if known>
+- Set: <optional; lowercase-kebab id shared by an ordered set of related plans; omit for a lone plan>
+- Order: <optional; 1-based position within Set; omit if not in a set>
 
 <!--
 Status vocabulary (readiness within the lifecycle; lowercase-kebab; front-matter is the

@@ -236,9 +236,10 @@ def _discover_makefile(root: Path) -> list[Check]:
             if not m:
                 continue
             target = m.group(1)
-            if target in ("PHONY", ".PHONY", "default", "all") and target.startswith(
-                "."
-            ):
+            # Skip meta/aggregate targets. (The target regex already excludes dot-prefixed names
+            # like `.PHONY`, so the previous `and target.startswith(".")` guard was always False and
+            # never skipped `default`/`all` - D85 F-tools.)
+            if target in ("PHONY", ".PHONY", "default", "all"):
                 continue
             # Peek at the recipe body for denylist context.
             recipe = ""
@@ -676,7 +677,8 @@ def main() -> int:
             if (c.category in wanted) or c.deny_reason or not c.category
         ]
 
-    out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
+    # newline="" so the csv module controls line endings (no double-blank rows on Windows).
+    out = open(args.out, "w", encoding="utf-8", newline="") if args.out else sys.stdout
 
     # --list: discovery only, run nothing.
     if args.list:

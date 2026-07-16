@@ -12,7 +12,7 @@ Verdict: <APPROVE | APPROVE WITH REVISIONS APPLIED | REVIEWED - OPEN QUESTIONS |
 ELIGIBLE:
 - <plan file>
 
-NOT ELIGIBLE:
+NOT REVIEWED:
 - <plan file>: <reason>
 
 ### Findings
@@ -43,7 +43,7 @@ NOT ELIGIBLE:
 ### Plans reviewed and not reviewed
 
 REVIEWED:
-- `<plan file>`: <GO | NO-GO> - <one-line reason>.
+- `<plan file>`: <GO | GO - PENDING HUMAN APPROVAL | NO-GO> - <one-line reason>.
   Verdict: <verdict>.
   Open questions: all resolved interactively | <N open, blocks GO>.
   Required next step: <human approval | decision | replan | other>.

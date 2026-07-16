@@ -93,13 +93,21 @@ Use exactly one verdict:
 - `REVIEWED - OPEN QUESTIONS` - review complete, but human decisions remain.
 - `REJECT - NEEDS REPLAN` - the approach is unsound and not safely patchable.
 
-Readiness:
+Readiness (human approval is a SEPARATE step from the review verdict; a reviewed,
+clean plan is `GO - PENDING HUMAN APPROVAL`, never a bare `NO-GO`; reserve `NO-GO`
+for genuine not-ready conditions):
 
-- `GO` requires APPROVE or APPROVE WITH REVISIONS APPLIED, no open questions,
-  and no unfixed BLOCKER or HIGH.
-- Otherwise use `NO-GO`.
+- `GO` requires APPROVE or APPROVE WITH REVISIONS APPLIED, no open questions, no
+  unfixed BLOCKER or HIGH, AND human approval (`Status: approved`). Cleared to proceed.
+- `GO - PENDING HUMAN APPROVAL` - same clean bar as GO, but the human sign-off has
+  not happened yet. The correct, positive readiness for a plan that passed review
+  and only awaits approval. NOT a failure state.
+- `NO-GO` - genuine not-ready: any open question, any unfixed BLOCKER/HIGH, or a
+  `REVIEWED - OPEN QUESTIONS` / `REJECT - NEEDS REPLAN` verdict. NOT used merely
+  because a clean plan lacks a signature.
 
-A reviewed plan may still be NO-GO.
+A reviewed clean plan is `GO - PENDING HUMAN APPROVAL` (awaiting sign-off); it is
+only `NO-GO` when a genuine not-ready condition remains.
 
 ## 5. Final report
 

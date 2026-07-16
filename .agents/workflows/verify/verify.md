@@ -90,7 +90,7 @@ These are committed deliverables (evidence), like release-review's and assess's 
 
 - **release-review:** its validation step should cite `verify-results.json` for any claim
   about tests/lint/build/type-check, and DOWNGRADE its GO recommendation (to
-  CONDITIONAL-GO or NO-GO) when a relevant check could not be verified, saying so
+  CONDITIONAL GO or NO-GO) when a relevant check could not be verified, saying so
   explicitly.
 - **assess (testing lens, and others where relevant):** cite the evidence rather than
   self-reporting pass/fail; note unverifiable checks in the IPD.

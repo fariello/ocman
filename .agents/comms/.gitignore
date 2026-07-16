@@ -1,0 +1,4 @@
+# agent-workflows inter-agent comms: ignore the box-local, ephemeral lane.
+# `local/` holds this machine's routing churn and scheduled messages; it is never committed.
+# `shared/` (a sibling of this file) is tracked deliberately and travels with the repo.
+local/

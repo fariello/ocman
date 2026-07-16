@@ -294,6 +294,11 @@ def redact(match: str) -> str:
     s = s.replace("\n", " ")
     if len(s) <= 8:
         return s[0] + "*" * (len(s) - 1) if s else ""
+    # For short secrets (<16 chars) a 4+4 head/tail preview would reveal 8 of N chars - nearly the
+    # whole value. Reveal at most the first 2 + last 2 there, so the "never a full secret" promise
+    # holds for short tokens too (D85 F-tools). Longer secrets keep the 4+4 preview.
+    if len(s) < 16:
+        return f"{s[:2]}{'*' * (len(s) - 4)}{s[-2:]} (len={len(s)})"
     head = s[:4]
     tail = s[-4:]
     return f"{head}{'*' * min(12, max(4, len(s) - 8))}{tail} (len={len(s)})"
@@ -825,7 +830,8 @@ def main() -> int:
         except Exception:
             pass  # external tools are best-effort
 
-    out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
+    # newline="" so the csv module controls line endings (no double-blank rows on Windows).
+    out = open(args.out, "w", encoding="utf-8", newline="") if args.out else sys.stdout
     try:
         emit(findings, args.format, out, avail, skipped_external=args.no_external)
     finally:

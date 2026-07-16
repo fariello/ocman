@@ -60,6 +60,7 @@ LOG_NOTE_LIMIT = 2000
 
 # ---- small helpers ---------------------------------------------------------
 
+
 def _run(argv: list[str], timeout: int = 15) -> str:
     """Run a read-only informational command; return stdout stripped, or "" on any failure.
 
@@ -67,7 +68,9 @@ def _run(argv: list[str], timeout: int = 15) -> str:
     """
 
     try:
-        p = subprocess.run(argv, capture_output=True, text=True, timeout=timeout, check=False)
+        p = subprocess.run(
+            argv, capture_output=True, text=True, timeout=timeout, check=False
+        )
     except (OSError, subprocess.SubprocessError):
         return ""
     return (p.stdout or "").strip()
@@ -93,13 +96,14 @@ def _int_or_none(text: str):
 
 # ---- data model ------------------------------------------------------------
 
+
 @dataclass
 class Diagnostic:
     """A flagged environment condition with a severity and a suggested remedy."""
 
     id: str
-    severity: str        # info | warn | high
-    area: str            # storage | cpu | memory | thermal | load | gpu | general
+    severity: str  # info | warn | high
+    area: str  # storage | cpu | memory | thermal | load | gpu | general
     finding: str
     remedy: str
 
@@ -156,11 +160,12 @@ class EnvReport:
     # hpc
     hpc: dict = field(default_factory=dict)
     # honesty
-    unread: list[str] = field(default_factory=list)   # fields we could not read
+    unread: list[str] = field(default_factory=list)  # fields we could not read
     diagnostics: list[Diagnostic] = field(default_factory=list)
 
 
 # ---- capture ---------------------------------------------------------------
+
 
 def _framework_version() -> str:
     """Return the agent-workflows framework version this tool ships with.
@@ -203,7 +208,9 @@ def capture_os(rep: EnvReport) -> None:
         # container hints
         if Path("/.dockerenv").exists():
             rep.container_hint = "docker"
-        elif "docker" in _read("/proc/1/cgroup") or "containerd" in _read("/proc/1/cgroup"):
+        elif "docker" in _read("/proc/1/cgroup") or "containerd" in _read(
+            "/proc/1/cgroup"
+        ):
             rep.container_hint = "container"
         elif os.environ.get("SINGULARITY_NAME") or os.environ.get("APPTAINER_NAME"):
             rep.container_hint = "singularity/apptainer"
@@ -237,8 +244,11 @@ def capture_cpu(rep: EnvReport) -> None:
         mhz = _read("/sys/devices/system/cpu/cpu0/cpufreq/cpuinfo_max_freq")
         v = _int_or_none(mhz)
         rep.cpu_max_mhz = round(v / 1000.0, 1) if v else None
-        nodes = [p for p in Path("/sys/devices/system/node").glob("node*")] \
-            if Path("/sys/devices/system/node").exists() else []
+        nodes = (
+            [p for p in Path("/sys/devices/system/node").glob("node*")]
+            if Path("/sys/devices/system/node").exists()
+            else []
+        )
         rep.numa_nodes = len(nodes) or None
     elif rep.os == "Darwin":
         rep.cpu_model = _run(["sysctl", "-n", "machdep.cpu.brand_string"])
@@ -251,9 +261,11 @@ def capture_cpu(rep: EnvReport) -> None:
 def capture_memory(rep: EnvReport) -> None:
     if rep.os == "Linux":
         mi = _read("/proc/meminfo")
+
         def kb(key: str):
             m = re.search(rf"^{re.escape(key)}:\s*(\d+)\s*kB", mi, re.MULTILINE)
             return _int_or_none(m.group(1)) if m else None
+
         rep.mem_total_kb = kb("MemTotal")
         rep.mem_free_kb = kb("MemFree")
         rep.mem_available_kb = kb("MemAvailable")
@@ -283,22 +295,34 @@ def capture_load(rep: EnvReport) -> None:
 
 def capture_gpu(rep: EnvReport) -> None:
     if _which("nvidia-smi"):
-        out = _run(["nvidia-smi",
-                    "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version",
-                    "--format=csv,noheader,nounits"])
+        out = _run(
+            [
+                "nvidia-smi",
+                "--query-gpu=name,memory.total,memory.used,utilization.gpu,driver_version",
+                "--format=csv,noheader,nounits",
+            ]
+        )
         for line in out.splitlines():
             parts = [p.strip() for p in line.split(",")]
             if len(parts) >= 5:
-                rep.gpus.append({
-                    "vendor": "nvidia", "name": parts[0],
-                    "mem_total_mb": _int_or_none(parts[1]),
-                    "mem_used_mb": _int_or_none(parts[2]),
-                    "util_pct": _int_or_none(parts[3]),
-                    "driver": parts[4],
-                })
+                rep.gpus.append(
+                    {
+                        "vendor": "nvidia",
+                        "name": parts[0],
+                        "mem_total_mb": _int_or_none(parts[1]),
+                        "mem_used_mb": _int_or_none(parts[2]),
+                        "util_pct": _int_or_none(parts[3]),
+                        "driver": parts[4],
+                    }
+                )
     elif _which("rocm-smi"):
-        rep.gpus.append({"vendor": "amd", "name": "rocm device(s) present",
-                         "note": "parse rocm-smi manually for detail"})
+        rep.gpus.append(
+            {
+                "vendor": "amd",
+                "name": "rocm device(s) present",
+                "note": "parse rocm-smi manually for detail",
+            }
+        )
     # No GPU tool present => empty list (honest: absence is not "no GPU", it is "not detected")
 
 
@@ -330,16 +354,33 @@ def _fs_type_for(path: Path) -> tuple[str, str]:
 
 
 # Filesystem types considered network / slow for a working set.
-NETWORK_FS = {"nfs", "nfs4", "cifs", "smb", "smbfs", "fuse.sshfs", "lustre", "gpfs",
-              "beegfs", "glusterfs", "ceph", "afs", "9p"}
+NETWORK_FS = {
+    "nfs",
+    "nfs4",
+    "cifs",
+    "smb",
+    "smbfs",
+    "fuse.sshfs",
+    "lustre",
+    "gpfs",
+    "beegfs",
+    "glusterfs",
+    "ceph",
+    "afs",
+    "9p",
+}
 FAST_FS = {"tmpfs", "ramfs"}
 
 
 def capture_paths(rep: EnvReport, paths: list[Path]) -> None:
     for p in paths:
         fstype, source = _fs_type_for(p)
-        entry = {"path": str(p), "exists": p.exists(), "fs_type": fstype or "unknown",
-                 "source": source}
+        entry = {
+            "path": str(p),
+            "exists": p.exists(),
+            "fs_type": fstype or "unknown",
+            "source": source,
+        }
         # free space
         try:
             usage = shutil.disk_usage(p if p.exists() else p.anchor or ".")
@@ -356,7 +397,11 @@ def capture_hpc(rep: EnvReport) -> None:
     checks = [
         ("slurm", "sbatch", ["squeue", "sinfo", "scontrol"]),
         ("pbs/torque", "qsub", ["qstat"]),
-        ("sge", "qsub", ["qstat", "qconf"]),   # note: qsub shared with pbs; disambiguate below
+        (
+            "sge",
+            "qsub",
+            ["qstat", "qconf"],
+        ),  # note: qsub shared with pbs; disambiguate below
         ("lsf", "bsub", ["bjobs", "bqueues"]),
     ]
     for name, submit, _friends in checks:
@@ -364,21 +409,29 @@ def capture_hpc(rep: EnvReport) -> None:
             schedulers.append(name)
             detected[name] = shutil.which(submit)
     # Slurm env vars are the strongest signal we are ON a compute/login node of a cluster
-    inside_alloc = bool(os.environ.get("SLURM_JOB_ID") or os.environ.get("PBS_JOBID")
-                        or os.environ.get("LSB_JOBID"))
+    inside_alloc = bool(
+        os.environ.get("SLURM_JOB_ID")
+        or os.environ.get("PBS_JOBID")
+        or os.environ.get("LSB_JOBID")
+    )
     # Disambiguate slurm as the primary if present
-    primary = "slurm" if "slurm" in schedulers else (schedulers[0] if schedulers else "")
+    primary = (
+        "slurm" if "slurm" in schedulers else (schedulers[0] if schedulers else "")
+    )
     rep.hpc = {
         "scheduler_detected": bool(schedulers),
         "schedulers": sorted(set(schedulers)),
         "primary": primary,
         "submit_paths": detected,
         "inside_allocation": inside_alloc,
-        "slurm_partitions_hint": _run(["sinfo", "-h", "-o", "%P"]).split() if _which("sinfo") else [],
+        "slurm_partitions_hint": _run(["sinfo", "-h", "-o", "%P"]).split()
+        if _which("sinfo")
+        else [],
     }
 
 
 # ---- disk probe / warm-up --------------------------------------------------
+
 
 def disk_probe(scratch: Path, size_mb: int) -> DiskProbe:
     """Bounded sequential write-then-read probe inside `scratch`. Read-only w.r.t. system."""
@@ -447,6 +500,7 @@ def warm_paths(paths: list[Path]) -> list[str]:
 
 # ---- diagnosis -------------------------------------------------------------
 
+
 def diagnose(rep: EnvReport) -> None:
     d = rep.diagnostics
     # Storage: working set on a network / slow filesystem
@@ -454,88 +508,139 @@ def diagnose(rep: EnvReport) -> None:
         ft = (entry.get("fs_type") or "").lower()
         base = ft.split(".")[0]
         if ft in NETWORK_FS or base in {"nfs", "cifs", "lustre", "gpfs", "beegfs"}:
-            d.append(Diagnostic(
-                id="storage.network_fs", severity="high", area="storage",
-                finding=f"{entry['path']} is on a network filesystem ({ft}). Benchmark I/O "
-                        f"will include network latency and can vary run to run.",
-                remedy="Copy the working set to node-local storage before timing, e.g. "
-                       "`cp -a <data> \"$TMPDIR\"/` (or /dev/shm for small sets), then point "
-                       "the benchmark at the local copy. On HPC use the node's local scratch."))
+            d.append(
+                Diagnostic(
+                    id="storage.network_fs",
+                    severity="high",
+                    area="storage",
+                    finding=f"{entry['path']} is on a network filesystem ({ft}). Benchmark I/O "
+                    f"will include network latency and can vary run to run.",
+                    remedy="Copy the working set to node-local storage before timing, e.g. "
+                    '`cp -a <data> "$TMPDIR"/` (or /dev/shm for small sets), then point '
+                    "the benchmark at the local copy. On HPC use the node's local scratch.",
+                )
+            )
         elif ft in FAST_FS:
-            d.append(Diagnostic(
-                id="storage.tmpfs", severity="info", area="storage",
-                finding=f"{entry['path']} is on {ft} (RAM-backed). Fast, but it consumes RAM "
-                        f"and results will not reflect real disk I/O.",
-                remedy="Fine for CPU-bound benchmarks; for I/O-representative numbers use the "
-                       "real target storage."))
+            d.append(
+                Diagnostic(
+                    id="storage.tmpfs",
+                    severity="info",
+                    area="storage",
+                    finding=f"{entry['path']} is on {ft} (RAM-backed). Fast, but it consumes RAM "
+                    f"and results will not reflect real disk I/O.",
+                    remedy="Fine for CPU-bound benchmarks; for I/O-representative numbers use the "
+                    "real target storage.",
+                )
+            )
         if entry.get("free_gb") is not None and entry["free_gb"] < 2:
-            d.append(Diagnostic(
-                id="storage.low_space", severity="warn", area="storage",
-                finding=f"{entry['path']} has only {entry['free_gb']} GB free.",
-                remedy="Free space or choose another scratch dir; a full disk can stall or fail runs."))
+            d.append(
+                Diagnostic(
+                    id="storage.low_space",
+                    severity="warn",
+                    area="storage",
+                    finding=f"{entry['path']} has only {entry['free_gb']} GB free.",
+                    remedy="Free space or choose another scratch dir; a full disk can stall or fail runs.",
+                )
+            )
     # CPU governor
     if rep.cpu_governor and rep.cpu_governor not in ("performance", ""):
-        d.append(Diagnostic(
-            id="cpu.governor", severity="warn", area="cpu",
-            finding=f"CPU frequency governor is '{rep.cpu_governor}', which can down-clock "
-                    f"during bursts and add variance.",
-            remedy="For stable numbers set the performance governor (needs privilege): "
-                   "`sudo cpupower frequency-set -g performance` (or via your cluster's docs). "
-                   "Revert afterwards if this is a shared machine."))
+        d.append(
+            Diagnostic(
+                id="cpu.governor",
+                severity="warn",
+                area="cpu",
+                finding=f"CPU frequency governor is '{rep.cpu_governor}', which can down-clock "
+                f"during bursts and add variance.",
+                remedy="For stable numbers set the performance governor (needs privilege): "
+                "`sudo cpupower frequency-set -g performance` (or via your cluster's docs). "
+                "Revert afterwards if this is a shared machine.",
+            )
+        )
     # Memory pressure / swap
     if rep.swap_total_kb and rep.swap_free_kb is not None:
         used = rep.swap_total_kb - rep.swap_free_kb
         if used > 0.1 * rep.swap_total_kb and used > 256 * 1024:
-            d.append(Diagnostic(
-                id="memory.swapping", severity="high", area="memory",
-                finding=f"The host is using swap ({round(used/1024)} MB). Swapping during a "
-                        f"benchmark badly distorts timings.",
-                remedy="Reduce memory use or run on a host with more RAM; confirm no other job "
-                       "is consuming memory before timing."))
+            d.append(
+                Diagnostic(
+                    id="memory.swapping",
+                    severity="high",
+                    area="memory",
+                    finding=f"The host is using swap ({round(used/1024)} MB). Swapping during a "
+                    f"benchmark badly distorts timings.",
+                    remedy="Reduce memory use or run on a host with more RAM; confirm no other job "
+                    "is consuming memory before timing.",
+                )
+            )
     if rep.mem_total_kb and rep.mem_available_kb is not None:
         avail_frac = rep.mem_available_kb / rep.mem_total_kb
         if avail_frac < 0.1:
-            d.append(Diagnostic(
-                id="memory.low_available", severity="warn", area="memory",
-                finding=f"Only {round(avail_frac*100)}% of RAM is available; the box is under "
-                        f"memory pressure.",
-                remedy="Free memory or pick a less-loaded host before benchmarking."))
+            d.append(
+                Diagnostic(
+                    id="memory.low_available",
+                    severity="warn",
+                    area="memory",
+                    finding=f"Only {round(avail_frac*100)}% of RAM is available; the box is under "
+                    f"memory pressure.",
+                    remedy="Free memory or pick a less-loaded host before benchmarking.",
+                )
+            )
     # Load relative to cores
     if rep.load_avg and rep.cpu_logical:
         one_min = rep.load_avg[0]
         if one_min > rep.cpu_logical * 0.7:
-            d.append(Diagnostic(
-                id="load.busy", severity="high", area="load",
-                finding=f"1-minute load average is {one_min} on {rep.cpu_logical} logical CPUs; "
-                        f"the host is busy with other work.",
-                remedy="Benchmark on an idle host, or reserve dedicated cores (e.g. taskset / "
-                       "cgroups / an exclusive HPC allocation) so competing work does not skew results."))
+            d.append(
+                Diagnostic(
+                    id="load.busy",
+                    severity="high",
+                    area="load",
+                    finding=f"1-minute load average is {one_min} on {rep.cpu_logical} logical CPUs; "
+                    f"the host is busy with other work.",
+                    remedy="Benchmark on an idle host, or reserve dedicated cores (e.g. taskset / "
+                    "cgroups / an exclusive HPC allocation) so competing work does not skew results.",
+                )
+            )
     # Virtualization / container note (informational)
     if rep.container_hint:
-        d.append(Diagnostic(
-            id="general.container", severity="info", area="general",
-            finding=f"Running inside {rep.container_hint}; cgroup CPU/memory limits may cap "
-                    f"resources below the host totals reported here.",
-            remedy="Record the container's CPU/memory limits alongside results; host totals may "
-                   "overstate what the benchmark can actually use."))
+        d.append(
+            Diagnostic(
+                id="general.container",
+                severity="info",
+                area="general",
+                finding=f"Running inside {rep.container_hint}; cgroup CPU/memory limits may cap "
+                f"resources below the host totals reported here.",
+                remedy="Record the container's CPU/memory limits alongside results; host totals may "
+                "overstate what the benchmark can actually use.",
+            )
+        )
     if rep.virtualization_hint:
-        d.append(Diagnostic(
-            id="general.virtualized", severity="info", area="general",
-            finding=f"Virtualization detected ({rep.virtualization_hint}); neighbours on the "
-                    f"hypervisor can add variance ('noisy neighbour').",
-            remedy="Prefer bare metal or a dedicated instance for the most stable numbers; "
-                   "otherwise run more iterations and report variance."))
+        d.append(
+            Diagnostic(
+                id="general.virtualized",
+                severity="info",
+                area="general",
+                finding=f"Virtualization detected ({rep.virtualization_hint}); neighbours on the "
+                f"hypervisor can add variance ('noisy neighbour').",
+                remedy="Prefer bare metal or a dedicated instance for the most stable numbers; "
+                "otherwise run more iterations and report variance.",
+            )
+        )
     # HPC: available but not inside an allocation
     if rep.hpc.get("scheduler_detected") and not rep.hpc.get("inside_allocation"):
-        d.append(Diagnostic(
-            id="hpc.on_login_node", severity="warn", area="general",
-            finding=f"An HPC scheduler ({rep.hpc.get('primary')}) is available but this process "
-                    f"is not inside a job allocation - you may be on a shared login node.",
-            remedy="Do not benchmark on the login node. Submit to a compute node "
-                   "(the benchmark workflow can generate and submit the job script for you)."))
+        d.append(
+            Diagnostic(
+                id="hpc.on_login_node",
+                severity="warn",
+                area="general",
+                finding=f"An HPC scheduler ({rep.hpc.get('primary')}) is available but this process "
+                f"is not inside a job allocation - you may be on a shared login node.",
+                remedy="Do not benchmark on the login node. Submit to a compute node "
+                "(the benchmark workflow can generate and submit the job script for you).",
+            )
+        )
 
 
 # ---- scrubbing (anonymization for sharing) ---------------------------------
+
 
 def scrub(rep: EnvReport) -> None:
     """Replace identifying fields with stable placeholders so a report can be shared."""
@@ -554,12 +659,14 @@ def scrub(rep: EnvReport) -> None:
 
 # ---- output ----------------------------------------------------------------
 
+
 def emit(rep: EnvReport, fmt: str, out) -> None:
     if fmt == "json":
         json.dump(asdict(rep), out, indent=2, default=str)
         out.write("\n")
     elif fmt == "csv":
         import csv
+
         w = csv.writer(out)
         w.writerow(["field", "value"])
         flat = asdict(rep)
@@ -576,35 +683,50 @@ def emit(rep: EnvReport, fmt: str, out) -> None:
         L(f"Benchmark environment capture ({rep.schema})\n")
         L(f"  captured: {rep.captured_at_utc}  tool: {rep.tool_version}\n")
         L(f"  host: {rep.hostname}  user: {rep.user}\n")
-        L(f"  os: {rep.os_release or rep.os} ({rep.arch})  kernel: {rep.kernel}  python: {rep.python_version}\n")
+        L(
+            f"  os: {rep.os_release or rep.os} ({rep.arch})  kernel: {rep.kernel}  python: {rep.python_version}\n"
+        )
         if rep.container_hint:
             L(f"  container: {rep.container_hint}\n")
         if rep.virtualization_hint:
             L(f"  virtualization: {rep.virtualization_hint}\n")
         L(f"  cpu: {rep.cpu_model}\n")
-        L(f"       logical={rep.cpu_logical} physical={rep.cpu_physical} governor={rep.cpu_governor or 'n/a'} "
-          f"max_mhz={rep.cpu_max_mhz} numa={rep.numa_nodes} flags={','.join(rep.cpu_flags_sample) or 'n/a'}\n")
+        L(
+            f"       logical={rep.cpu_logical} physical={rep.cpu_physical} governor={rep.cpu_governor or 'n/a'} "
+            f"max_mhz={rep.cpu_max_mhz} numa={rep.numa_nodes} flags={','.join(rep.cpu_flags_sample) or 'n/a'}\n"
+        )
 
         def gb(kb):
             return f"{round(kb/1024/1024, 1)}GB" if kb else "n/a"
-        L(f"  mem: total={gb(rep.mem_total_kb)} avail={gb(rep.mem_available_kb)} "
-          f"free={gb(rep.mem_free_kb)} cached={gb(rep.mem_cached_kb)} used={gb(rep.mem_used_kb)} "
-          f"swap_total={gb(rep.swap_total_kb)} swap_free={gb(rep.swap_free_kb)}\n")
+
+        L(
+            f"  mem: total={gb(rep.mem_total_kb)} avail={gb(rep.mem_available_kb)} "
+            f"free={gb(rep.mem_free_kb)} cached={gb(rep.mem_cached_kb)} used={gb(rep.mem_used_kb)} "
+            f"swap_total={gb(rep.swap_total_kb)} swap_free={gb(rep.swap_free_kb)}\n"
+        )
         L(f"  load: {rep.load_avg or 'n/a'}  uptime_s: {rep.uptime_s}\n")
         if rep.gpus:
             for g in rep.gpus:
-                L(f"  gpu: {g.get('vendor')} {g.get('name')} mem_total_mb={g.get('mem_total_mb')} "
-                  f"util_pct={g.get('util_pct')} driver={g.get('driver')}\n")
+                L(
+                    f"  gpu: {g.get('vendor')} {g.get('name')} mem_total_mb={g.get('mem_total_mb')} "
+                    f"util_pct={g.get('util_pct')} driver={g.get('driver')}\n"
+                )
         else:
             L("  gpu: none detected (no nvidia-smi/rocm-smi, or none present)\n")
         for entry in rep.paths:
-            L(f"  path: {entry['path']}  fs={entry['fs_type']}  free_gb={entry.get('free_gb')}\n")
+            L(
+                f"  path: {entry['path']}  fs={entry['fs_type']}  free_gb={entry.get('free_gb')}\n"
+            )
         if rep.disk_probe:
             dp = rep.disk_probe
-            L(f"  disk probe @ {dp.path}: write={dp.write_mb_s} MB/s read={dp.read_mb_s} MB/s ({dp.note})\n")
+            L(
+                f"  disk probe @ {dp.path}: write={dp.write_mb_s} MB/s read={dp.read_mb_s} MB/s ({dp.note})\n"
+            )
         if rep.hpc.get("scheduler_detected"):
-            L(f"  hpc: {rep.hpc.get('primary')} detected; inside_allocation={rep.hpc.get('inside_allocation')} "
-              f"partitions={rep.hpc.get('slurm_partitions_hint')}\n")
+            L(
+                f"  hpc: {rep.hpc.get('primary')} detected; inside_allocation={rep.hpc.get('inside_allocation')} "
+                f"partitions={rep.hpc.get('slurm_partitions_hint')}\n"
+            )
         else:
             L("  hpc: no scheduler detected\n")
         if rep.unread:
@@ -614,13 +736,22 @@ def emit(rep: EnvReport, fmt: str, out) -> None:
             L("  none - environment looks reasonable for benchmarking\n")
         order = {"high": 0, "warn": 1, "info": 2}
         for d in sorted(rep.diagnostics, key=lambda x: order.get(x.severity, 3)):
-            L(f"  [{d.severity:4}] {d.area}: {d.finding}\n         remedy: {d.remedy}\n")
+            L(
+                f"  [{d.severity:4}] {d.area}: {d.finding}\n         remedy: {d.remedy}\n"
+            )
 
 
 # ---- main ------------------------------------------------------------------
 
-def build_report(repo: Path, paths: list[Path], want_probe: bool, probe_mb: int,
-                 warm: list[Path], want_scrub: bool) -> EnvReport:
+
+def build_report(
+    repo: Path,
+    paths: list[Path],
+    want_probe: bool,
+    probe_mb: int,
+    warm: list[Path],
+    want_scrub: bool,
+) -> EnvReport:
     rep = EnvReport()
     rep.captured_at_utc = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     rep.tool_version = _framework_version()
@@ -635,9 +766,15 @@ def build_report(repo: Path, paths: list[Path], want_probe: bool, probe_mb: int,
     capture_paths(rep, all_paths)
     capture_hpc(rep)
     if warm:
-        rep.diagnostics.append(Diagnostic(
-            id="warm.done", severity="info", area="storage",
-            finding="cache warm-up requested", remedy="; ".join(warm_paths(warm))))
+        rep.diagnostics.append(
+            Diagnostic(
+                id="warm.done",
+                severity="info",
+                area="storage",
+                finding="cache warm-up requested",
+                remedy="; ".join(warm_paths(warm)),
+            )
+        )
     if want_probe:
         scratch = Path(tempfile.gettempdir()) / "bench_env_probe"
         rep.disk_probe = disk_probe(scratch, probe_mb)
@@ -648,22 +785,45 @@ def build_report(repo: Path, paths: list[Path], want_probe: bool, probe_mb: int,
 
 
 def main(argv: list[str] | None = None) -> int:
-    ap = argparse.ArgumentParser(description="Capture and diagnose the benchmark environment.")
-    ap.add_argument("--version", action="store_true",
-                    help="Print the agent-workflows framework version and exit.")
-    ap.add_argument("--repo", default=".", help="Repository / working directory to inspect.")
+    ap = argparse.ArgumentParser(
+        description="Capture and diagnose the benchmark environment."
+    )
+    ap.add_argument(
+        "--version",
+        action="store_true",
+        help="Print the agent-workflows framework version and exit.",
+    )
+    ap.add_argument(
+        "--repo", default=".", help="Repository / working directory to inspect."
+    )
     ap.add_argument("--format", choices=["json", "csv", "text"], default="text")
     ap.add_argument("--out", help="Write output to FILE instead of stdout.")
-    ap.add_argument("--paths", default="",
-                    help="Comma-separated extra paths to inspect (e.g. data dirs, scratch).")
-    ap.add_argument("--disk-probe", action="store_true",
-                    help="Run a bounded write/read probe in the OS temp dir (writes only there).")
-    ap.add_argument("--probe-mb", type=int, default=PROBE_DEFAULT_MB,
-                    help=f"Size of the disk probe in MB (default {PROBE_DEFAULT_MB}).")
-    ap.add_argument("--warm", default="",
-                    help="Comma-separated paths to read into cache before benchmarking (read-only).")
-    ap.add_argument("--scrub", action="store_true",
-                    help="Redact hostname/user/paths so the report can be shared.")
+    ap.add_argument(
+        "--paths",
+        default="",
+        help="Comma-separated extra paths to inspect (e.g. data dirs, scratch).",
+    )
+    ap.add_argument(
+        "--disk-probe",
+        action="store_true",
+        help="Run a bounded write/read probe in the OS temp dir (writes only there).",
+    )
+    ap.add_argument(
+        "--probe-mb",
+        type=int,
+        default=PROBE_DEFAULT_MB,
+        help=f"Size of the disk probe in MB (default {PROBE_DEFAULT_MB}).",
+    )
+    ap.add_argument(
+        "--warm",
+        default="",
+        help="Comma-separated paths to read into cache before benchmarking (read-only).",
+    )
+    ap.add_argument(
+        "--scrub",
+        action="store_true",
+        help="Redact hostname/user/paths so the report can be shared.",
+    )
     args = ap.parse_args(argv)
 
     if args.version:
@@ -679,7 +839,8 @@ def main(argv: list[str] | None = None) -> int:
 
     rep = build_report(repo, paths, args.disk_probe, args.probe_mb, warm, args.scrub)
 
-    out = open(args.out, "w", encoding="utf-8") if args.out else sys.stdout
+    # newline="" so the csv module controls line endings (no double-blank rows on Windows).
+    out = open(args.out, "w", encoding="utf-8", newline="") if args.out else sys.stdout
     try:
         emit(rep, args.format, out)
     finally:

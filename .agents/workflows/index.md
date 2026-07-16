@@ -1,7 +1,7 @@
 # Agent Workflows
 
-<!-- WORKFLOWS-VERSION: 1.1.0 -->
-Version: `1.1.0` (source of truth: `.agents/workflows/VERSION`). Scheme:
+<!-- WORKFLOWS-VERSION: 1.2.1 -->
+Version: `1.2.1` (source of truth: `.agents/workflows/VERSION`). Scheme:
 git-tag-driven semantic versioning (baseline `v1.0.0`); `VERSION` is DERIVED from the
 tag, not hand-edited. The installer stamps this into each target so `/list-workflows`
 and `setup-repo` can report the installed version.
@@ -199,14 +199,14 @@ for the full catalog rather than duplicating it or the README.
   sibling (`../release-review/...`).
 - The installer copies these workflows into a target repository, generates the
   per-tool command shims from this manifest (passing the `lens` to shared-body
-  commands), and adds a one-line pointer to `AGENTS.md`. See
-  `install-workflows.py`.
+  commands), and adds a one-line pointer to `AGENTS.md`. See the `aw install` CLI
+  (`agent_workflows/engine.py`).
 - **Parameterized command surface (assess and advise):** the single `assess` and `advise`
   rows each generate one parameterized command (`/assess <concern>`, `/advise <persona>`).
   The `assess-<concern>` and `advise-<persona>` rows are the **catalog** (the source of
   truth for each concern's lens / each persona's charter); the installer does NOT generate
   a shim per catalog row (`is_concern_catalog_row` / `CATALOG_ROW_PREFIXES` in
-  `install-workflows.py`). Re-running the installer on an older install prunes retired
+  `agent_workflows/engine.py`). Re-running the installer on an older install prunes retired
   per-item shims automatically. The run-record directory conventions remain
   `workflow-artifacts/assess-<concern>/<RUN_ID>/` and
   `workflow-artifacts/advise-<persona>/<RUN_ID>/`.
