@@ -3,6 +3,10 @@
 ## [Unreleased]
 
 ### Added
+- **`--limit N` on `session list`, `project list`, and `history show`** to cap long
+  output, with a note reporting how many rows were withheld (the cumulative grand
+  totals in `history show` still cover all runs). The `db info` top-models count is now
+  a named constant.
 - **`--dry-run` for `move` and `session import`.** `session move` / `project move` /
   top-level `move` now accept `--dry-run` (show the plan, and for a remote destination
   the full runbook, without moving anything or running git); `session import --dry-run`

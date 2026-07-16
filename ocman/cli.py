@@ -360,6 +360,10 @@ OPENCODE_HISTORY_PATH: Path = Path(_loaded_config["history_path"])
 OPENCODE_STORAGE_DIR: Path = (Path.home() / ".local" / "share" / "opencode" / "storage" / "session_diff").resolve()
 
 # Relational tables linked to sessions, ordered to safely handle dependencies during deletion.
+# How many top models to show in `db info` usage metrics (parametrized from the
+# former hardcoded LIMIT 3; kept at 3 to preserve existing output).
+DB_INFO_TOP_MODELS = 3
+
 SESSION_RELATIONAL_TABLES: list[tuple[str, str]] = [
     ("event", "aggregate_id"),
     ("event_sequence", "aggregate_id"),
@@ -4447,13 +4451,21 @@ def print_projects(
     *,
     title: str | None = None,
     blank_after_title: bool = True,
+    limit: int | None = None,
 ) -> None:
-    """Print known opencode projects in the standard compact format."""
+    """Print known opencode projects in the standard compact format.
+
+    ``limit`` caps the rendered rows and appends a truncation note (F8).
+    """
     if title is None:
         title = f"Projects ({len(projects)}):"
     print(color_bold(title))
     if blank_after_title:
         print()
+    withheld = 0
+    if limit is not None and limit >= 0 and len(projects) > limit:
+        withheld = len(projects) - limit
+        projects = projects[:limit]
     for idx, p in enumerate(projects, start=1):
         directory = _display_worktree(p["directory"])
         if len(directory) > 70:
@@ -4471,6 +4483,10 @@ def print_projects(
                 f" / {fmt_int(p.get('tokens_output'))} out"
                 f" / {fmt_int(p.get('tokens_cache_read'))} cache"
             )
+    if withheld:
+        print(color_dim(
+            f"  ... and {withheld} more not shown (--limit {limit}; omit --limit to see all)."
+        ))
 
 
 def print_no_project_context_help(projects: list[dict[str, Any]]) -> None:
@@ -5529,6 +5545,7 @@ def _legacy_defaults(config: dict) -> dict:
         "project": None,
         "list_sessions": False,
         "all_sessions": False,
+        "limit": None,
         "search": None,
         "limit": 10,
         "search_session_id": None,
@@ -5749,6 +5766,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Project name/number to scope to (default: CWD project).")
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagent/child sessions.")
+    sp.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="Show at most N sessions (a truncation note reports the rest).")
 
     sp = new_action(p_session, s_sub, "search", help="Search session content and titles.")
     _add_search_opts(sp)
@@ -5830,7 +5849,9 @@ def build_parser() -> argparse.ArgumentParser:
     p_project = new_sub("project", help="Work with projects.")
     pr_sub = p_project.add_subparsers(dest="_action", metavar="<action>")
 
-    new_action(p_project, pr_sub, "list", help="List all projects.")
+    sp = new_action(p_project, pr_sub, "list", help="List all projects.")
+    sp.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="Show at most N projects (a truncation note reports the rest).")
 
     sp = new_action(p_project, pr_sub, "delete", help="Delete a project and all its sessions.")
     sp.add_argument("name", help="Project name, number, ID, or path.")
@@ -5891,7 +5912,9 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- history / config --------------------------------------------------
     p_history = new_sub("history", help="Historical activity ledger.")
     h_sub = p_history.add_subparsers(dest="_action", metavar="<action>")
-    new_action(p_history, h_sub, "show", help="Show historical activity (alias: 'ocman logs').")
+    sp = new_action(p_history, h_sub, "show", help="Show historical activity (alias: 'ocman logs').")
+    sp.add_argument("--limit", type=int, default=None, metavar="N",
+                    help="Show at most N recent run records (a truncation note reports the rest).")
     sp = new_action(p_history, h_sub, "clear", help="Wipe the historical activity ledger.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
     sp.add_argument("--force", action="store_true",
@@ -6125,6 +6148,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["list_sessions"] = True
             out["project"] = g("name")
             out["all_sessions"] = bool(g("all_sessions", False))
+            out["limit"] = g("limit", None)
         elif action == "search":
             _apply_search(out, ns, g)
         elif action == "show":
@@ -6197,6 +6221,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     elif group == "project":
         if action == "list":
             out["list_projects"] = True
+            out["limit"] = g("limit", None)
         elif action == "delete":
             out["delete_project"] = True
             out["project"] = g("name")
@@ -6267,6 +6292,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     elif group == "history":
         if action == "show":
             out["show_logs"] = True
+            out["limit"] = g("limit", None)
         elif action == "clear":
             out["clear_history"] = True
             out["force"] = bool(g("force", False))
@@ -10511,16 +10537,25 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         print(color_yellow(f"Warning: could not save deletion metrics: {e}"))
 
 
-def cli_show_logs() -> None:
-    """Print the historical recovery logs and cumulative grand totals."""
+def cli_show_logs(limit: int | None = None) -> None:
+    """Print the historical recovery logs and cumulative grand totals.
+
+    ``limit`` shows only the most recent N run records (a truncation note reports
+    the rest); the cumulative grand totals are always shown in full.
+    """
     history = _load_history()
     runs = history.get("runs", [])
 
     if not runs:
         print("No historical actions recorded in the sidecar ledger.")
     else:
-        # Print runs reversed (newest first, matching TUI)
-        for run in reversed(runs):
+        # Newest first (matching TUI). --limit caps the shown runs.
+        ordered = list(reversed(runs))
+        logs_withheld = 0
+        if limit is not None and limit >= 0 and len(ordered) > limit:
+            logs_withheld = len(ordered) - limit
+            ordered = ordered[:limit]
+        for run in ordered:
             timestamp = run.get("timestamp", "unknown time")
             reason = run.get("reason", "unknown").upper()
             sess_cnt = run.get("sessions_count", 0)
@@ -10550,6 +10585,11 @@ def cli_show_logs() -> None:
             print(f"    - Accumulated Cost:      {fmt_cost(cost)}")
             print(f"    - Disk Space Saved:      {human_size_local(space_saved)}")
             print("--------------------------------------------------------")
+        if logs_withheld:
+            print(color_dim(
+                f"... and {logs_withheld} older run(s) not shown (--limit {limit}; "
+                f"omit --limit to see all). Grand totals below still cover ALL runs."
+            ))
 
     # Always print grand totals (all-time historical recovery) at the end
     c = history.get("cumulative", {})
@@ -10785,14 +10825,15 @@ def db_show_info(args) -> None:
 
             # Top models
             try:
-                cursor.execute("""
-                    SELECT model, COUNT(*) as count 
-                    FROM session 
-                    WHERE model IS NOT NULL AND model != '' 
-                    GROUP BY model 
-                    ORDER BY count DESC 
-                    LIMIT 3;
-                """)
+                cursor.execute(
+                    "SELECT model, COUNT(*) as count "
+                    "FROM session "
+                    "WHERE model IS NOT NULL AND model != '' "
+                    "GROUP BY model "
+                    "ORDER BY count DESC "
+                    "LIMIT ?;",
+                    (DB_INFO_TOP_MODELS,),
+                )
                 top_models = []
                 for row in cursor.fetchall():
                     model_str = row[0]
@@ -11779,7 +11820,7 @@ def main() -> None:
     # Handle --show-logs early.
     if getattr(args, "show_logs", False):
         try:
-            cli_show_logs()
+            cli_show_logs(limit=getattr(args, "limit", None))
         except Exception as e:
             die(str(e))
         return
@@ -11841,10 +11882,11 @@ def main() -> None:
 
     # Handle --list-projects early.
     if args.list_projects:
+        _proj_limit = getattr(args, "limit", None)
         projects = db_list_projects()
         if not projects:
             die("No projects found. Is opencode installed and has it been used?")
-        print_projects(projects)
+        print_projects(projects, limit=_proj_limit)
         print()
         print("Use 'ocman list sessions in PROJECT' to see a project's sessions.")
         return
@@ -11949,6 +11991,13 @@ def main() -> None:
         top_count = sum(1 for s in all_sessions if not s["parent_id"])
         child_count = sum(1 for s in all_sessions if s["parent_id"])
 
+        # --limit: cap the rendered rows; report how many were withheld (F8).
+        _limit = getattr(args, "limit", None)
+        _limit_withheld = 0
+        if _limit is not None and _limit >= 0 and len(sessions) > _limit:
+            _limit_withheld = len(sessions) - _limit
+            sessions = sessions[:_limit]
+
         # When neither a project nor a directory scope matched the CWD, we are
         # listing EVERY project's sessions. Track that so we can scream about it
         # again at the bottom (a header scrolls off the top of a long list).
@@ -12019,6 +12068,10 @@ def main() -> None:
                 f" / {fmt_int(s['tokens_cache_read'], 11)} cache"
             ))
         print()
+        if _limit_withheld:
+            print(color_dim(
+                f"  ... and {_limit_withheld} more not shown (--limit {_limit}; omit --limit to see all)."
+            ))
         if _no_project_match:
             # Loud footer (the header scrolls off the top of a long list) placed
             # just above the usage hint, so it stays near the bottom of the view.

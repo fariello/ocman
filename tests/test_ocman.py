@@ -1289,6 +1289,29 @@ def test_preprocess_list_word_order():
         ["ocman", "session", "list", "myproj"]
 
 
+def test_list_projects_limit(temp_db, capsys, monkeypatch):
+    """F8: project list --limit caps rows and prints a truncation note."""
+    import ocman, sys
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    for i in range(4):
+        cur.execute("INSERT INTO project (id, worktree, name) VALUES (?, ?, ?)",
+                    (f"p{i}", f"/proj{i}", f"P{i}"))
+        cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                    "directory, parent_id) VALUES (?, ?, ?, 1, ?, ?, '')",
+                    (f"s{i}", f"p{i}", f"S{i}", 100 - i, f"/proj{i}"))
+    conn.commit(); conn.close()
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "project", "list", "--limit", "2"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "and 2 more not shown" in out
+    # Only 2 project rows rendered (numbered 1. and 2., not 3.).
+    assert "  1. " in out and "  2. " in out and "  3. " not in out
+
+
 def test_move_sugar_carries_safety_flags():
     """F4: the top-level 'move' sugar exposes --confirm-remote-delete/-y/--force."""
     import sys
