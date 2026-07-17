@@ -1,11 +1,12 @@
-# IPD: chunk large sessions on recover / compact / export
+# IPD: chunk large sessions on recover / compact
 
 - Date: 2026-07-17
 - Concern: usability / scale (large sessions)
 - Scope: split a large session into multiple ordered, self-contained parts so the
-  recovered transcript/restart Markdown, the compaction LLM input, and the .ocbox
-  export stay manageable, instead of only being able to TRUNCATE (drop older turns).
-- Status: PROPOSED (not yet executed)
+  recovered transcript/restart Markdown and the compaction LLM input stay manageable,
+  instead of only being able to TRUNCATE (drop older turns). Export (.ocbox) chunking
+  is explicitly OUT of scope (see Non-goals).
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -14,9 +15,10 @@
   from the TODO.md backlog entry. Researched the existing recover/compact/filter/
   export/config subsystems (see Evidence). Maintainer resolved the four open design
   questions: (1) BOTH a `--chunk` flag AND a new choice in the interactive large-
-  session prompt; (2) apply to ALL THREE outputs (recovery, compaction, export),
-  phased; (3) split on INTERACTION boundaries, never mid-turn; (4) filenames use the
-  filter-style stem sub-segment `.part-NNofMM`. Promoted to to-review.
+  session prompt; (2) apply to recovery + compaction (export chunking later revised
+  OUT, see plan-review); (3) split on INTERACTION boundaries, never mid-turn; (4)
+  filenames use the filter-style stem sub-segment `.part-NNofMM`. Promoted to to-review.
+- 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED. Re-verified claims against cli.py. PR-001 (HIGH, FIXED): the filename claim was false - parse_recovery_name does NOT strip a trailing segment (greedy `(.+)` folds `.part-NNofMM` and even today's filter `.<scope>` INTO the sid, cli.py:3539,3556-3560); D-3 now REQUIRES fixing the parser + a filter regression test. PR-002 (HIGH, RESOLVED BY SCOPE CUT): export `--to` is a file not a dir (cli.py:12292-12305); maintainer decided export chunking is OUT of scope entirely, removing the problem. PR-003 (MEDIUM, FIXED): recover_from_export has THREE call sites (cli.py:13299,13322,13427), all must thread `chunk`. PR-004 (MEDIUM, FIXED): removed the silent "chunk wins / ignore --max-lines" framing - under --chunk, --max-* set per-part size (no conflict). PR-005 (LOW, FIXED): CONFIG_TEMPLATE must explain the two-knob (trigger vs part-size) relationship. PR-006 (LOW, FIXED): added the filter-parse regression test. Also removed a stray code-fence and added an execution-contract gate. Maintainer decisions: interactive prompt gets a [c]hunk choice AND a --chunk flag; export chunking dropped (YAGNI + partial-bundle integrity cost). Status -> reviewed.
 
 ## Goal
 
@@ -28,9 +30,8 @@ than truncating (which discards older turns). Chunking must:
   naming conventions;
 - be opt-in (a `--chunk` flag) and also offered as a choice in the existing
   interactive "this session is large" prompt;
-- cover the recovered transcript/restart Markdown (Phase 1), the compaction LLM
-  input with per-chunk API calls and aggregated cost (Phase 2), and the .ocbox
-  export (Phase 3);
+- cover the recovered transcript/restart Markdown (Phase 1) and the compaction LLM
+  input with per-chunk API calls and aggregated cost (Phase 2);
 - leave the existing default (truncate / prompt) behavior unchanged when `--chunk`
   is not requested.
 
@@ -59,10 +60,16 @@ All references are to `ocman/cli.py`.
 - Filename authority: `canonical_recovery_name(session_id, dt, kind)` (`cli.py:3495`)
   -> `YYYYMMDD-HHMM-<safe_sid>.<kind>.md`; `RECOVERY_KINDS = ("transcript","restart",
   "prompt","compacted")` (`cli.py:3480`); inverse parser `parse_recovery_name`
-  (`cli.py:3498`) already TOLERATES one trailing `.<segment>` before the kind suffix
-  (that is how the filter output `...<scope>.compacted.md` round-trips, `cli.py:3505-3506`,
-  `cli.py:7152-7160`). So a `.part-NNofMM` sub-segment fits WITHOUT touching
-  `RECOVERY_KINDS`.
+  (`cli.py:3498`).
+  CORRECTION (plan-review PR-001): `parse_recovery_name` does NOT currently strip a
+  trailing segment. Its docstring at `cli.py:3505-3506,3526-3528` DESCRIBES dropping a
+  trailing `.<scope>`, but the implementation calls `_try_parse(stem)` on the WHOLE stem
+  (`cli.py:3556`) and the regexes use a greedy `(.+)` for the session id (`cli.py:3539`),
+  so for `...<sid>.part-01of03.transcript.md` the session id parses as
+  `"<sid>.part-01of03"` (WRONG). The same latent bug already affects the filter scope
+  form: `...<sid>.<scope>.compacted.md` parses sid as `"<sid>.<scope>"`. So a
+  `.part-NNofMM` sub-segment does NOT round-trip today; the parser MUST be fixed (see
+  D-3). This still does not require touching `RECOVERY_KINDS`.
 - Compaction: `run_compaction` (`cli.py:6624`) reads the `.prompt.md` and calls
   `call_compaction_api` (`cli.py:868`). Token/cost estimators already exist:
   `estimate_tokens` (`cli.py:825`, ~4 chars/token via `CHARS_PER_TOKEN_ESTIMATE`
@@ -70,9 +77,9 @@ All references are to `ocman/cli.py`.
   multi-session compact path already aggregates estimates into a vistab GRAND TOTAL /
   AVERAGE table (`cli.py:13465-13510`) - prior art for per-chunk aggregation.
 - Export: `bundle_session_data` (`cli.py:9358`) -> `_write_ocbox` (`cli.py:9262`),
-  a `.ocbox` ZIP that ALREADY streams rows with `fetchmany(1000)` (`cli.py:9328-9336`),
-  so its memory pressure is low; chunking export is about producing smaller,
-  independently-importable bundles, not about memory.
+  a `.ocbox` ZIP of DB rows + diffs that ALREADY streams rows with `fetchmany(1000)`
+  (`cli.py:9328-9336`). Export chunking is OUT of scope (see Non-goals), so no export
+  code path changes.
 - Config: `load_ocman_config` (`cli.py:305`) only honors keys present in
   `DEFAULT_CONFIG` (`cli.py:287`, `cli.py:325-326`); numeric example
   `filter_max_bytes` (`cli.py:299`), read as `int(config.get("filter_max_bytes", ...))`
@@ -94,6 +101,11 @@ override them per-run. Do NOT repurpose the existing `LONG_SESSION_*` constants 
 different meaning; they remain the "is this session large / should we prompt"
 trigger. Chunk sizing reads config; the trigger stays constant-based (documented as a
 deliberate split: one decides "prompt?", the other decides "part size").
+- PR-005: the `CONFIG_TEMPLATE` doc-comment for each new key MUST explain this
+  two-knob relationship in one sentence (the `LONG_SESSION_*` trigger decides WHEN a
+  session counts as large enough to prompt/chunk; `chunk_max_*` decides how big each
+  resulting part is), so a config-file reader is not left guessing why there appear to
+  be two thresholds.
 
 ### D-2 Core chunker (pure, testable seam)
 
@@ -132,20 +144,36 @@ def part_recovery_name(session_id: str, dt: datetime, kind: str, part: int, tota
 - Zero-pad NN/MM to the width of `total` (so `01of03`, `007of123` sort lexically).
 - When `total == 1` we do NOT add a part segment (identical to today's names -> no
   regression for normal-size sessions even if `--chunk` is passed).
-- `parse_recovery_name` already tolerates the extra segment; add a targeted test that
-  a `.part-NNofMM.<kind>.md` name round-trips (sid + kind recovered, segment ignored
-  or surfaced). Extend the parser ONLY if a test shows it mis-parses; prefer not to
-  touch `RECOVERY_KINDS`.
+- REQUIRED parser fix (PR-001): make `parse_recovery_name` actually do what its
+  docstring promises. After slicing off `.<kind>.md`, if `_try_parse(stem)` yields a
+  session id that still contains a trailing `.part-NNofMM` (or, for the pre-existing
+  filter case, a trailing `.<scope>`) segment, strip that ONE trailing segment and
+  re-parse, keeping it only if the shorter stem still parses as a timestamped stem.
+  Concretely: try `_try_parse(stem)`; if the returned sid contains a `.`, also try
+  `_try_parse(stem.rsplit(".", 1)[0])` and prefer the parse whose sid has NO embedded
+  segment when both timestamp-parse. Add a `part_segment` / `scope_segment` out-value
+  only if a caller needs it; otherwise just return the clean sid.
+- Tests: `.part-NNofMM.<kind>.md` round-trips to the bare sid + correct kind; AND a
+  regression test that the existing filter form `...<sid>.<scope>.compacted.md` now
+  parses sid as the bare `<sid>` (this is a behavior CHANGE that fixes a latent bug;
+  check no current caller depended on the old folded value - `cli_filter` at
+  `cli.py:7140` uses the sid only to rebuild the stem, so a correct sid is strictly
+  better). Do NOT touch `RECOVERY_KINDS`.
 
 ### D-4 CLI surface
 
 - Add `--chunk` (store_true) to the `session recover` and `session compact` actions
-  and the `session export` action; thread through the normalizer (add
-  `"chunk": False` to defaults, set it in each branch) and into the handlers.
-- `--chunk` is mutually exclusive in EFFECT with truncation: when `--chunk` is set we
-  never call `apply_truncation`; `--max-lines`/`--max-interactions` instead set the
-  per-part size. If both `--chunk` and an explicit truncation-only intent are given,
-  `--chunk` wins (document it; no hard error).
+  (NOT `export`); thread through the normalizer (add `"chunk": False` to defaults, set
+  it in each branch) and into the handlers.
+- Thread `chunk` into EVERY `recover_from_export` call site (there are THREE in the
+  dispatch: `cli.py:13299`, `cli.py:13322`, `cli.py:13427`), not just one - add
+  `chunk=` to `recover_from_export`'s signature and pass it at all three (PR-003).
+- Under `--chunk`, `--max-lines` / `--max-interactions` set the PER-PART size (they do
+  NOT truncate). There is therefore no `--chunk`-vs-truncation conflict: `--chunk`
+  selects split mode, and `--max-*` parameterize the part size within it. If neither
+  `--max-*` is given, parts use the `chunk_max_*` config defaults. (PR-004: removed the
+  earlier "chunk wins / silently ignore --max-lines" framing, which implied a silent
+  failure.)
 - Non-interactive + large + no `--chunk` + no `--max-*`: unchanged (writes full or
   per current non-interactive behavior at `cli.py:2566-2568`).
 
@@ -167,10 +195,14 @@ class LargeSessionChoice:
 - `[c]hunk` asks for per-part `Max interactions [<chunk_max_interactions>]` and
   `Max lines [<chunk_max_lines>]`, returns `mode="chunk"`.
 - All existing call sites updated to read `.mode` / `.max_*`. This is an internal
-  contract change; there is exactly one caller (`recover_from_export` `cli.py:3750`),
-  so blast radius is small. A test locks the old-choice behavior (N/l/i/b) unchanged.
+  contract change; there is exactly one caller (inside `recover_from_export`,
+  `cli.py:3751`), so blast radius is small. A test locks the old-choice behavior
+  (N/l/i/b) unchanged.
 
 ### D-6 Phasing
+
+Both phases land together in one execution (recovery is the shared foundation that
+compaction builds on).
 
 - **Phase 1 (recovery Markdown):** `recover_from_export` gains a chunk path. When
   chunking, call `chunk_turns`, then for each part emit `transcript`/`restart` (and
@@ -185,13 +217,12 @@ class LargeSessionChoice:
   `cli.py:13465-13510` pattern), and print a per-part progress line. The
   running-OpenCode guard is NOT relevant (compaction/recovery are read-only on the
   DB); no guard change.
-- **Phase 3 (export):** when `--chunk`, produce N `.ocbox` bundles, each a valid
-  standalone single-session (sub)bundle importable on its own, named
-  `...part-NNofMM.ocbox` (export currently has no auto-name; define one for the
-  chunked case while still honoring an explicit `--to` directory). Split by the same
-  interaction boundaries. Import is unchanged (each part imports like any bundle).
-  Phase 3 may land in a follow-up commit if Phases 1-2 are already large; if
-  deferred, record it explicitly rather than silently dropping it.
+- **Export (.ocbox) is explicitly OUT of scope** (see Non-goals): a bundle is DB rows
+  for wholesale import, is not readable text or LLM input (the two things this feature
+  keeps manageable), and already streams to disk, so it has no size motivation.
+  Chunking it would add real complexity (partial-bundle id remapping + subtree
+  integrity across parts) for no identified use case. `export` and `--to` are
+  unchanged; `export` gets no `--chunk` flag.
 
 ## Test plan
 
@@ -202,8 +233,13 @@ Unit (pure, no I/O), in `tests/`:
   first; ordering preserved; concatenating all parts == original turns (round-trip
   invariant); never-split-a-turn invariant.
 - `part_recovery_name`: zero-pad width tracks `total`; `total==1` yields the plain
-  canonical name (no segment); `parse_recovery_name` round-trips a part name (sid +
-  kind recovered).
+  canonical name (no segment); `parse_recovery_name` round-trips a part name (bare sid +
+  correct kind).
+- `parse_recovery_name` regression (PR-001/PR-006): the existing filter form
+  `YYYYMMDD-HHMM-<sid>.<scope>.compacted.md` now parses the session id as the BARE
+  `<sid>` (not `<sid>.<scope>`); assert `cli_filter`'s stem-rebuild
+  (`cli.py:7140,7152,7160`) still produces the same output filename it did before the
+  fix (so the parser correction is behavior-preserving for filter's observable output).
 - `prompt_for_truncation` / `LargeSessionChoice`: old choices (N/l/i/b) return the
   same effective max_lines/max_interactions as before (anti-regression); new `[c]`
   returns `mode="chunk"` with the configured defaults; non-interactive returns
@@ -221,15 +257,16 @@ Integration:
   prompts exactly as today (reuse/extend existing recover tests).
 - Phase 2: chunked compaction calls the (mocked) API once per part and writes N
   `.compacted` part files; cost table sums per-part estimates.
-- Phase 3 (if landed): chunked export writes N importable `.ocbox` parts; importing
-  every part reconstructs the full session subtree.
+- `export` unaffected: existing export tests still pass unchanged (no `--chunk` on
+  export; sanity that the flag is rejected there if the parser would otherwise accept
+  an unknown flag).
 
 Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real output.
 
 ## Docs
 
-- README: document `--chunk` on recover/compact/export, the new interactive `[c]hunk`
-  choice, the `.part-NNofMM` naming, and the two new config keys (with the
+- README: document `--chunk` on recover/compact (not export), the new interactive
+  `[c]hunk` choice, the `.part-NNofMM` naming, and the two new config keys (with the
   truncate-vs-chunk distinction).
 - ARCHITECTURE: a short subsection on the `chunk_turns` seam, the interaction-boundary
   invariant, and the `part_recovery_name` naming authority.
@@ -239,14 +276,36 @@ Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real outp
 ## Risks and non-goals
 
 - Risk: changing `prompt_for_truncation`'s return contract. Mitigated by a single
-  caller + an anti-regression test locking the old choices.
-- Risk: `parse_recovery_name` mis-handling the part segment. Mitigated by a round-trip
-  test; only extend the parser if that test fails.
+  caller (`cli.py:3751`) + an anti-regression test locking the old choices.
+- Risk: `parse_recovery_name` mis-parses the part segment (and already mis-parses the
+  filter scope segment). This is a REQUIRED fix in D-3 (not "only if a test fails"),
+  covered by the round-trip + filter-regression tests.
 - Non-goal: changing the `LONG_SESSION_*` trigger thresholds or the default
   (truncate/prompt) behavior when `--chunk` is absent.
 - Non-goal: cross-part semantic summarization/stitching of compaction output into one
   document (each part is compacted independently in Phase 2).
-- Open (decide at execution): whether Phase 3 export ships in the same commit or a
-  fast-follow; whether the restart doc's cross-part note should also embed a tiny
-  index of sibling part filenames.
-```
+- Non-goal (maintainer decision, plan-review): chunking the `.ocbox` EXPORT. A bundle
+  is DB rows for wholesale import, not readable/LLM text, already streams, and has no
+  identified chunking use case; the partial-bundle integrity cost is not justified.
+  `export` is untouched.
+
+## Open questions
+
+- O-1 (decide at execution, non-blocking): whether the per-part restart doc embeds a
+  tiny index of sibling part filenames (nice-to-have, not required for correctness).
+
+## Execution contract (gate)
+
+An executing agent MUST:
+- Treat O-1 as an execution-time nicety to record in the Workflow history; do not
+  invent other scope. Export chunking is OUT (do not add it back).
+- Scope fence: touch only the recover/compact/config/filename subsystems named above
+  and their tests + the four docs (README, ARCHITECTURE, CHANGELOG, CONFIG_TEMPLATE).
+  Do NOT modify the export code path. No unrelated refactors.
+- Honesty rule (hard MUST): paste the ACTUAL `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q`
+  output; never claim a pass not run.
+- Commit path-scoped (`git commit -m msg -- <paths>`), NEVER `-A`/`-a`, NEVER push,
+  NEVER tag.
+- On completion, set `Status: EXECUTED`, add a Workflow-history execution line, and
+  `git mv` this IPD from `pending/` to `executed/` (verify no pending/executed dup
+  with `git ls-tree HEAD`).
