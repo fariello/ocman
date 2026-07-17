@@ -13,6 +13,16 @@
   main and help output paths.
 
 ### Added
+- **`ocman list running`**: list running OpenCode instances (pid, user, uptime, kind,
+  working directory, project, and a best-effort session with provenance) and flag
+  insecure control servers. It detects which instances OWN a listening socket and, for
+  those, classifies auth from the process environment (`OPENCODE_SERVER_PASSWORD`
+  present = secured); a bold-red banner names any VULNERABLE (unauthenticated) or
+  NETWORK-EXPOSED (non-loopback bind) listener with remediation. Observe-only:
+  current-user by default (`--all-users` opt-in; others' auth shown as "unknown"),
+  never calls state-changing endpoints, never prints secrets. `--probe` optionally
+  confirms auth via a read-only `GET /app` on your OWN loopback listeners; `--json`
+  for machine output. Fails loud (never a false "all clear") if it cannot enumerate.
 - **`ocman spend`**: LLM spend reporting. Default is a per-project table (cost + split
   tokens, sorted by cost) with a live total; `ocman spend <project> --sessions` drills
   into per-session spend; `--historical` adds the deletion ledger's saved (deleted)

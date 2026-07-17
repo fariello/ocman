@@ -739,9 +739,9 @@ def test_process_lock_refuses_when_opencode_running(temp_db, monkeypatch):
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1','p1','S1',1,2)")
     conn.commit(); conn.close()
-    # ps reports one plausible opencode process (pid 4242).
-    ps_out = ("  PID TTY      ELAPSED                     STARTED COMMAND\n"
-              " 4242 pts/3        300  Fri Jul  4 12:00:00 2026 opencode --continue\n")
+    # ps reports one plausible opencode process (pid 4242), new 7-fixed-column format.
+    ps_out = ("    PID   PPID USER     TTY         ELAPSED                  STARTED COMMAND\n"
+              "  4242      1 me pts/3         300  Fri Jul  4 12:00:00 2026 opencode --continue\n")
     monkeypatch.setattr(ocman.subprocess, "run", _fake_ps(ps_out, rc=0))
     monkeypatch.setattr("builtins.input", lambda _: "yes")
     with pytest.raises(RecoveryError):
@@ -782,22 +782,108 @@ def test_process_lock_fails_open_on_detector_error(temp_db, monkeypatch):
     conn.close()
 
 
+def _ps_line(pid, cmd, *, ppid=1, user="me", tty="pts/3", etimes=300):
+    """Build one `ps -o pid,ppid,user,tty,etimes,lstart,args` line (lstart = 5 tokens)."""
+    return f"{pid:>6} {ppid:>6} {user} {tty} {etimes:>7}  Fri Jul  4 12:00:00 2026 {cmd}"
+
+
 def test_detect_running_opencode_filter_and_self_exclusion(monkeypatch):
-    """Detector: keeps plausible opencode+continue rows, excludes self and non-matching rows."""
+    """Default (safety-gate) detector: keeps opencode+continue rows, excludes self and non-matches."""
     import os, subprocess
     my_pid = os.getpid()
-    ps_out = (
-        "  PID TTY      ELAPSED                     STARTED COMMAND\n"
-        f"{my_pid:>5} pts/1        100  Fri Jul  4 12:00:00 2026 opencode --continue\n"   # self -> excluded
-        " 4242 pts/3        300  Fri Jul  4 12:00:00 2026 opencode --continue\n"          # match
-        " 4243 pts/4         10  Fri Jul  4 12:05:00 2026 vim notes-about-opencode.md\n"  # no 'continue' -> skip
-        " 4244 ?             20  Fri Jul  4 12:06:00 2026 opencode serve\n"               # opencode, no continue -> skip
-    )
+    header = "    PID   PPID USER     TTY         ELAPSED                  STARTED COMMAND"
+    ps_out = "\n".join([
+        header,
+        _ps_line(my_pid, "opencode --continue"),          # self -> excluded
+        _ps_line(4242, "opencode --continue"),            # match
+        _ps_line(4243, "vim notes-about-opencode.md"),    # no 'continue' -> skip
+        _ps_line(4244, "opencode serve"),                 # opencode, no continue -> skip (default matcher)
+    ]) + "\n"
     monkeypatch.setattr(ocman.subprocess, "run",
                         lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, stdout=ps_out, stderr=""))
     procs = ocman.detect_running_opencode(0)
     pids = {p["pid"] for p in procs}
     assert pids == {4242}  # only the genuine opencode --continue, not self, vim, or 'opencode serve'
+
+
+def test_detect_running_opencode_broad_matches_serve(monkeypatch):
+    """broad=True (for 'list running') matches any opencode executable incl. serve, not just --continue."""
+    import subprocess
+    header = "    PID   PPID USER     TTY         ELAPSED                  STARTED COMMAND"
+    ps_out = "\n".join([
+        header,
+        _ps_line(4242, "opencode --continue"),
+        _ps_line(4244, "opencode serve --port 4096"),
+        _ps_line(4245, "node /x/pyright-langserver --stdio"),  # child, program 'node' -> excluded
+    ]) + "\n"
+    monkeypatch.setattr(ocman.subprocess, "run",
+                        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, stdout=ps_out, stderr=""))
+    pids = {p["pid"] for p in ocman.detect_running_opencode(0, broad=True)}
+    assert pids == {4242, 4244}  # serve now included; language-server child excluded
+
+
+def test_bind_is_loopback():
+    from ocman import _bind_is_loopback
+    assert _bind_is_loopback("127.0.0.1:47950")
+    assert _bind_is_loopback("127.0.0.53:8080")
+    assert _bind_is_loopback("[::1]:4096")
+    assert _bind_is_loopback("::1:4096")
+    assert not _bind_is_loopback("0.0.0.0:4096")
+    assert not _bind_is_loopback("192.168.1.5:4096")
+    assert not _bind_is_loopback("[::]:4096")
+
+
+def test_listening_sockets_by_pid_parse(monkeypatch):
+    import subprocess
+    from ocman import _listening_sockets_by_pid
+    ss_out = (
+        'LISTEN 0 512 127.0.0.1:47950 0.0.0.0:* users:(("opencode",pid=3754922,fd=17))\n'
+        'LISTEN 0 128 [::1]:8080 [::]:* users:(("opencode",pid=42,fd=9))\n'
+        'LISTEN 0 128 0.0.0.0:22 0.0.0.0:* users:(("sshd",pid=100,fd=3))\n'
+    )
+    monkeypatch.setattr(ocman.subprocess, "run",
+                        lambda cmd, *a, **k: subprocess.CompletedProcess(cmd, 0, stdout=ss_out, stderr=""))
+    m = _listening_sockets_by_pid()
+    assert m.get(3754922) == ["127.0.0.1:47950"]
+    assert m.get(42) == ["[::1]:8080"]
+    assert m.get(100) == ["0.0.0.0:22"]  # parser is generic; opencode-filtering happens later
+
+
+def test_listening_sockets_fail_loud(monkeypatch):
+    from ocman import _listening_sockets_by_pid, RunningDetectionError
+    def _raise(*a, **k):
+        raise FileNotFoundError("no ss")
+    monkeypatch.setattr(ocman.subprocess, "run", _raise)
+    with pytest.raises(RunningDetectionError):
+        _listening_sockets_by_pid()
+
+
+def test_server_password_env_state(monkeypatch, tmp_path):
+    """Exact-key auth classification from environ (own proc); decoy key must not fool it."""
+    from ocman import _server_password_env_state
+    import os as _os, sys
+    # Build a fake /proc/<pid>/environ by pointing open() at a temp file.
+    real_open = open
+    cases = {
+        "unsecured": b"PATH=/x\0X_OPENCODE_SERVER_PASSWORD=decoy\0",   # decoy prefix, real key absent
+        "secured": b"PATH=/x\0OPENCODE_SERVER_PASSWORD=hunter2\0",
+        "unsecured_empty": b"OPENCODE_SERVER_PASSWORD=\0PATH=/x\0",
+    }
+    if not sys.platform.startswith("linux"):
+        import pytest as _pytest
+        _pytest.skip("environ read is linux-only")
+    for label, raw in cases.items():
+        f = tmp_path / f"environ_{label}"
+        f.write_bytes(raw)
+        def fake_open(path, *a, **k):
+            if str(path) == "/proc/999999/environ":
+                return real_open(f, *a, **k)
+            return real_open(path, *a, **k)
+        monkeypatch.setattr("builtins.open", fake_open)
+        state = _server_password_env_state(999999)
+        monkeypatch.undo()
+        expected = "secured" if label == "secured" else "unsecured"
+        assert state == expected, f"{label}: expected {expected}, got {state}"
 
 
 def test_detect_running_opencode_fails_open(monkeypatch):

@@ -116,6 +116,19 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 - **Formatting is centralized.** `fmt_int` (comma-separated integers with optional width) and
   `fmt_cost` (`$` + comma-separated, fixed decimals) are the shared number/currency formatters used by
   the listing and disk-reporting output; both coalesce `None`/bad input to 0 so display never crashes.
+- **Running-instance detection is observe-only.** `ocman list running` enumerates
+  OpenCode processes (`detect_running_opencode(broad=True)` matches the `opencode`
+  executable, not just `--continue`), maps listeners to pids via the kernel socket
+  table (`ss -tlnpH`, IPv6-safe parse), and classifies a listener's auth from the
+  process environment (`OPENCODE_SERVER_PASSWORD` presence, read owner-only from
+  `/proc/<pid>/environ`, value never printed). Own-ness is decided by UID
+  (`os.stat(/proc/<pid>).st_uid`), NOT the ps username (which ps truncates). It never
+  calls state-changing endpoints, never reads another user's `/config`, and the only
+  optional network action is a read-only `GET /app` (`--probe`) against your own
+  loopback listeners. Detection FAILS LOUD (raises `RunningDetectionError` ->
+  explicit "could not determine" message) rather than printing an empty list that
+  reads as "all clear". Session/project attribution is reported with provenance
+  (argv hint / DB lookup / directory one-to-many), never a fabricated 1:1.
 - **Accessibility: no low-contrast text; color is never the sole signal.** Do NOT use the ANSI faint
   attribute (`\033[2m`) or Rich/Textual `dim` for text; it fails contrast expectations and is
   near-invisible on some terminals. Secondary information is conveyed by wording (and, in the TUI, a

@@ -5474,6 +5474,8 @@ def preprocess_argv(argv: list[str]) -> list[str]:
             rest = ["session", "list", *rest[2:]]
         elif second in ("models", "model"):
             rest = ["models", *rest[2:]]
+        elif second in ("running", "instances", "instance"):
+            rest = ["running", *rest[2:]]
 
     # "session list in [project] NAME" -> "session list NAME" (drop the sugar
     # words and collapse a multi-word NAME).
@@ -5617,6 +5619,9 @@ def _legacy_defaults(config: dict) -> dict:
         "clear_history": False,
         # models / prompt
         "show_models": False,
+        "show_running": False,
+        "all_users": False,
+        "probe": False,
         "show_spend": False,
         "spend_sessions": False,
         "spend_historical": False,
@@ -6044,6 +6049,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Override the input size cap.")
 
     new_sub("models", help="List available LLM models (was --show-models).")
+
+    sp = new_sub("running", help="List running OpenCode instances; flag insecure servers.")
+    sp.add_argument("--all-users", action="store_true",
+                    help="Include all users' instances (auth shown as 'unknown' without root).")
+    sp.add_argument("--probe", action="store_true",
+                    help="Confirm auth via a read-only GET /app on your OWN loopback listeners.")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     new_sub("compaction-prompt", help="Print the compaction prompt template.")
     new_sub("ui", help="Launch the interactive terminal dashboard.")
     new_sub("gui", help="Alias of 'ui'.")
@@ -6416,6 +6428,12 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
 
     elif group == "models":
         out["show_models"] = True
+
+    elif group == "running":
+        out["show_running"] = True
+        out["all_users"] = bool(g("all_users", False))
+        out["probe"] = bool(g("probe", False))
+        out["json_output"] = bool(g("json", False))
 
     elif group == "compaction-prompt":
         out["show_compaction_prompt"] = True
@@ -7182,26 +7200,58 @@ def _project_for_cwd(cwd: str) -> str:
                 pass
 
 
-def detect_running_opencode(verbosity: int = 0) -> list[dict]:
+def _current_user() -> str:
+    """Best-effort current username for `ps -u` scoping."""
+    try:
+        import getpass
+        return getpass.getuser()
+    except Exception:
+        return os.environ.get("USER") or os.environ.get("LOGNAME") or str(os.getuid())
+
+
+def _cmdline_is_opencode(cmdline: str, *, broad: bool) -> bool:
+    """Whether a ps `args` string names the opencode program.
+
+    `broad=False` (default, the safety-gate behavior): names `opencode` AND carries a
+    `continue`/resume signal (unchanged, so `check_opencode_process_lock` behaves as
+    before). `broad=True` (for `list running`): any process whose program is
+    `opencode` (first token's basename), so `opencode serve`/`web`/bare TUIs are all
+    detected. Language-server children (`node .../pyright-langserver`) are excluded
+    because their program is `node`, not `opencode`.
+    """
+    low = cmdline.lower()
+    if not broad:
+        return "opencode" in low and "continue" in low
+    toks = cmdline.split()
+    if not toks:
+        return False
+    prog = toks[0].rsplit("/", 1)[-1]
+    return prog == "opencode"
+
+
+def detect_running_opencode(verbosity: int = 0, *, broad: bool = False,
+                            all_users: bool = False) -> list[dict]:
     """Enumerate plausibly-running opencode processes (best-effort, fast, fail-open).
 
-    Returns a list of dicts: {pid, tty, elapsed, started, cwd, project, cmdline}. On any
-    failure (no `ps`, parse error, timeout) returns [] so callers FAIL OPEN: a broken
-    detector must never block a destructive op (matches prior behavior).
+    Returns dicts: {pid, ppid, user, tty, elapsed, started, cwd, project, cmdline}. On any
+    failure (no `ps`, parse error, timeout) returns [] so SAFETY-GATE callers FAIL OPEN.
 
-    Plausibility (SD-9: err toward inclusion for a safety gate): a row is kept when its
-    command line names the program `opencode` and includes a `continue`/session-resume arg.
-    The current process and its ancestors are excluded so ocman never flags itself.
+    `broad`: see `_cmdline_is_opencode`. Default False keeps the exact prior matcher so
+    `check_opencode_process_lock` is unchanged; `list running` passes broad=True.
+    `all_users`: default False enumerates only the current user (`ps -u $USER`); True uses
+    `ps -e` (all users). CWD/environ of other users are unreadable without root (callers
+    must classify those as "unknown", not "secure").
 
-    CWD is read cheaply from /proc/<pid>/cwd on Linux; omitted on other platforms (macOS
-    would need a per-process `lsof`, which is too slow for the ~2s budget).
+    CWD is read from /proc/<pid>/cwd on Linux; omitted elsewhere.
     """
     if sys.platform == "win32":
         return []
+    # Own user by default; -e (all) only when explicitly requested.
+    fields = "pid,ppid,user,tty,etimes,lstart,args"
+    cmd = ["ps", "-eo", fields] if all_users else ["ps", "-u", _current_user(), "-o", fields]
     try:
         result = subprocess.run(
-            ["ps", "-eo", "pid,tty,etimes,lstart,args"],
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3,
+            cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3,
         )
         if result.returncode != 0 or not result.stdout:
             return []
@@ -7217,21 +7267,15 @@ def detect_running_opencode(verbosity: int = 0) -> list[dict]:
         pass
 
     procs: list[dict] = []
-    lines = out.splitlines()
-    for line in lines[1:]:  # skip header
-        # Columns: pid, tty, etimes, lstart (a FIXED 5 whitespace tokens like
-        # "Fri Jul  4 12:00:00 2026"), then args (the rest, may contain spaces).
+    for line in out.splitlines()[1:]:  # skip header
+        # Columns: pid, ppid, user, tty, etimes, lstart (FIXED 5 tokens), then args.
         tokens = line.split()
-        if len(tokens) < 9:  # 3 + 5 lstart + >=1 arg token
+        if len(tokens) < 11:  # 5 fixed cols + 5 lstart + >=1 arg
             continue
-        pid_s, tty, etimes_s = tokens[0], tokens[1], tokens[2]
-        started = " ".join(tokens[3:8])
-        cmdline = " ".join(tokens[8:])
-        # Plausible opencode? Lenient (SD-9: err toward inclusion on a safety gate): the command
-        # names 'opencode' AND carries a continue/resume signal. Broad on purpose so a genuine
-        # running instance is never missed; self/ancestors are excluded above/below.
-        low = cmdline.lower()
-        if "opencode" not in low or "continue" not in low:
+        pid_s, ppid_s, user, tty, etimes_s = tokens[0], tokens[1], tokens[2], tokens[3], tokens[4]
+        started = " ".join(tokens[5:10])
+        cmdline = " ".join(tokens[10:])
+        if not _cmdline_is_opencode(cmdline, broad=broad):
             continue
         try:
             pid = int(pid_s)
@@ -7239,6 +7283,10 @@ def detect_running_opencode(verbosity: int = 0) -> list[dict]:
             continue
         if pid in own_pids:
             continue
+        try:
+            ppid = int(ppid_s)
+        except ValueError:
+            ppid = -1
         try:
             elapsed_s = int(etimes_s)
             h, m, s = elapsed_s // 3600, (elapsed_s % 3600) // 60, elapsed_s % 60
@@ -7252,8 +7300,9 @@ def detect_running_opencode(verbosity: int = 0) -> list[dict]:
             except OSError:
                 cwd = ""
         procs.append({
-            "pid": pid, "tty": tty, "elapsed": elapsed, "started": started,
-            "cwd": cwd, "project": _project_for_cwd(cwd) if cwd else "", "cmdline": cmdline,
+            "pid": pid, "ppid": ppid, "user": user, "tty": tty, "elapsed": elapsed,
+            "started": started, "cwd": cwd,
+            "project": _project_for_cwd(cwd) if cwd else "", "cmdline": cmdline,
         })
     return procs
 
@@ -7286,6 +7335,196 @@ def check_opencode_process_lock(force: bool, verbosity: int = 0) -> None:
     procs = detect_running_opencode(verbosity)
     if procs:
         raise RecoveryError(_render_running_opencode(procs))
+
+
+# --- `ocman list running`: instance + listener + vulnerability detection ---------
+# Observe-only (see the IPD safety contract): process enumeration, /proc reads on OWN
+# processes, the kernel socket table, and at most an OPTIONAL read-only GET /app on OWN
+# loopback listeners. Never state-changing endpoints, never other users' env/config,
+# never prints secret values.
+
+
+class RunningDetectionError(RuntimeError):
+    """Raised when running-instance detection cannot be performed reliably (fail-loud)."""
+
+
+def _listening_sockets_by_pid() -> dict[int, list[str]]:
+    """Map pid -> ["bind:port", ...] for LISTENING TCP sockets we can attribute.
+
+    Uses `ss -tlnpH` and parses the `pid=<N>` token plus the local ADDR:PORT.
+    IPv6-safe. Raises RunningDetectionError if `ss` is unavailable/unparseable so the
+    caller can FAIL LOUD rather than imply "no listeners".
+    """
+    try:
+        r = subprocess.run(["ss", "-tlnpH"], stdout=subprocess.PIPE,
+                            stderr=subprocess.PIPE, text=True, timeout=3)
+    except (OSError, subprocess.SubprocessError) as e:
+        raise RunningDetectionError(f"could not run 'ss' to inspect listening sockets: {e}")
+    if r.returncode != 0:
+        raise RunningDetectionError("'ss' failed while inspecting listening sockets")
+    by_pid: dict[int, list[str]] = {}
+    for line in r.stdout.splitlines():
+        # e.g.: LISTEN 0 512 127.0.0.1:47950 0.0.0.0:* users:(("opencode",pid=3754922,fd=17))
+        m_local = re.search(r"\s(\S+:\d+)\s+\S+:\S+\s+users:\(", line)
+        local = m_local.group(1) if m_local else None
+        if local is None:
+            # Fallback: the 4th whitespace field is usually the local addr:port.
+            parts = line.split()
+            local = parts[3] if len(parts) >= 4 else None
+        for m in re.finditer(r"pid=(\d+)", line):
+            try:
+                pid = int(m.group(1))
+            except ValueError:
+                continue
+            if local:
+                by_pid.setdefault(pid, []).append(local)
+    return by_pid
+
+
+def _bind_is_loopback(bind_addr_port: str) -> bool:
+    """Whether an 'ADDR:PORT' local bind is loopback-only (127.0.0.0/8 or ::1)."""
+    # Strip the :PORT; handle IPv6 in brackets and bare.
+    addr = bind_addr_port
+    if addr.startswith("["):
+        addr = addr[1:].split("]", 1)[0]
+    else:
+        addr = addr.rsplit(":", 1)[0]
+    return addr.startswith("127.") or addr in ("::1", "[::1]")
+
+
+def _server_password_env_state(pid: int) -> str:
+    """Auth state from OWN process environ: 'secured' | 'unsecured' | 'unknown'.
+
+    Reads /proc/<pid>/environ (owner-only). Matches the EXACT key
+    OPENCODE_SERVER_PASSWORD (NUL-delimited), non-empty => secured, empty/absent =>
+    unsecured. Permission denied (another user) or non-Linux => 'unknown'. Never
+    returns or logs the value.
+    """
+    if not sys.platform.startswith("linux"):
+        return "unknown"
+    try:
+        with open(f"/proc/{pid}/environ", "rb") as f:
+            raw = f.read()
+    except (PermissionError, OSError):
+        return "unknown"
+    for entry in raw.split(b"\0"):
+        if entry.startswith(b"OPENCODE_SERVER_PASSWORD="):
+            value = entry[len(b"OPENCODE_SERVER_PASSWORD="):]
+            return "secured" if value else "unsecured"
+    return "unsecured"
+
+
+def _probe_app_auth(bind_addr_port: str, timeout: float = 3.0) -> str | None:
+    """Optional confirmation: GET /app on OUR OWN loopback listener.
+
+    Returns 'secured' (401), 'unsecured' (200), or None (probe failed/unavailable).
+    ONLY called for loopback binds we enumerated as our own (never a user-supplied
+    or non-loopback target). Read-only; no session/message/shell endpoints.
+    """
+    if not _bind_is_loopback(bind_addr_port):
+        return None
+    # Normalize to a loopback URL host:port (force 127.0.0.1 as the host).
+    port = bind_addr_port.rsplit(":", 1)[-1]
+    url = f"http://127.0.0.1:{port}/app"
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, method="GET")
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            code = resp.getcode()
+    except urllib.error.HTTPError as e:
+        code = e.code
+    except Exception:
+        return None
+    if code == 200:
+        return "unsecured"
+    if code == 401:
+        return "secured"
+    return None
+
+
+def detect_running_instances(*, all_users: bool = False, probe: bool = False,
+                             verbosity: int = 0) -> list[dict]:
+    """Build the enriched running-instance list for `ocman list running`.
+
+    Each dict: pid, ppid, user, elapsed, started, cwd, project, cmdline, kind
+    (serve|web|tui|tui+server), listeners (list of bind:port), auth
+    (secured|unsecured|unknown), vulnerable (bool), exposed (bool: non-loopback bind),
+    session (dict with id + provenance) . Observe-only. Raises RunningDetectionError
+    if it cannot reliably enumerate (caller FAILS LOUD).
+    """
+    if sys.platform == "win32":
+        raise RunningDetectionError("running-instance detection is only supported on Linux")
+    procs = detect_running_opencode(verbosity, broad=True, all_users=all_users)
+    # Listener map is authoritative for the security view; if it fails, fail loud.
+    listeners = _listening_sockets_by_pid()
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    out: list[dict] = []
+    for p in procs:
+        pid = p["pid"]
+        binds = listeners.get(pid, [])
+        low = p["cmdline"].lower()
+        if "serve" in low:
+            kind = "serve"
+        elif "web" in low:
+            kind = "web"
+        else:
+            kind = "tui+server" if binds else "tui"
+        # Own-ness by UID, NOT the ps username (ps truncates long names, e.g.
+        # 'gfariel+'), so /proc/<pid>/environ (owner-only) is read for the right procs.
+        is_own = False
+        if my_uid is not None:
+            try:
+                is_own = os.stat(f"/proc/{pid}").st_uid == my_uid
+            except OSError:
+                is_own = False
+        if binds:
+            if is_own:
+                auth = _server_password_env_state(pid)
+                if probe and auth in ("unsecured", "unknown"):
+                    confirmed = _probe_app_auth(binds[0])
+                    if confirmed:
+                        auth = confirmed
+            else:
+                auth = "unknown"  # cannot read another user's environ without root
+        else:
+            auth = "n/a"  # no listener -> not an auth surface
+        exposed = any(not _bind_is_loopback(b) for b in binds)
+        vulnerable = bool(binds) and auth == "unsecured"
+        out.append({
+            **p, "kind": kind, "listeners": binds, "auth": auth,
+            "exposed": exposed, "vulnerable": vulnerable,
+            "session": _attribute_session(p),
+        })
+    return out
+
+
+def _attribute_session(p: dict) -> dict:
+    """Best-effort session attribution with PROVENANCE (never a fabricated 1:1).
+
+    Order: argv `-s <id>` hint -> DB lookup (label 'launched-with'); else the process
+    cwd's session(s) via db_list_sessions_under_dir (label 'directory'). Returns
+    {id|ids, provenance, cost, ...} or {provenance: 'unknown'}.
+    """
+    m = re.search(r"(?:^|\s)(?:-s|--session)\s+(ses_[A-Za-z0-9_-]+)", p.get("cmdline", ""))
+    if m:
+        sid = m.group(1)
+        found = db_find_session(sid)
+        if found:
+            _id, directory, project_id = found
+            return {"id": sid, "provenance": "launched-with (may be stale)",
+                    "directory": directory, "project_id": project_id}
+        return {"id": sid, "provenance": "argv hint (not in DB)"}
+    cwd = p.get("cwd") or ""
+    if cwd:
+        try:
+            sess = db_list_sessions_under_dir(cwd)
+        except Exception:
+            sess = []
+        if sess:
+            total_cost = sum((s.get("cost") or 0.0) for s in sess)
+            return {"ids": [s["id"] for s in sess][:5], "count": len(sess),
+                    "provenance": "directory (one-to-many)", "cost": total_cost}
+    return {"provenance": "unknown"}
 
 
 def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
@@ -10701,6 +10940,85 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
     print(color_green("========================================================"))
 
 
+def cli_list_running(*, all_users: bool = False, probe: bool = False,
+                     json_output: bool = False, verbosity: int = 0) -> None:
+    """`ocman list running`: list running OpenCode instances and flag insecure servers.
+
+    Observe-only. FAILS LOUD if detection is unreliable (never implies "all clear").
+    """
+    try:
+        instances = detect_running_instances(all_users=all_users, probe=probe, verbosity=verbosity)
+    except RunningDetectionError as e:
+        # Fail loud: do NOT print an empty "nothing running" that reads as all-clear.
+        if json_output:
+            emit_json("running", {"error": str(e), "reliable": False, "instances": []})
+        else:
+            print(color_yellow(color_bold(
+                f"Could not reliably determine running OpenCode instances: {e}")))
+            print(color_yellow(
+                "NOT an all-clear: detection was incomplete. Re-run on Linux with 'ss' available."))
+        die("running-instance detection unavailable")
+
+    def _sess_str(s: dict) -> str:
+        if s.get("id"):
+            return f"{s['id']} ({s['provenance']})"
+        if s.get("ids"):
+            return f"{s['count']} session(s) for cwd ({s['provenance']})"
+        return "unknown"
+
+    if json_output:
+        emit_json("running", {"reliable": True, "count": len(instances),
+                              "all_users": all_users, "probed": probe,
+                              "instances": instances})
+        return
+
+    scope = "all users" if all_users else "current user"
+    if not instances:
+        print(color_bold(f"No running OpenCode instances found ({scope})."))
+        return
+
+    print(color_bold(f"Running OpenCode instances ({len(instances)}, {scope}):"))
+    table = vistab.Vistab(header=[
+        "PID", "User", "Uptime", "Kind", "Listener", "Auth", "Project", "Session"])
+    for it in instances:
+        listener = ", ".join(it["listeners"]) if it["listeners"] else "none"
+        if it["exposed"]:
+            listener = f"{listener} (NON-LOOPBACK)"
+        auth = it["auth"]
+        # Prefer the actual working directory (recognizable) over the project id-hash.
+        proj = it.get("cwd") or it.get("project") or "?"
+        table.add_row([
+            str(it["pid"]), it.get("user", "?"), it["elapsed"], it["kind"],
+            listener, auth, proj, _sess_str(it["session"]),
+        ])
+    table.set_cols_align(["r", "l", "r", "l", "l", "l", "l", "l"])
+    print(table.draw())
+
+    # Loud banner for vulnerable / exposed listeners.
+    vulns = [it for it in instances if it["vulnerable"]]
+    exposed = [it for it in instances if it["exposed"]]
+    if vulns or exposed:
+        print()
+        print(color_red(color_bold("=" * 64)))
+        print(color_red(color_bold("SECURITY WARNING: insecure OpenCode server(s) detected")))
+        for it in vulns:
+            print(color_red(color_bold(
+                f"  VULNERABLE (no auth): pid {it['pid']} on {', '.join(it['listeners'])}")))
+        for it in exposed:
+            print(color_red(color_bold(
+                f"  NETWORK-EXPOSED bind: pid {it['pid']} on {', '.join(it['listeners'])}")))
+        print(color_red(color_bold("  Remediation: set OPENCODE_SERVER_PASSWORD before launch; "
+                                   "bind 127.0.0.1; avoid --mdns on shared hosts.")))
+        print(color_red(color_bold("=" * 64)))
+
+    if not probe:
+        print()
+        print("Auth shown from process environment. To confirm via a read-only GET /app "
+              "on your OWN loopback listeners, re-run with --probe")
+        print("(it makes a local, read-only HTTP request to your own servers only; "
+              "never to other users').")
+
+
 def cli_spend(project: str | None = None, *, sessions: bool = False,
               historical: bool = False, json_output: bool = False) -> None:
     """Show per-project (default) or per-session LLM spend (F2).
@@ -12006,6 +12324,15 @@ def main() -> None:
         return
 
     # Handle spend reporting.
+    if getattr(args, "show_running", False):
+        cli_list_running(
+            all_users=getattr(args, "all_users", False),
+            probe=getattr(args, "probe", False),
+            json_output=getattr(args, "json_output", False),
+            verbosity=verbosity,
+        )
+        return
+
     if getattr(args, "show_spend", False):
         try:
             cli_spend(
