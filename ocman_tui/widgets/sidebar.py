@@ -12,6 +12,12 @@ from rich.text import Text
 
 from ..core import db_list_projects, db_list_sessions
 
+# Readable subtext color for secondary labels (ids, dir tags, empty states).
+# Uses the Catppuccin subtext tone already in the TUI palette rather than Rich
+# "dim" (the ANSI faint attribute), which is low-contrast/near-invisible on some
+# terminals. Accessibility: never de-emphasize via reduced contrast.
+_SUBTEXT = "#a6adc8"
+
 class SidebarWidget(Tree):
     """A tree view that lists projects, sessions, and nested subagent sessions."""
 
@@ -30,7 +36,7 @@ class SidebarWidget(Tree):
             projects = []
 
         if not projects:
-            self.root.add_leaf(Text("No projects found", style="dim italic"))
+            self.root.add_leaf(Text("No projects found", style=f"italic {_SUBTEXT}"))
             return
 
         # Auto-detect CWD matching project
@@ -46,7 +52,7 @@ class SidebarWidget(Tree):
             if proj_dir == cwd_str:
                 label.append(" (CWD)", style="bold #89b4fa")
             else:
-                label.append(f" [{Path(proj_dir).name}]", style="dim")
+                label.append(f" [{Path(proj_dir).name}]", style=_SUBTEXT)
 
             proj_node = self.root.add(label, data={"type": "project", "id": proj_id, "dir": proj_dir})
 
@@ -57,7 +63,7 @@ class SidebarWidget(Tree):
                 all_sessions = []
 
             if not all_sessions:
-                proj_node.add_leaf(Text("No sessions", style="dim italic"))
+                proj_node.add_leaf(Text("No sessions", style=f"italic {_SUBTEXT}"))
                 continue
 
             # Build a mapping of session_id -> node for nesting
@@ -72,7 +78,7 @@ class SidebarWidget(Tree):
                     # It's a root session
                     title = s.get("title") or "(untitled)"
                     node_label = Text(title)
-                    node_label.append(f" [{s['id'][:8]}]", style="dim")
+                    node_label.append(f" [{s['id'][:8]}]", style=_SUBTEXT)
                     
                     session_node = proj_node.add(node_label, data={"type": "session", "id": s["id"], "data": s})
                     session_map[s["id"]] = session_node
@@ -94,7 +100,7 @@ class SidebarWidget(Tree):
                         title = s.get("title") or "(untitled)"
                         node_label = Text("⤷ ")
                         node_label.append(title)
-                        node_label.append(f" [{s['id'][:8]}]", style="dim")
+                        node_label.append(f" [{s['id'][:8]}]", style=_SUBTEXT)
                         
                         session_node = parent_node.add(node_label, data={"type": "session", "id": s["id"], "data": s})
                         session_map[s["id"]] = session_node
@@ -104,7 +110,7 @@ class SidebarWidget(Tree):
                             title = s.get("title") or "(untitled)"
                             node_label = Text("⤷ (orphan) ")
                             node_label.append(title)
-                            node_label.append(f" [{s['id'][:8]}]", style="dim")
+                            node_label.append(f" [{s['id'][:8]}]", style=_SUBTEXT)
                             
                             session_node = proj_node.add(node_label, data={"type": "session", "id": s["id"], "data": s})
                             session_map[s["id"]] = session_node

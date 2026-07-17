@@ -125,16 +125,29 @@ except ImportError:
 # ANSI color helpers
 # ---------------------------------------------------------------------------
 
-_COLOR_SUPPORTED: bool = (
-    hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
-    and os.environ.get("NO_COLOR") is None
-    and os.environ.get("TERM") != "dumb"
-)
+def _color_enabled() -> bool:
+    """Whether ANSI color should be emitted (stderr-keyed).
+
+    Precedence (matches the common NO_COLOR / FORCE_COLOR convention):
+      1. NO_COLOR set to ANY value -> OFF (takes precedence; see no-color.org).
+      2. else FORCE_COLOR set and not "0"/""/"false" -> ON, even without a TTY.
+      3. else TERM != "dumb" AND stderr is a TTY.
+    Computed at call time so tests/env changes take effect.
+    """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    fc = os.environ.get("FORCE_COLOR")
+    if fc is not None and fc.lower() not in ("", "0", "false"):
+        return True
+    return (
+        os.environ.get("TERM") != "dumb"
+        and hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+    )
 
 
 def _ansi(code: str, text: str) -> str:
     """Wrap text with an ANSI escape sequence if color is supported."""
-    if _COLOR_SUPPORTED:
+    if _color_enabled():
         return f"\033[{code}m{text}\033[0m"
     return text
 
@@ -165,8 +178,15 @@ def color_cyan(text: str) -> str:
 
 
 def color_dim(text: str) -> str:
-    """Dim/muted text."""
-    return _ansi("2", text)
+    """Secondary/de-emphasized text.
+
+    Intentionally a no-op passthrough: ocman does NOT use the ANSI faint attribute
+    (or any low-contrast styling) for text, which fails accessibility contrast
+    expectations and is near-invisible on some terminals. Secondary meaning is
+    carried by wording, never by reduced contrast. Kept as a named shim so the many
+    call sites need not change; color is never the sole signal.
+    """
+    return text
 
 
 def info_prefix() -> str:
@@ -5129,13 +5149,19 @@ HELP_TOPICS: tuple[str, ...] = (
 def _help_color_enabled() -> bool:
     """
     Whether to colorize help output. Help goes to stdout, so (unlike the
-    stderr-based _COLOR_SUPPORTED) we key off stdout being a TTY.
+    stderr-based _color_enabled) we key off stdout being a TTY. Same NO_COLOR /
+    FORCE_COLOR precedence as _color_enabled: NO_COLOR wins; else FORCE_COLOR forces
+    on; else TERM != dumb AND stdout is a TTY.
     """
+    if os.environ.get("NO_COLOR") is not None:
+        return False
+    fc = os.environ.get("FORCE_COLOR")
+    if fc is not None and fc.lower() not in ("", "0", "false"):
+        return True
     return (
-        hasattr(sys.stdout, "isatty")
+        os.environ.get("TERM") != "dumb"
+        and hasattr(sys.stdout, "isatty")
         and sys.stdout.isatty()
-        and os.environ.get("NO_COLOR") is None
-        and os.environ.get("TERM") != "dumb"
     )
 
 
@@ -5150,8 +5176,10 @@ def _h_cmd(text: str, enabled: bool) -> str:
 
 
 def _h_dim(text: str, enabled: bool) -> str:
-    """Muted/secondary text."""
-    return f"\033[2m{text}\033[0m" if enabled else text
+    """Secondary text in help. No-op passthrough: ocman does not use the ANSI faint
+    attribute (accessibility/contrast); kept as a shim so call sites need not change.
+    The ``enabled`` arg is retained for signature compatibility."""
+    return text
 
 
 def _help_row(left: str, right: str, enabled: bool, left_width: int = 40) -> str:

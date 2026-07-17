@@ -116,6 +116,14 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 - **Formatting is centralized.** `fmt_int` (comma-separated integers with optional width) and
   `fmt_cost` (`$` + comma-separated, fixed decimals) are the shared number/currency formatters used by
   the listing and disk-reporting output; both coalesce `None`/bad input to 0 so display never crashes.
+- **Accessibility: no low-contrast text; color is never the sole signal.** Do NOT use the ANSI faint
+  attribute (`\033[2m`) or Rich/Textual `dim` for text; it fails contrast expectations and is
+  near-invisible on some terminals. Secondary information is conveyed by wording (and, in the TUI, a
+  defined readable palette color such as `#a6adc8`), never by reduced contrast. `color_dim`/`_h_dim` are
+  retained as no-op passthrough shims so call sites need not change. Color output is gated by
+  `_color_enabled()` (stderr) and `_help_color_enabled()` (stdout) with identical precedence: `NO_COLOR`
+  wins (off), else `FORCE_COLOR` forces on, else `TERM != dumb` and a TTY. Any information carried by
+  color must remain fully meaningful with color stripped.
 - **Historical metrics are global-only.** Deleted-session cost/token totals come from the deletion
   history sidecar, which has no `project_id`, so they are never attributed per project; per-project
   reporting (`list projects`, `disk --by-project`) shows *active* figures only, with historical kept as

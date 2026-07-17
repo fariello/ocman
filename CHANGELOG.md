@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Changed
+- **Accessibility: removed low-contrast dim/grey text.** Secondary output (notes, IDs,
+  paths, disclaimers, and the TUI sidebar's ids/tags/empty-states) no longer uses the
+  ANSI faint attribute or Rich `dim`; it renders as normal high-contrast text (the TUI
+  uses a defined readable palette color). Meaning is carried by wording, never by
+  reduced contrast, and color is never the sole signal.
+- **`FORCE_COLOR` support.** Color output now honors `FORCE_COLOR` (force color on even
+  without a TTY) alongside the existing `NO_COLOR` (which takes precedence), in both the
+  main and help output paths.
+
 ### Added
 - **`ocman spend`**: LLM spend reporting. Default is a per-project table (cost + split
   tokens, sorted by cost) with a live total; `ocman spend <project> --sessions` drills

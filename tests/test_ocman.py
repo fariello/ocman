@@ -2073,6 +2073,42 @@ def test_list_sessions_approximate_stats(temp_db, capsys):
     assert "Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts." in captured.out
 
 
+def test_dim_helpers_emit_no_faint_even_when_color_enabled(monkeypatch):
+    """Accessibility: color_dim/_h_dim never emit the ANSI faint attribute, even on
+    the color-ENABLED path (which pytest's no-TTY gating would otherwise hide)."""
+    import ocman
+    # Force color ON so this is a real test, not the trivially-plain no-TTY path.
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    # A colored helper DOES emit ANSI when enabled (sanity: the gate is on).
+    assert "\033[" in ocman.color_bold("x")
+    # But the former dim helpers emit plain text, never the faint code \033[2m.
+    assert ocman.color_dim("secondary") == "secondary"
+    assert "\033[2m" not in ocman.color_dim("secondary")
+    assert ocman._h_dim("secondary", True) == "secondary"
+    assert "\033[2m" not in ocman._h_dim("secondary", True)
+
+
+def test_force_color_and_no_color_precedence(monkeypatch):
+    """FORCE_COLOR forces color on without a TTY; NO_COLOR wins over FORCE_COLOR;
+    precedence is identical in both the stderr gate and the help (stdout) gate."""
+    import ocman
+    # NO_COLOR wins even if FORCE_COLOR is set.
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert ocman._color_enabled() is False
+    assert ocman._help_color_enabled() is False
+    # FORCE_COLOR on, NO_COLOR absent -> color ON (even though pytest has no TTY).
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    assert ocman._color_enabled() is True
+    assert ocman._help_color_enabled() is True
+    # FORCE_COLOR=0 is treated as off -> falls through to isatty (False under pytest).
+    monkeypatch.setenv("FORCE_COLOR", "0")
+    assert ocman._color_enabled() is False
+    assert ocman._help_color_enabled() is False
+
+
 def test_fmt_int_and_fmt_cost():
     from ocman import fmt_int, fmt_cost
     assert fmt_int(1234567) == "1,234,567"
