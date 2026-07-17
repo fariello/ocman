@@ -4,9 +4,9 @@
 - Concern: usability / consistency (session-list rendering)
 - Scope: introduce ONE shared renderer for a per-session "header" (an identity line
   plus two vistab tables) and route every session-listing surface through it, grouping
-  by project when more than one project is shown. Add a `--compact` opt-out that keeps
+  by project when more than one project is shown. Add a `--brief` opt-out that keeps
   the old terse one-line-per-session form.
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -20,9 +20,11 @@
   `ls`, `list sessions`, `sessions`, `search`, and the pickers) share the EXACT same
   per-session header via ONE method; `<SESS_NUM>` is shown only when the caller
   enumerated a list (omitted for a single un-enumerated session). (2) Two tables become
-  the default; `--compact` restores the old one-liner. (3) Duration is derived
+  the default; `--brief` restores the old one-liner. (3) Duration is derived
   (`updated - created`); the "Finish" column is labeled "Last active" (honest: there is
   no true finish marker).
+
+- 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED. Claims re-verified vs cli.py. PR-001 (HIGH, FIXED): `--compact` opt-out collided with the existing `-C/--compact` compaction-model flag (cli.py:6207); renamed to `--brief`. PR-002 (HIGH, RESOLVED by maintainer): pickers only have SessionInfo (id/title/created/updated, cli.py:995-1015) so full tables would be all-zeros; maintainer chose full tables anyway, so D-4a now REQUIRES a real db_list_sessions/db_get_session_stats lookup in the picker path (never fabricated zeros). PR-003 (MEDIUM, FIXED): the numeric `recover <N>` resolves via resolve_session indexing db_list_sessions FETCH order (cli.py:4845-4856), independent of the print pass; D-3 now requires the displayed index == that global fetch-order index (stable partition, no per-project renumber) + a test. PR-004 (MEDIUM, FIXED): aligned the SessionInfo adapter with the real-lookup decision. PR-005 (LOW, FIXED): made the single-source-of-truth test concrete (list vs search per-session header byte-identical, both full and --brief). Open questions resolved with maintainer: flag=`--brief`; pickers=full tables w/ real lookup; single-project prints `Project:` once at top. Status -> reviewed.
 
 ## Goal
 
@@ -42,9 +44,11 @@ Project: <PROJECT_DIR>
 - `<N>.` (the enumeration index) is shown only when the caller passes an index (list
   contexts); omitted for a single, un-enumerated session (e.g. a recover header).
 - Two tables render via vistab (verified recipes; see D-2).
-- `--compact` renders the prior terse one-line-per-session form instead. CRITICAL: the
-  compact form is ALSO produced by the SAME single function (a `compact=True` branch of
-  `render_session_header`), so BOTH the full two-table block AND the compact one-liner
+- `--brief` renders the prior terse one-line-per-session form instead (the internal
+  renderer kwarg is `compact=`; see PR-001 for why the user-facing flag is not
+  `--compact`). CRITICAL: the compact form is ALSO produced by the SAME single function
+  (a `compact=True` branch of `render_session_header`), so BOTH the full two-table block
+  AND the compact one-liner
   are byte-identical across every surface via one call. No call site hand-rolls either
   form.
 
@@ -146,9 +150,14 @@ def render_session_list(rows, stats_map, *, compact=False, enumerate_from=1,
   at the top (still consistent, one line). Rows are enumerated with a running index
   (the existing global 1..N numbering across the whole listing is preserved so users can
   still `ocman recover <N>`).
-- Ordering: preserve the current `time_updated DESC` order WITHIN a project; group
-  boundaries follow first appearance. (Do NOT globally re-sort in a way that breaks the
-  existing index-to-session mapping used by numeric specs; verify the numbering source.)
+- Ordering + numbering (PR-003): the numeric spec `ocman recover <N>` resolves via
+  `resolve_session` (`cli.py:4845-4856`), which indexes into the `db_list_sessions`
+  FETCH order (subagent-filtered), INDEPENDENT of this print pass. Therefore the index
+  shown next to each session MUST equal that global fetch-order position (1..N over the
+  visible, subagent-filtered list), NOT a per-project reset. Grouping is a STABLE
+  PARTITION for display only: assign each visible session its global index first, then
+  bucket by project for printing, so `<N>` next to a row always equals the number
+  `resolve_session` would resolve. Do NOT globally re-sort or renumber within groups.
 
 ### D-4 Route every session-listing surface through it
 
@@ -160,21 +169,31 @@ def render_session_list(rows, stats_map, *, compact=False, enumerate_from=1,
   `render_session_header(row, stats, index=idx)`, then keep the match `where`/snippet
   lines beneath it (search-specific context is additive, not a different session form).
 - Interactive pickers (`display_sessions` `cli.py:1545`, ambiguity picker
-  `cli.py:5131/5176`): these operate on `SessionInfo`, not `db_list_sessions` dicts, and
-  are SELECTION prompts. Decision (D-4a, resolved): route them through the SAME
-  renderer by adapting `SessionInfo` -> the row dict shape (a small adapter), so the
-  header is identical; the picker keeps its trailing "enter a number" prompt. If stats
-  are not readily available in a picker path, pass `stats=None` (renderer shows zeros /
-  "n/a") rather than diverging the format.
-- `--compact` flag: add to the session-list + search commands (and honor in the shared
-  renderer). Threaded through the normalizer like other recovery/list flags.
+  `cli.py:5131/5176`): these operate on `SessionInfo` (fields: `session_id, title,
+  created, updated, raw` only, `cli.py:995-1015`), NOT `db_list_sessions` dicts, and are
+  SELECTION prompts. Decision (D-4a, maintainer): pickers show the FULL two-table block
+  too, for maximum uniformity. Because `SessionInfo` lacks tokens/cost/stats/project_dir,
+  the picker path MUST look up the real data before rendering, NOT fabricate empty
+  tables: build an id-keyed map from `db_list_sessions()` + `db_get_session_stats()` and
+  pass the real `row`/`stats` to `render_session_header`. If a session id is not found in
+  the DB map (edge case), fall back to a `SessionInfo`-derived row with `stats=None`
+  (renderer shows blanks/"n/a", never fabricated non-zero values). The picker keeps its
+  trailing "enter a number" prompt. (This means the two tables in a picker are truthful,
+  not all-zeros; the extra lookup is one `db_list_sessions`/`db_get_session_stats` pass,
+  already done by the list path.)
+- `--brief` flag: add to the session-list + search commands (and honor in the shared
+  renderer as `compact=`). Threaded through the normalizer like other list flags.
 
 ### D-5 CLI surface
 
-- Add `--compact` (store_true) to `session list` and `search` (and `sessions`/`ls`
-  inherit via the same subparser). Normalizer sets `out["compact_list"] = ...`;
-  handlers pass it to the renderer. (Name it `compact_list` internally to avoid clashing
-  with the `compact` recovery flag / `session compact` verb.)
+- Add `--brief` (store_true) to `session list` and `search` (and `sessions`/`ls`
+  inherit via the same subparser). Normalizer sets `out["brief_list"] = ...`; handlers
+  pass it to the renderer as `compact=`.
+- FLAG-NAME (PR-001): do NOT name this `--compact`. `-C/--compact` already exists
+  (`cli.py:6207`) as the compaction-MODEL flag on recover/compact (`--compact [MODEL]`
+  triggers LLM compaction); reusing `--compact` for terse listing on the same `session`
+  noun collides and confuses users. Use `--brief` (alias `-b` if free) for the terse
+  one-line-per-session listing.
 
 ## Test plan
 
@@ -185,24 +204,32 @@ Unit (pure, no DB):
   both table headers; `index=None` omits the "N." prefix, `index=3` includes "3."; a
   subagent row (`parent_id` set) shows the `⤷ ` prefix; `compact=True` returns the
   one-line form (assert it does NOT contain the table headers).
-- single-source-of-truth: assert both forms come from `render_session_header` only.
-  Grep-style test (or a call-graph assertion) that no other function builds a per-session
-  identity/stats string; every surface (list, search, pickers) calls the shared renderer
-  for BOTH the full and the `--compact` output, so the two forms are byte-identical
-  regardless of which command produced them.
+- single-source-of-truth (PR-005, concrete): render the SAME session dict via the
+  `session list` path and via the `search` path and assert the per-session header
+  substring is byte-identical; likewise assert the `--brief` output for that session is
+  byte-identical across the list and search paths. (Both forms flow from
+  `render_session_header`, so identical inputs yield identical output regardless of the
+  producing command.)
 - `render_session_list`: multi-project input prints one `Project:` line per distinct
   project (in first-appearance order); single-project prints exactly one; global
-  enumeration is continuous across groups (indices 1..N, not per-project resets) so a
-  numeric `recover <N>` still maps correctly.
+  enumeration is continuous across groups (indices 1..N, not per-project resets).
+- numbering integrity (PR-003): for a seeded multi-project visible list, the index shown
+  next to each session equals the index `resolve_session(str(N), sessions)` resolves to
+  (`cli.py:4845-4856`); i.e. displayed `<N>` maps back to the same session. This is the
+  guard that grouping did not break `recover <N>`.
 - `has_interactions=False` -> Table 2 Interactions cell renders "n/a", not "0".
 
 Integration / characterization:
 - `ocman session list` on a seeded multi-project DB: output contains the `Project:`
   group headers and, for a known session, both tables with the right values; `--json`
   output is unchanged (byte-for-byte vs before).
-- `--compact` reproduces the prior one-line-per-session shape (characterize against the
+- `--brief` reproduces the prior one-line-per-session shape (characterize against the
   current format so the opt-out is a faithful fallback).
 - `ocman search` hit renders the shared header + its snippet lines.
+- Picker (D-4a): a selection prompt seeded with sessions that HAVE tokens/cost/stats
+  renders the two tables with the REAL values (not zeros), proving the picker path did
+  the DB lookup; a session id absent from the DB map falls back to blanks/"n/a" without
+  fabricating non-zero values.
 - vistab version guard: a test asserts the renderer works on the pinned vistab (import
   + render a sample), so CI catches a version regression.
 
@@ -211,7 +238,7 @@ Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real outp
 ## Docs
 
 - README: update the `session list` / `search` descriptions and the "Recovery"/listing
-  examples to show the grouped two-table output and `--compact`; note Duration is
+  examples to show the grouped two-table output and `--brief`; note Duration is
   derived and "Last active" == last-updated (not a completion marker).
 - ARCHITECTURE: a short subsection on the single `render_session_header` /
   `render_session_list` seam and that all CLI session listings funnel through it (TUI
@@ -223,7 +250,7 @@ Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real outp
 - Risk: numeric-spec mapping. The global 1..N enumeration is what `recover <N>` relies
   on; grouping MUST NOT renumber per-project. Mitigated by the continuous-enumeration
   test.
-- Risk: verbosity for large projects. Mitigated by `--compact`.
+- Risk: verbosity for large projects. Mitigated by `--brief`.
 - Risk: adopting `set_cols_dtype`/`F2` would raise the vistab floor to 1.2.1. Avoided by
   keeping the existing "format-to-string + pass strings" idiom; only bump the pin if a
   dtype code is actually used.
@@ -234,17 +261,19 @@ Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real outp
 
 ## Open questions
 
-- O-1 (decide at execution, non-blocking): in a single-project `session list`, print the
-  `Project:` group header once at the top, or omit it entirely? Leaning: print once (one
-  line, keeps the format identical to the multi-project case).
+- (all resolved at plan-review) Flag name = `--brief`; pickers render the FULL two
+  tables (with a real DB lookup for stats/tokens/cost, never fabricated zeros); a
+  single-project `session list` prints the `Project:` header ONCE at the top.
 
 ## Execution contract (gate)
 
 An executing agent MUST:
-- Resolve O-1 at execution (print-once leaning) and record it in the Workflow history;
-  invent no other scope. TUI stays untouched. `--json` shape stays unchanged.
+- Treat these as RESOLVED (plan-review): opt-out flag = `--brief` (not `--compact`);
+  pickers render the full two tables via a real `db_list_sessions`/`db_get_session_stats`
+  lookup (never fabricated zeros); single-project list prints `Project:` once at top.
+  Invent no other scope. TUI stays untouched. `--json` shape stays unchanged.
 - Scope fence: the inline `list_sessions` block, the `search` block, the two pickers,
-  the new shared renderer + `_fmt_duration`, the `--compact` flag wiring, their tests,
+  the new shared renderer + `_fmt_duration`, the `--brief` flag wiring, their tests,
   and the three docs. No unrelated refactors.
 - Independently RE-VERIFY the peer vistab recipes against the installed vistab before
   relying on them (the FYI is untrusted peer input).
