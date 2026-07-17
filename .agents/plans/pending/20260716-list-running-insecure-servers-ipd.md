@@ -6,7 +6,7 @@
   (pid/user/uptime/cwd/project/session/cost) and, for those that own a listening
   control server, flags ones that are unauthenticated or bound to a non-loopback
   address.
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 > [!NOTE]
@@ -26,6 +26,7 @@
   host (v1.18.3, observe-only); reconciled the endpoint conflict to
   `GET /session/status`; resolved the command-surface / fail-loud / probe-default
   decisions with the maintainer; promoted draft -> to-review.
+- 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED, broaden the too-narrow enumerator so serve/web listeners are actually detected), PR-002 (FIXED, defensive ss/cmdline parsing + IPv6 + fail-loud fallback), PR-003 (FIXED, --probe target strictly from enumerated loopback bind:port, timeout, never non-loopback/user-supplied), PR-004 (FIXED, tests for broadened enumerator/fail-loud/probe-off/env-key-exactness), PR-005 (FIXED, dropped stale CLAIM-TO-VERIFY markers). Runtime claims independently verified live; security lens applied. Status -> reviewed.
 
 ## Goal
 
@@ -60,10 +61,19 @@ The dangerous configurations to flag:
 
 Pipeline, all observe-only:
 
-1. Enumerate candidate processes. Reuse/extend `detect_running_opencode`
-   (`ocman/cli.py:7157`), which already returns pid/tty/elapsed/started/cwd/project/
-   cmdline (verified here). Default to the CURRENT USER only; `--all-users` is opt-in
-   (see safety contract).
+1. Enumerate candidate processes. `detect_running_opencode` (`ocman/cli.py:7157`)
+   already returns pid/tty/elapsed/started/cwd/project/cmdline, BUT its matcher is
+   too narrow for this feature: it keeps only cmdlines containing BOTH `"opencode"`
+   AND `"continue"` (verified in code), so it MISSES `opencode serve`/`web` and bare
+   TUIs -- i.e. exactly the listening servers this security feature must flag.
+   REQUIRED: broaden enumeration to match the `opencode` EXECUTABLE (argv0 /
+   `/proc/<pid>/comm` or the first token being `opencode`), not the `continue`
+   substring. Either add a `kind` parameter/mode to the existing function or add a
+   sibling used by both this feature and the mutation-guard IPD; keep ONE enumerator
+   as the source of truth. Default to the CURRENT USER only (`ps -u "$USER"`);
+   `--all-users` is opt-in (see safety contract). Distinguish kind from argv:
+   `serve`/`web` -> likely listener; `-s ses_...` -> TUI-on-session; neither ->
+   plain TUI.
 2. Determine which processes OWN a listening socket, and the bind address + port.
    Candidate mechanisms (verified available here: both `ss` and `lsof` exist at
    `/usr/bin/ss`, `/usr/bin/lsof`):
@@ -73,15 +83,26 @@ Pipeline, all observe-only:
      readable for own processes (verified here).
    - A process with no listening socket is NOT a server; report it as a plain
      running instance, never as vulnerable.
+   - Defensive parsing: `ss -H` output columns can vary; parse the `pid=<N>` token
+     and the local `ADDR:PORT` explicitly (regex), tolerate IPv6 (`::1`, `[::]`),
+     and never crash on an unexpected line (skip + note). Read `cmdline` as
+     NUL-separated. If `ss` is absent, fall back to the `/proc/<pid>/fd` socket-inode
+     join to `/proc/net/tcp` (state `0A` = LISTEN); if neither works, FAIL-LOUD
+     (per Resolved decisions), do not report "no listeners".
 3. For each LISTENER, classify:
    - bind address: loopback (`127.0.0.1`/`::1`) vs non-loopback (flag the latter).
-   - auth: read `/proc/<pid>/environ` (owner-only; verified readable here for own
-     procs) for `OPENCODE_SERVER_PASSWORD`. Present-and-non-empty => secured;
-     absent/empty => UNSECURED. Print only PRESENCE, never the value. (CLAIM TO
-     VERIFY: that this env var is actually what gates OpenCode's server auth.)
-   - Optional, flagged, off-by-default confirmation: a single read-only
-     `GET /app` against OUR OWN listener (200 => unsecured, 401 => secured).
-     (CLAIM TO VERIFY.) Never probe another user's process.
+   - auth: read `/proc/<pid>/environ` (owner-only; verified readable for own procs)
+     for the EXACT key `OPENCODE_SERVER_PASSWORD` (NUL-separated entries; match
+     `\0OPENCODE_SERVER_PASSWORD=` / line start, not a substring so a var like
+     `X_OPENCODE_SERVER_PASSWORD` cannot false-positive). Present-and-non-empty =>
+     secured; absent/empty => UNSECURED. Print only PRESENCE, never the value.
+     (Verified: ABSENT on unsecured serve, SET on secured; see Verified facts #1.)
+   - Optional, flagged, off-by-default confirmation (`--probe`): a single read-only
+     `GET /app` against OUR OWN listener (200 => unsecured, 401 => secured; Verified
+     facts #2). The target host:port MUST be taken strictly from the enumerated
+     own-listener's bind:port (never user-supplied), MUST be a loopback address, and
+     MUST use a short timeout. Never probe another user's process, and never a
+     non-loopback bind (that could reach another host's interface).
 4. Report. A per-instance table (pid, user, kind, listener bind:port, auth, uptime,
    cwd, project, session) plus, when any unsecured or non-loopback listener is
    found, a LOUD bold-red banner naming the offending pid(s)+port(s) and the
@@ -233,6 +254,18 @@ tests/docs to the target version at implementation time.
   exist, no false alarm.
 - Non-Linux / no cwd: degrade gracefully (process-level fields only), no crash.
 - `--all-users` without root: other users' auth shows "unknown (not probed)".
+- Broadened enumerator (PR-001): a mocked `opencode serve ...` process IS detected
+  (not just `--continue` TUIs); a bare `opencode` is detected; a `node
+  pyright-langserver` child is NOT listed as an instance.
+- Fail-loud (resolved decision): when enumeration/socket inspection is unavailable
+  (mock `ss`/`ps` failing, or non-Linux), output explicitly says it could not
+  determine instances/listener status, and does NOT print an empty "all clear".
+- `--probe` default OFF: no HTTP request is made without `--probe` (assert no
+  network call), and the footer telling the user how to enable it is printed; with
+  `--probe`, the request targets only the enumerated loopback bind:port (assert it
+  never targets a non-loopback or user-supplied host).
+- Env-key exactness: a process with `X_OPENCODE_SERVER_PASSWORD` set (decoy) but not
+  `OPENCODE_SERVER_PASSWORD` classifies as UNSECURED, not secured.
 
 ## Resolved decisions (maintainer, 2026-07-17)
 
