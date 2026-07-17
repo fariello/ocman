@@ -163,6 +163,23 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   prompt. The prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
   op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).
 
+- **Running-OpenCode mutation guard (`require_safe_to_mutate`).** OpenCode has no
+  cross-process session lock, so mutating the shared DB/files while an instance runs can
+  corrupt state. Every mutating op routes through `require_safe_to_mutate(action, while_running=...)`
+  before touching the DB: it calls `detect_running_opencode_status(broad=True)`, which
+  returns a three-state signal (`some` / `none` / `unknown`). `none` proceeds silently
+  (the unchanged happy path); `some` lists the instances and refuses (non-interactive) or
+  asks for a typed `yes` (interactive), unless `while_running` (the `--while-running` /
+  `--force` flag) is set; `unknown` fails CLOSED on Linux (refuse unless `while_running`)
+  and fails OPEN with a printed caveat elsewhere. `check_opencode_process_lock(force=...)`
+  is a thin back-compat shim over this guard (`force -> while_running`). Adopters: the
+  delete/clean/orphan-prune ops (via the shim), plus session/project move, session/project
+  import, backup restore, and db rebase (which call the guard directly). The TUI delete/move
+  paths pass `force=True` (user already confirmed in a modal), so the guard proceeds without
+  a blocking `input()`; ocman never fires a raw stdin prompt under Textual. Tests neutralize
+  the guard by default (autouse `conftest` fixture reports "none running") so the suite is
+  host-independent; guard-specific tests opt out with `@pytest.mark.real_process_detection`.
+
 ## Design principles
 
 - **Intuitive / self-documenting.** A noun-based subcommand CLI (`ocman <group> <action>`,

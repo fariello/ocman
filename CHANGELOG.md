@@ -3,6 +3,17 @@
 ## [Unreleased]
 
 ### Changed
+- **Guard against mutating the DB while OpenCode is running.** Every destructive/
+  mutating command (session/project delete, batch delete, db clean, clean-orphans,
+  session/project move, session/project import, backup restore, db rebase) now checks
+  for running OpenCode instances first, since OpenCode has no cross-process session
+  lock and a concurrent instance could corrupt state. If any instance is running, the
+  command lists them and refuses by default; proceed with `--while-running` (alias:
+  `--force`) or, interactively, by typing `yes`. Detection uses a broad matcher (any
+  `opencode` process, not just `--continue`) and is fail-closed on Linux (if it cannot
+  determine whether OpenCode is running it refuses unless `--while-running`) and
+  fail-open with a caveat on other platforms. `-y/--yes` still only skips the ordinary
+  confirm, not this running-instance check.
 - **Accessibility: removed low-contrast dim/grey text.** Secondary output (notes, IDs,
   paths, disclaimers, and the TUI sidebar's ids/tags/empty-states) no longer uses the
   ANSI faint attribute or Rich `dim`; it renders as normal high-contrast text (the TUI

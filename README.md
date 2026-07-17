@@ -300,7 +300,7 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). |
 | `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. Multi-target and project-expanded deletes run as ONE consolidated batch: a single backup, one transaction, one `VACUUM`, and one grand-total report (not once per session). Deleting a whole project's sessions by naming the project also removes the now-empty project row. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
 | `ocman session export ID --to FILE` | Export a session and its subagents to a portable `.ocbox` bundle. |
-| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only). |
+| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only). Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
 | `ocman session move ID --to DST` | Relocate a single session. `--metadata-only` updates DB paths only, bypassing the disk move. |
 
 **Recovery options** (for `session recover` and `session compact`):
@@ -341,14 +341,14 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman db info` | Show database and storage usage (incl. backups disk usage). `--by-project` adds a per-project on-disk session-diff breakdown. Alias: `ocman info` / `ocman disk`. |
 | `ocman db clean [NAME] [AGE]` | Delete sessions older than the retention window, optionally scoped to project `NAME`. `--older-than AGE` sets the window; `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`), a spelled-out `"30 days"`, or a bare number (days). A positional duration also works (`ocman db clean 30 days`, `ocman db clean myproject 6mo`). `--days N` is a deprecated alias for `--older-than`. Default: 5 days. `--dry-run` previews; `--force` bypasses process-lock checks. |
 | `ocman db clean-orphans` | Remove orphaned records and sidecar diffs. `--dry-run` previews; `--force` bypasses process-lock checks. |
-| `ocman db rebase --from A --to B` | Bulk rebase DB workspace path prefixes (both `--from` and `--to` are required). |
+| `ocman db rebase --from A --to B` | Bulk rebase DB workspace path prefixes (both `--from` and `--to` are required). Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
 
 ### `backup` (backup and restore)
 
 | Command | Description |
 |:---|:---|
 | `ocman backup create [specs...] [--to DIR]` | Create a system backup archive ZIP (default destination from config), or write per-target `.ocbox` bundles to a directory when targeting projects/sessions with `--to DIR`. Streams progress as it runs. |
-| `ocman backup restore PATH...` | Restore configuration, database, and session diffs from one or more backup archives or directories (with batch-atomic rollback safety). Streams per-file progress as it runs. |
+| `ocman backup restore PATH...` | Restore configuration, database, and session diffs from one or more backup archives or directories (with batch-atomic rollback safety). Streams per-file progress as it runs. Refuses if OpenCode is running (it overwrites the live DB); `--while-running` (alias `--force`) proceeds anyway. |
 | `ocman backup clean [AGE]` | Prune old backups; previews a KEEP/DELETE table before deleting (see Pruning Backups). `--older-than AGE` sets the window (compact `2h`/`5d`/`6w`/`6mo`/`1y`, `"90 days"`, or a bare number of days); a positional duration also works (`ocman backup clean 90 days`). `--days N` is a deprecated alias. `--dry-run` previews. |
 
 ### `history` (activity ledger)
@@ -456,6 +456,19 @@ rollback backups will remain. With many retained backups the KEEP rows are summa
 `-v` to list them all. `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`; `mo` and `y`
 are approximate), a spelled-out `"90 days"`, or a bare number of days (fractions ok, e.g. `0.25` =
 6 hours). The old `--days N` flag still works as a deprecated alias.
+
+### Safety while OpenCode is running
+
+OpenCode does not take a cross-process lock on its database, so mutating that shared
+state while an OpenCode instance is running can corrupt it. Every mutating command
+(session/project delete, `db clean`, `db clean-orphans`, session/project move,
+session/project import, `backup restore`, and `db rebase`) checks for running OpenCode
+instances first. If any are found it lists them and refuses by default; you can proceed
+with `--while-running` (alias: `--force`), or, at an interactive prompt, by typing `yes`.
+Detection matches any `opencode` process (not just `--continue`). On Linux, if ocman
+cannot determine whether OpenCode is running it errs on the safe side and refuses unless
+`--while-running` is given. Note that `-y`/`--yes` only skips the ordinary confirmation
+prompt, not this running-instance check; use `--while-running` for that.
 
 ---
 

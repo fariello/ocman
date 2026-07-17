@@ -5622,6 +5622,7 @@ def _legacy_defaults(config: dict) -> dict:
         "show_running": False,
         "all_users": False,
         "probe": False,
+        "while_running": False,
         "show_spend": False,
         "spend_sessions": False,
         "spend_historical": False,
@@ -5760,6 +5761,12 @@ def _add_search_opts(p: argparse.ArgumentParser) -> None:
                    help="Include subagent/child sessions.")
 
 
+def _add_while_running(p: argparse.ArgumentParser) -> None:
+    """Add --while-running (proceed despite running OpenCode) with --force as alias."""
+    p.add_argument("--while-running", "--force", dest="while_running", action="store_true",
+                   help="Proceed even if OpenCode instances are running (may corrupt their state).")
+
+
 def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
     """
     Options shared by 'db clean' and 'backup clean' (retention + duration).
@@ -5889,6 +5896,7 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Regenerate a fresh session ID for the imported session (single-session bundle only).")
     sp.add_argument("--dry-run", action="store_true",
                     help="Show the import plan (remaps, target project) without writing.")
+    _add_while_running(sp)
 
     sp = new_action(p_session, s_sub, "move", help="Relocate a session (local or remote DST).")
     sp.add_argument("session", help="Session ID to move.")
@@ -5951,6 +5959,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--from", dest="from_prefix", required=True, metavar="PREFIX",
                     help="Source path prefix.")
     sp.add_argument("--to", required=True, metavar="PREFIX", help="Destination path prefix.")
+    _add_while_running(sp)
 
     # ---- backup ------------------------------------------------------------
     p_backup = new_sub("backup", help="Backup and restore opencode state.")
@@ -5964,6 +5973,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = new_action(p_backup, b_sub, "restore", help="Restore from a ZIP archive or directory.")
     sp.add_argument("paths", nargs="+", help="Archive or directory files to restore from (applied in order).")
+    _add_while_running(sp)
 
     sp = new_action(p_backup, b_sub, "clean", help="Prune old backup archives.")
     _add_clean_opts(sp, with_name=False)
@@ -6284,6 +6294,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["new_project_path"] = g("new_project_path")
             out["new_session_id"] = bool(g("new_session_id", False))
             out["dry_run"] = bool(g("dry_run", False))
+            out["while_running"] = bool(g("while_running", False))
         elif action == "move":
             out["move_session"] = g("session")
             out["to"] = g("to")
@@ -6338,6 +6349,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["rebase_paths"] = True
             out["from_prefix"] = g("from_prefix")
             out["to"] = g("to")
+            out["while_running"] = bool(g("while_running", False))
         else:
             _no_action_error("db")
 
@@ -6358,6 +6370,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
                 out["restore"] = paths[0]
             else:
                 out["restore"] = paths
+            out["while_running"] = bool(g("while_running", False))
         elif action == "clean":
             out["clean_backups"] = True
             _name, days = _resolve_clean_args(ns, g, with_name=False, default_days=out["days"])
@@ -7233,32 +7246,46 @@ def detect_running_opencode(verbosity: int = 0, *, broad: bool = False,
                             all_users: bool = False) -> list[dict]:
     """Enumerate plausibly-running opencode processes (best-effort, fast, fail-open).
 
-    Returns dicts: {pid, ppid, user, tty, elapsed, started, cwd, project, cmdline}. On any
-    failure (no `ps`, parse error, timeout) returns [] so SAFETY-GATE callers FAIL OPEN.
+    Thin wrapper over `detect_running_opencode_status` that returns just the process
+    list (dropping the reliability state), so existing callers are unchanged.
+    """
+    return detect_running_opencode_status(verbosity, broad=broad, all_users=all_users)[1]
 
-    `broad`: see `_cmdline_is_opencode`. Default False keeps the exact prior matcher so
-    `check_opencode_process_lock` is unchanged; `list running` passes broad=True.
-    `all_users`: default False enumerates only the current user (`ps -u $USER`); True uses
-    `ps -e` (all users). CWD/environ of other users are unreadable without root (callers
-    must classify those as "unknown", not "secure").
 
+def detect_running_opencode_status(verbosity: int = 0, *, broad: bool = False,
+                                   all_users: bool = False) -> tuple[str, list[dict]]:
+    """Enumerate opencode processes AND report enumeration reliability.
+
+    Returns `(state, procs)` where state is:
+      - "none"    : enumeration succeeded, no matching process found.
+      - "some"    : enumeration succeeded, one or more found (`procs` non-empty).
+      - "unknown" : enumeration could NOT be performed reliably (non-Linux, no `ps`,
+                    timeout, parse failure). `procs` is []. The guard uses this to
+                    FAIL CLOSED on Linux while failing open (with a caveat) elsewhere.
+
+    Each dict: {pid, ppid, user, tty, elapsed, started, cwd, project, cmdline}.
+    `broad`: see `_cmdline_is_opencode` (default False = the narrow prior matcher).
+    `all_users`: default False = current user only (`ps -u $USER`); True = `ps -e`.
     CWD is read from /proc/<pid>/cwd on Linux; omitted elsewhere.
     """
     if sys.platform == "win32":
-        return []
-    # Own user by default; -e (all) only when explicitly requested.
+        return ("unknown", [])
+    if not sys.platform.startswith("linux"):
+        # macOS/BSD: no cheap reliable per-process enumeration in the time budget.
+        return ("unknown", [])
     fields = "pid,ppid,user,tty,etimes,lstart,args"
     cmd = ["ps", "-eo", fields] if all_users else ["ps", "-u", _current_user(), "-o", fields]
     try:
         result = subprocess.run(
             cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=3,
         )
-        if result.returncode != 0 or not result.stdout:
-            return []
-        out = result.stdout
+        if result.returncode != 0:
+            log(f"opencode process detection: ps failed rc={result.returncode}", verbosity)
+            return ("unknown", [])
+        out = result.stdout or ""
     except Exception as e:
-        log(f"opencode process detection unavailable ({e}); proceeding.", verbosity)
-        return []
+        log(f"opencode process detection unavailable ({e}).", verbosity)
+        return ("unknown", [])
 
     own_pids = {os.getpid()}
     try:
@@ -7304,7 +7331,7 @@ def detect_running_opencode(verbosity: int = 0, *, broad: bool = False,
             "started": started, "cwd": cwd,
             "project": _project_for_cwd(cwd) if cwd else "", "cmdline": cmdline,
         })
-    return procs
+    return (("some" if procs else "none"), procs)
 
 
 def _render_running_opencode(procs: list[dict]) -> str:
@@ -7320,21 +7347,77 @@ def _render_running_opencode(procs: list[dict]) -> str:
             row += f"  → project {p['project']}"
         lines.append(row)
     lines.append("")
-    lines.append("Close the processes above, or re-run with --force to bypass this safety check.")
+    lines.append("Close the processes above, or re-run with --while-running (alias --force) "
+                 "to proceed anyway.")
     return "\n".join(lines)
 
 
-def check_opencode_process_lock(force: bool, verbosity: int = 0) -> None:
-    """Raise RecoveryError with a detailed listing if opencode is running (unless `force`).
+def require_safe_to_mutate(action: str, *, while_running: bool = False,
+                           interactive: bool | None = None, verbosity: int = 0) -> None:
+    """Guard a DB/file mutation against concurrent OpenCode instances.
 
-    `force` bypasses ONLY this process-lock check (not any typed-`yes` confirmation). Detection
-    fails open: if it cannot enumerate processes, it proceeds silently (prior behavior).
+    OpenCode has NO cross-process session lock (verified via the opencode repo agent),
+    so mutating the shared DB/files while an instance runs can corrupt state. Outcomes:
+      - no instances running -> return (proceed silently; unchanged happy path).
+      - `while_running` (the --while-running / --force override) -> print the listing +
+        a bold-red warning, then proceed.
+      - running + interactive TTY -> print the listing, then a typed-'yes' confirm.
+      - running + non-interactive + no override -> raise RecoveryError (refuse).
+    Reliability: on Linux an enumeration FAILURE ("unknown") FAILS CLOSED (refuse
+    unless override); on non-Linux ("unknown") FAILS OPEN with a printed caveat.
+    Uses the BROAD matcher so ANY opencode instance (serve/web/bare TUI) gates.
     """
-    if force or sys.platform == "win32":
+    if interactive is None:
+        interactive = sys.stdout.isatty()
+    state, procs = detect_running_opencode_status(verbosity, broad=True)
+
+    if state == "unknown":
+        if sys.platform.startswith("linux") and not while_running:
+            raise RecoveryError(
+                "Could not verify whether OpenCode is running (process enumeration "
+                f"failed), so ocman will not {action} by default. Re-run with "
+                "--while-running to proceed anyway.")
+        # Non-Linux (or overridden): fail open, but say so.
+        if not while_running:
+            print(color_yellow(f"{info_prefix()} Could not check for running OpenCode "
+                               f"instances on this platform; proceeding with {action}."))
         return
-    procs = detect_running_opencode(verbosity)
-    if procs:
-        raise RecoveryError(_render_running_opencode(procs))
+
+    if state == "none":
+        return  # nothing running -> proceed (unchanged behavior)
+
+    # state == "some": an instance is running.
+    listing = _render_running_opencode(procs)
+    if while_running:
+        print(color_red(color_bold(
+            f"WARNING: proceeding to {action} while OpenCode is running can corrupt "
+            "its state (there is no cross-process session lock).")))
+        print(listing)
+        return
+    print(color_red(color_bold(
+        f"OpenCode is running. {action.capitalize()} now can corrupt its state "
+        "(no cross-process session lock).")))
+    print(listing)
+    if not interactive:
+        raise RecoveryError(
+            f"Refusing to {action} while OpenCode is running (non-interactive). "
+            "Re-run with --while-running to proceed anyway.")
+    try:
+        answer = input(f"Type 'yes' to {action} anyway: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        raise RecoveryError(f"Aborted; did not {action}.")
+    if answer != "yes":
+        raise RecoveryError(f"Aborted; did not {action}.")
+
+
+def check_opencode_process_lock(force: bool, verbosity: int = 0) -> None:
+    """Back-compat shim: delegate to `require_safe_to_mutate`.
+
+    Existing callers pass `force` (the process-lock bypass); it maps to the
+    `--while-running` override. Uniform behavior via the single guard.
+    """
+    require_safe_to_mutate("modify the database", while_running=force, verbosity=verbosity)
 
 
 # --- `ocman list running`: instance + listener + vulnerability detection ---------
@@ -8695,6 +8778,14 @@ def _execute_move(*, kind: str, spec: str, id_for_metadata: str, source_dir: str
     is_remote, host, remote_path = _parse_move_dest(dst)
     old_path = Path(source_dir)
 
+    # Guard: a LOCAL move mutates the DB + on-disk dir. Remote is print-only (no local
+    # mutation until --confirm-remote-delete, which delegates to already-guarded
+    # deletes) and dry-run mutates nothing, so guard only the acting local path.
+    if not is_remote and not dry_run and not confirm_remote_delete:
+        require_safe_to_mutate(f"move {kind} {id_for_metadata}",
+                               while_running=force, interactive=interactive,
+                               verbosity=verbosity)
+
     # --confirm-remote-delete: guarded local cleanup AFTER a verified remote move.
     if confirm_remote_delete:
         if not is_remote:
@@ -9082,13 +9173,14 @@ def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> Non
                 pass
 
 
-def db_rebase_paths(old_prefix: str, new_prefix: str) -> dict[str, int]:
+def db_rebase_paths(old_prefix: str, new_prefix: str, *, while_running: bool = False) -> dict[str, int]:
     """Bulk rebase path prefixes in database for both projects and sessions."""
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     if not OPENCODE_DB_PATH.exists():
         raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+    require_safe_to_mutate("rebase database paths", while_running=while_running)
 
     try:
         old_prefix_abs = str(Path(old_prefix).expanduser().resolve())
@@ -9408,6 +9500,7 @@ def extract_and_import_session(
     new_session_id: bool = False,
     progress_callback = None,
     dry_run: bool = False,
+    while_running: bool = False,
 ) -> str:
     """
     Import session database rows and diff files from an .ocbox bundle.
@@ -9422,6 +9515,9 @@ def extract_and_import_session(
 
     if not bundle_path.exists():
         raise RecoveryError(f"Bundle file not found: {bundle_path}")
+
+    if not dry_run:
+        require_safe_to_mutate("import into the database", while_running=while_running)
 
     # Read zip bundle metadata
     try:
@@ -9735,6 +9831,7 @@ def extract_and_import_project(
     new_project_path: str | None = None,
     progress_callback=None,
     interactive: bool | None = None,
+    while_running: bool = False,
 ) -> str:
     """
     Import a whole-project .ocbox bundle. Returns the destination project id.
@@ -9755,6 +9852,9 @@ def extract_and_import_project(
 
     if not bundle_path.exists():
         raise RecoveryError(f"Bundle file not found: {bundle_path}")
+
+    require_safe_to_mutate("import a project into the database",
+                           while_running=while_running, interactive=interactive)
 
     # ---- Phase 1: pre-flight (no writes) ----
     try:
@@ -11678,12 +11778,15 @@ def cli_backup(dest: str = None) -> Path:
     return dest_path
 
 
-def cli_restore(sources: list[str] | str) -> None:
+def cli_restore(sources: list[str] | str, *, while_running: bool = False) -> None:
     """Restore opencode active state from a ZIP archive or directory with rollback safety."""
     if isinstance(sources, str):
         sources = [sources]
     if not sources:
         raise RecoveryError("No restore sources provided.")
+    # Restore OVERWRITES the whole opencode.db family; guard hard (loud warning).
+    require_safe_to_mutate("restore over the OpenCode database (overwrites it entirely)",
+                           while_running=while_running)
 
     source_paths = []
     for src in sources:
@@ -12118,7 +12221,7 @@ def main() -> None:
     # Handle --restore early.
     if args.restore is not None:
         try:
-            cli_restore(args.restore)
+            cli_restore(args.restore, while_running=getattr(args, "while_running", False))
         except Exception as e:
             die(str(e))
         return
@@ -12237,6 +12340,7 @@ def main() -> None:
                     target_project_id=to_project,
                     new_project_path=new_project_path,
                     progress_callback=print,
+                    while_running=getattr(args, "while_running", False),
                 )
                 print(color_green(f"[+] Successfully imported project as '{imported_id}'!"))
             else:
@@ -12249,6 +12353,7 @@ def main() -> None:
                     new_session_id=new_session_id,
                     progress_callback=print,
                     dry_run=import_dry_run,
+                    while_running=getattr(args, "while_running", False),
                 )
                 if not import_dry_run:
                     print(color_green(f"[+] Successfully imported session as '{imported_id}'!"))
@@ -12262,7 +12367,8 @@ def main() -> None:
             die("Error: --rebase-paths requires both --from <prefix> and --to <prefix>.")
         try:
             print(f"{info_prefix()} Starting bulk path rebasing from '{args.from_prefix}' to '{args.to}'...")
-            stats = db_rebase_paths(args.from_prefix, args.to)
+            stats = db_rebase_paths(args.from_prefix, args.to,
+                                    while_running=getattr(args, "while_running", False))
             print(color_green(
                 f"[+] Rebase complete: {stats['projects_updated']} projects, "
                 f"{stats['sessions_updated']} sessions updated in database."

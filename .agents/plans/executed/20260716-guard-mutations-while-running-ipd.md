@@ -6,7 +6,8 @@
   must, when one or more OpenCode instances are running, refuse by default and
   proceed only with an explicit flag (`--while-running`) or interactive typed
   assent, after LISTING the running instances.
-- Status: reviewed
+- Status: EXECUTED
+- Approval: approved by maintainer 2026-07-17
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -21,6 +22,8 @@
   decisions with the maintainer; added spec/doc-sync + anti-regression tests;
   promoted draft -> to-review.
 - 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED, guard cli_restore not the internal db_restore_rollback_backup rollback helper), PR-002 (FIXED, make broadening-the-gate an explicit deliberate change + no-accidental-narrowing test), PR-003 (FIXED, TUI paths must honor the guard without a raw input() or be explicitly deferred), PR-004 (FIXED, add the three-state signal backward-compatibly). Claims re-verified against cli.py (5 lock sites, detect returns [] on both none/error, unguarded mutators confirmed). Status -> reviewed.
+- 2026-07-17 approved by maintainer; Status -> approved.
+- 2026-07-17 EXECUTED (its_direct/pt3-claude-opus-4.8): added detect_running_opencode_status (three-state some/none/unknown, backward-compatible wrapper); added require_safe_to_mutate (broad matcher, fail-closed on Linux for unknown, --while-running/--force override, typed-yes interactive, refuse non-interactive); check_opencode_process_lock now delegates to it. Routed the previously-unguarded mutators through the guard: _execute_move (local acting path only), extract_and_import_session, extract_and_import_project, cli_restore (the user-facing restore, NOT the internal rollback helper), db_rebase_paths. Added --while-running (alias --force) to import/rebase/restore and threaded it through the normalizer + handlers. Verified the TUI delete/move paths pass force=True (user confirmed in modal) so the guard proceeds without a raw input() under Textual. Tests: autouse conftest neutralizer ('none running') + @pytest.mark.real_process_detection opt-out; updated the fail-open test to fail-closed-on-Linux; added guard-outcomes + import-is-guarded coverage. Full suite: 312 passed, 2 skipped. Docs (README, ARCHITECTURE, CHANGELOG) updated. Status -> EXECUTED.
 
 ## Goal
 

@@ -733,6 +733,7 @@ def _fake_ps(stdout="", rc=0):
     return _run
 
 
+@pytest.mark.real_process_detection
 def test_process_lock_refuses_when_opencode_running(temp_db, monkeypatch):
     """Gate: with a running opencode process detected and not --force, a destructive op refuses."""
     import subprocess
@@ -752,6 +753,7 @@ def test_process_lock_refuses_when_opencode_running(temp_db, monkeypatch):
     conn.close()
 
 
+@pytest.mark.real_process_detection
 def test_process_lock_force_bypasses(temp_db, monkeypatch):
     """--force skips the process-lock check entirely (never even runs ps)."""
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
@@ -767,18 +769,28 @@ def test_process_lock_force_bypasses(temp_db, monkeypatch):
     conn.close()
 
 
-def test_process_lock_fails_open_on_detector_error(temp_db, monkeypatch):
-    """If the detector errors (e.g. ps missing), the op proceeds (fail-open), matching prior behavior."""
+@pytest.mark.real_process_detection
+def test_process_lock_fails_closed_on_detector_error_linux(temp_db, monkeypatch):
+    """Fail-CLOSED on Linux: if the detector errors, a mutation REFUSES by default
+    (data-integrity guard), and --while-running (force) overrides."""
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1','p1','S1',1,2)")
     conn.commit(); conn.close()
     def _raise(*a, **k):
         raise FileNotFoundError("ps not found")
     monkeypatch.setattr(ocman.subprocess, "run", _raise)
-    monkeypatch.setattr("builtins.input", lambda _: "yes")
-    db_delete_session_recursive("s1", dry_run=False, force=False, verbosity=0)  # no raise (fail-open)
+    monkeypatch.setattr(ocman.sys, "platform", "linux")
+    # No override -> refuses (fail-closed), session untouched.
+    with pytest.raises(RecoveryError):
+        db_delete_session_recursive("s1", dry_run=False, force=False, verbosity=0)
     conn = sqlite3.connect(str(temp_db))
-    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 0  # proceeded
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 1
+    conn.close()
+    # force (--while-running) overrides -> proceeds.
+    monkeypatch.setattr("builtins.input", lambda _: "yes")
+    db_delete_session_recursive("s1", dry_run=False, force=True, verbosity=0)
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT COUNT(*) FROM session WHERE id='s1'").fetchone()[0] == 0
     conn.close()
 
 
@@ -787,6 +799,7 @@ def _ps_line(pid, cmd, *, ppid=1, user="me", tty="pts/3", etimes=300):
     return f"{pid:>6} {ppid:>6} {user} {tty} {etimes:>7}  Fri Jul  4 12:00:00 2026 {cmd}"
 
 
+@pytest.mark.real_process_detection
 def test_detect_running_opencode_filter_and_self_exclusion(monkeypatch):
     """Default (safety-gate) detector: keeps opencode+continue rows, excludes self and non-matches."""
     import os, subprocess
@@ -806,6 +819,7 @@ def test_detect_running_opencode_filter_and_self_exclusion(monkeypatch):
     assert pids == {4242}  # only the genuine opencode --continue, not self, vim, or 'opencode serve'
 
 
+@pytest.mark.real_process_detection
 def test_detect_running_opencode_broad_matches_serve(monkeypatch):
     """broad=True (for 'list running') matches any opencode executable incl. serve, not just --continue."""
     import subprocess
@@ -886,6 +900,53 @@ def test_server_password_env_state(monkeypatch, tmp_path):
         assert state == expected, f"{label}: expected {expected}, got {state}"
 
 
+@pytest.mark.real_process_detection
+def test_require_safe_to_mutate_outcomes(monkeypatch):
+    """The guard's three outcomes: none->proceed, some+override->proceed, some+non-interactive->refuse."""
+    import ocman.cli as _cli
+    # none running -> returns silently.
+    monkeypatch.setattr(_cli, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    ocman.require_safe_to_mutate("delete x", interactive=False)  # no raise
+    # some running + no override + non-interactive -> refuse.
+    procs = [{"pid": 42, "tty": "pts/0", "elapsed": "1m", "started": "now", "cwd": "/p", "project": "P"}]
+    monkeypatch.setattr(_cli, "detect_running_opencode_status", lambda *a, **k: ("some", procs))
+    with pytest.raises(RecoveryError):
+        ocman.require_safe_to_mutate("delete x", interactive=False, while_running=False)
+    # some running + override -> proceeds.
+    ocman.require_safe_to_mutate("delete x", interactive=False, while_running=True)  # no raise
+    # some running + interactive + typed 'yes' -> proceeds; anything else -> refuse.
+    monkeypatch.setattr("builtins.input", lambda _p: "yes")
+    ocman.require_safe_to_mutate("delete x", interactive=True, while_running=False)  # no raise
+    monkeypatch.setattr("builtins.input", lambda _p: "no")
+    with pytest.raises(RecoveryError):
+        ocman.require_safe_to_mutate("delete x", interactive=True, while_running=False)
+
+
+@pytest.mark.real_process_detection
+def test_import_is_guarded_when_running(temp_db, tmp_path, monkeypatch):
+    """Coverage: a newly-guarded mutator (session import) refuses while OpenCode runs."""
+    import ocman.cli as _cli
+    # Build a real bundle first (no instances during export).
+    monkeypatch.setattr(_cli, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/proj', 'P1')")
+    cur.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('s1','p1','T','/proj/s1')")
+    conn.commit(); conn.close()
+    from ocman import bundle_session_data
+    bundle = tmp_path / "b.ocbox"
+    bundle_session_data("s1", bundle)
+    # Now pretend an instance is running: import must refuse (non-interactive, no override).
+    monkeypatch.setattr(_cli, "detect_running_opencode_status",
+                        lambda *a, **k: ("some", [{"pid": 9, "tty": "?", "elapsed": "1m",
+                                                    "started": "now", "cwd": "", "project": ""}]))
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    with pytest.raises(RecoveryError):
+        ocman.extract_and_import_session(bundle, target_project_id="p1")
+    # With the override it proceeds.
+    ocman.extract_and_import_session(bundle, target_project_id="p1", while_running=True)
+
+
+@pytest.mark.real_process_detection
 def test_detect_running_opencode_fails_open(monkeypatch):
     """Detector returns [] (fail-open) when ps is unavailable."""
     def _raise(*a, **k):
