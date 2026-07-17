@@ -2,21 +2,23 @@
 
 Informal backlog of ideas not yet promoted to an IPD in `.agents/plans/pending/`.
 
-## Chunk large sessions on recover/compact/export
+## Chunk large sessions on recover/compact: SHIPPED (2026-07-17)
 
-Allow large sessions to be split into chunks so recovery/compaction/export output
-(and LLM compaction input) stays manageable. Trigger when a session exceeds a size
-threshold, e.g. > 2500 lines OR > 250 interactions (make the thresholds
-configurable, not hardcoded). Open questions for when this is promoted to an IPD:
-- What exactly is chunked: the recovered/compacted Markdown document, the compaction
-  LLM input (to respect context limits), the .ocbox export, or all of them?
-- Chunk boundaries: by interaction count, by line count, or by token estimate; never
-  split mid-interaction/mid-message.
-- Output shape: numbered files (`...part-01of03.md`) with a manifest/index, or a
-  single file with clear chunk separators? Reconcile with the existing recovery
-  filename convention.
-- Reuse the existing counts (`db_get_session_stats`: msgs/interactions/parts) and
-  the compaction token/cost estimator for the threshold checks.
+Implemented via `.agents/plans/executed/20260717-chunk-large-sessions-ipd.md`:
+`--chunk` on `session recover` and `session compact` splits a large session into
+ordered, self-contained `YYYYMMDD-HHMM-<sid>.part-NNofMM.<kind>.md` files instead of
+truncating (nothing dropped). Boundaries are whole interactions (never mid-turn);
+`--max-lines`/`--max-interactions` set the per-part size, with defaults from the new
+`chunk_max_lines` / `chunk_max_interactions` config keys. The interactive large-
+session prompt gained a `[c]hunk` choice. `compact --chunk` sends each part to the LLM
+separately (so each fits the context window) and sums the per-part cost table.
+
+Resolved-differently vs the original idea: the ".ocbox export" was deliberately left
+OUT of scope (a bundle is DB rows for wholesale import, not readable/LLM text, and
+already streams; chunking it adds partial-bundle integrity cost for no use case). The
+"is-large" TRIGGER stays the fixed 2500 lines / 100 interactions constants (the
+original note's ">250 interactions" did not match the real 100); the two new config
+keys size the PARTS, not the trigger.
 
 ## `ocman spend`: SHIPPED (2026-07-15)
 
