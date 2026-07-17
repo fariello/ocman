@@ -1,12 +1,12 @@
-# IPD (DRAFT): guard DB/file mutations while OpenCode is running
+# IPD: guard DB/file mutations while OpenCode is running
 
 - Date: 2026-07-16
 - Concern: safety / data integrity (concurrency)
 - Scope: every ocman operation that mutates the OpenCode DB or its on-disk files
   must, when one or more OpenCode instances are running, refuse by default and
-  proceed only with an explicit flag or interactive typed assent, after LISTING
-  the running instances.
-- Status: draft
+  proceed only with an explicit flag (`--while-running`) or interactive typed
+  assent, after LISTING the running instances.
+- Status: to-review
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -14,6 +14,12 @@
 - 2026-07-16 draft (its_direct/pt3-claude-opus-4.8): created at maintainer request;
   motivated by the opencode repo agent's concurrency findings (no cross-process
   session lock).
+- 2026-07-17 firm-up (its_direct/pt3-claude-opus-4.8): reflected that the broad
+  enumerator + rich listing already shipped with `list running` (0b9470c); verified
+  the exact current lock call sites + coverage gaps; resolved the flag
+  (`--while-running` + `--force` alias), fail-closed-on-Linux, and restore-strictness
+  decisions with the maintainer; added spec/doc-sync + anti-regression tests;
+  promoted draft -> to-review.
 
 ## Goal
 
@@ -43,72 +49,107 @@ The shared DB is a single SQLite file (verified here at multi-GB with an active
 WAL); OpenCode holds it open continuously. ocman mutating it while OpenCode writes
 is exactly the race to prevent.
 
-## Current behavior (verified in this repo)
+## Current behavior (verified in this repo, 2026-07-17)
 
-- `check_opencode_process_lock(force, verbosity)` (`ocman/cli.py:7250`) ALREADY
-  raises `RecoveryError` (with a rendered listing) if opencode is running, unless
-  `force`. It fails OPEN (proceeds) if it cannot enumerate.
+- `check_opencode_process_lock(force, verbosity)` (`ocman/cli.py:7327`) raises
+  `RecoveryError` (with a rendered listing) if opencode is running, unless `force`.
+  It fails OPEN (proceeds) if it cannot enumerate.
+- It is called by exactly 5 mutators (verified: `cli.py:6979, 7544, 7869, 8049,
+  10072`) -> `db_delete_session_recursive`, `db_delete_project_recursive`,
+  `db_delete_sessions_batch`, `db_run_cleanup`, `db clean-orphans`.
+- **A broad enumerator already exists** (shipped with `list running`, commit
+  0b9470c): `detect_running_opencode(broad=True, all_users=...)` matches ANY
+  `opencode` executable (catches `serve`/`web`/bare TUI, excludes LSP children), and
+  `detect_running_instances(...)` + `cli_list_running(...)` provide the rich listing.
+  The guard REUSES these; it no longer needs to add its own enumerator.
 - Gaps to close:
-  1. **Detection is too narrow.** `detect_running_opencode` (`cli.py:7157`) keeps
-     only processes whose cmdline contains BOTH `"opencode"` AND `"continue"`. That
-     misses a bare `opencode`, `opencode serve`, `opencode web`, or a TUI launched
-     without `--continue`. The guard should treat ANY opencode process as
-     "running", not just `--continue` ones.
-  2. **Coverage is inconsistent.** The lock is called on only some destructive paths
-     (delete session/project, cleanup, clean-orphans). Other mutators may not call
-     it: verify and cover `session move` / `project move`, `session import`,
-     `backup restore`, `db rebase`, `history clear` (ledger file), and the new
-     `db_delete_sessions_batch`.
-  3. **Only two outcomes today** (`--force` or hard refuse). Add the middle path:
-     an interactive typed assent after showing the listing.
+  1. **The gate still uses the NARROW matcher.** `check_opencode_process_lock` calls
+     `detect_running_opencode()` with the default `broad=False` (`opencode`+`continue`
+     only), so it MISSES a bare `opencode`, `opencode serve`/`web`, or a TUI without
+     `--continue`. The guard must enumerate with `broad=True` so ANY running instance
+     gates a mutation. (This intentionally MAKES THE GATE MORE INCLUSIVE than today;
+     that is the point, and anti-regression tests must confirm the no-instances path
+     is unchanged.)
+  2. **Coverage is inconsistent (VERIFIED).** The lock is NOT called by
+     `_execute_move` (session/project move), `extract_and_import_session` /
+     `extract_and_import_project`, `backup restore` (`db_restore_rollback_backup`),
+     or `db rebase` (`db_rebase_paths`) -- all of which mutate the DB/files and race
+     today. `history clear` rewrites only the ledger sidecar (lower risk) -- include
+     it for consistency. These must all route through the guard.
+  3. **Only two outcomes today** (`--force` or hard refuse). Add the middle path: an
+     interactive typed assent after showing the listing.
 
-## Design (draft)
+## Design (resolved with maintainer 2026-07-17)
 
-1. **One enumeration source of truth.** Broaden `detect_running_opencode` (or add a
-   sibling) so the guard sees ANY running opencode process for the CURRENT USER
-   (match on the executable/argv0 being `opencode`, not the `continue` substring).
-   Reuse the richer enumeration from the `list running` IPD if it lands first
-   (`.agents/plans/pending/20260716-list-running-insecure-servers-ipd.md`); this
-   guard only needs "is anything running + a listing", not listener/vuln analysis.
-2. **A single guard entry point** `require_safe_to_mutate(kind, *, assume_yes,
-   force, interactive)` that every DB/file mutator calls before it writes:
-   - No running instances -> proceed silently (today's happy path).
-   - Running instances + `--force`/`--while-running` -> proceed, after printing the
-     listing and a bold-red warning (informed override, scriptable).
-   - Running instances + `--yes` -> treat as consent ONLY if the project decides
-     `-y` should cover this (open question); otherwise still require the explicit
-     while-running flag.
-   - Running instances + interactive TTY (no flag) -> print the listing, then a
-     typed confirm ("N OpenCode instance(s) are running; mutating shared data now
-     can corrupt them. Type 'yes' to proceed anyway:"). Proceed only on exact yes.
-   - Running instances + non-interactive + no flag -> refuse (exit non-zero) with
-     the listing and the flag to re-run.
-3. **The listing.** Show each running instance: pid, user, uptime, cwd, project
+1. **One enumeration source of truth (reuse).** Use the already-shipped
+   `detect_running_opencode(broad=True)` so the guard sees ANY running opencode
+   process for the CURRENT USER. No new enumerator. The rich listing reuses
+   `detect_running_instances` / the `cli_list_running` renderer; a compact
+   pid/user/uptime/cwd listing is sufficient for the gate.
+2. **A single guard entry point** `require_safe_to_mutate(action, *, while_running,
+   assume_yes, interactive, verbosity)` that every DB/file mutator calls before it
+   writes. `check_opencode_process_lock` is REFACTORED to delegate to (or be
+   replaced by) this one function so behavior is uniform. Outcomes:
+   - No running instances -> proceed silently (today's happy path; UNCHANGED).
+   - Running instances + `--while-running` (or its `--force` alias) -> print the
+     listing + a bold-red warning, then proceed (informed override, scriptable).
+   - Running instances + interactive TTY (no override) -> print the listing, then a
+     typed confirm: "N OpenCode instance(s) are running; mutating shared data now can
+     corrupt them. Type 'yes' to proceed anyway:". Proceed ONLY on exact `yes`.
+   - Running instances + non-interactive + no override -> REFUSE (exit non-zero) with
+     the listing and the `--while-running` hint.
+   - `-y/--yes` does NOT authorize proceeding while running; it only skips the
+     ordinary destructive typed-confirm. The running-instance risk requires the
+     explicit `--while-running` (or an interactive `yes` to the running-specific
+     prompt). Keep the two prompts/decisions distinct.
+3. **Flag vocabulary (DECIDED).** Add `--while-running` as the explicit,
+   self-documenting override; keep `--force` as a working ALIAS for back-compat
+   (today `--force` bypasses the process-lock, which is exactly this override).
+   Document both; `--while-running` is preferred in help/docs.
+4. **Reliability policy (DECIDED): fail-CLOSED on Linux, fail-OPEN elsewhere.**
+   On Linux, if enumeration itself ERRORS (not "found none" -- an actual failure to
+   run `ps`/read `/proc`), REFUSE by default (require `--while-running`) and print
+   the reason: we cannot confirm it is safe. On non-Linux (enumeration unavailable),
+   proceed but PRINT that the running-instance check was skipped. This is a
+   deliberate change from today's fail-open; the no-instances happy path is
+   unchanged, so it only adds friction when detection genuinely breaks on Linux.
+   Note: `detect_running_opencode` currently swallows errors and returns `[]`
+   (indistinguishable from "none running"); the guard needs a THREE-state signal
+   (`some` / `none` / `unknown`) -- add an enumerator variant or out-param that
+   reports enumeration failure distinctly, so fail-closed can trigger.
+5. **The listing.** Show each running instance: pid, user, uptime, cwd, project
    (best-effort per the attribution rules in the list-running IPD), and session
-   hint. This is the "preferably listing them" requirement. Reuse the rendering
-   from the list-running feature; a minimal listing (pid/cwd/started) is acceptable
-   if that feature has not shipped.
-4. **Consistent flag vocabulary.** Reconcile with existing flags: TODAY `--force`
-   means "bypass the process-lock". Options: keep `--force` as the override, OR
-   introduce `--while-running` as the explicit, self-documenting override and keep
-   `--force` as an alias. Decide in review (see open questions). Whatever is chosen,
-   `-y/--yes` (skip typed confirm) and the while-running override must have distinct,
-   documented meanings (do not conflate "I answered the prompt" with "I accept the
-   running-instance risk").
-5. **Fail-closed vs fail-open.** Today detection fails OPEN (proceeds if it cannot
-   enumerate). For a safety guard, consider fail-CLOSED on Linux where enumeration
-   is reliable (refuse if we cannot be sure), while remaining fail-open on
-   platforms where enumeration is unavailable, with a printed caveat. Decide in
-   review; default to the safer option for destructive ops.
+   hint. Reuse the `list running` rendering; a minimal listing is acceptable.
+6. **`backup restore` (DECIDED): same three-outcome guard** as the others (no
+   special always-refuse). It overwrites the whole DB family, so its warning text
+   should be especially loud, but it keeps the `--while-running`/typed-yes escape.
 
-## Operations that MUST be guarded (verify + cover)
+## Operations that MUST be guarded
 
-DB or shared-file mutators: `session delete` / `project delete` /
-`db_delete_sessions_batch`; `db clean` / `db clean-orphans`; `session move` /
-`project move` (DB rebase + file move); `session import` (writes rows + diffs);
-`backup restore` (overwrites the DB family); `db rebase`; `history clear` (ledger
-file). Read-only commands (`list`, `search`, `show`, `db info`, `spend`, `history
-show`, `list running`) are NOT guarded.
+Already guarded today (switch them to the new broad enumerator + `--while-running`):
+`session delete`, `project delete`, `db_delete_sessions_batch`, `db clean`,
+`db clean-orphans`.
+
+NOT guarded today -- must be ADDED (verified 2026-07-17 they do not call the lock):
+- `session move` / `project move` (`_execute_move`) -- physical dir move + DB rebase.
+- `session import` (`extract_and_import_session` / `extract_and_import_project`) --
+  inserts rows + writes diff files.
+- `backup restore` (`db_restore_rollback_backup` and the restore command path) --
+  overwrites the whole `opencode.db` family; loudest warning.
+- `db rebase` (`db_rebase_paths`) -- bulk UPDATE of path prefixes.
+- `history clear` -- rewrites the ledger sidecar (lower risk; included for
+  consistency).
+
+Every guarded command needs the `--while-running` flag (alias `--force` where it
+already exists) threaded from its parser through the normalizer to the guard call,
+mirroring how `-y/--yes` was threaded in the assess-functionality work. Read-only
+commands (`list`, `search`, `show`, `db info`, `spend`, `history show`,
+`list running`) are NOT guarded.
+
+Note on remote `session/project move`: the print-only remote runbook path does NOT
+mutate local state until the guarded delete step, so the guard applies to the LOCAL
+move/relocate and to the `--confirm-remote-delete` deletion, not to merely printing
+a runbook.
 
 ## Non-goals
 
@@ -118,40 +159,65 @@ show`, `list running`) are NOT guarded.
   coarse-grained: "any opencode running" is enough to warn/gate).
 - Killing or signaling OpenCode processes (observe-and-gate only; never terminate).
 
-## Tests (draft)
+## Tests
 
-- No instances running -> mutator proceeds with no prompt (characterization: all
-  existing destructive tests still pass unchanged when nothing is running).
-- Instances running + non-interactive + no flag -> mutator refuses, exits non-zero,
-  prints the listing (mock `detect_running_opencode`).
-- Instances running + `--while-running`/`--force` -> proceeds after the warning.
-- Instances running + interactive + typed "yes" -> proceeds; "no"/EOF -> aborts,
-  nothing mutated.
-- Broadened detection: a bare `opencode` and `opencode serve` are detected (not
-  just `--continue`).
-- Each guarded command actually calls the guard (a test per mutator, or an
-  AST/registration check that no mutator bypasses it).
-- Fail-closed/open behavior per the decided policy.
+- No instances running -> every mutator proceeds with no prompt (ANTI-REGRESSION:
+  the existing destructive-op tests must still pass UNCHANGED; the guard's happy
+  path must not alter today's behavior when nothing is running).
+- Instances running + non-interactive + no override -> mutator refuses, exits
+  non-zero, prints the listing (mock `detect_running_opencode(broad=True)`).
+- Instances running + `--while-running` (and `--force` alias) -> proceeds after the
+  bold-red warning.
+- Instances running + interactive + typed `yes` -> proceeds; `no`/EOF -> aborts,
+  nothing mutated (assert DB/files untouched).
+- `-y/--yes` alone (no `--while-running`) while running + non-interactive -> STILL
+  refuses (assert `-y` does not authorize the running-instance override).
+- Broad enumeration gates: a bare `opencode` and `opencode serve` gate a mutation
+  (not just `--continue`).
+- Fail-closed (Linux): when the enumerator reports enumeration FAILURE (not "none"),
+  the mutator refuses by default and `--while-running` overrides; fail-open on
+  non-Linux prints the skipped-check caveat and proceeds.
+- Coverage: each newly-guarded mutator (`_execute_move`, import, `backup restore`,
+  `db rebase`) actually calls the guard -- one test per mutator, plus an AST/registry
+  check that no DB/file mutator bypasses `require_safe_to_mutate`.
+- `backup restore` shows its louder warning but still honors the override.
+- Full suite green: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` (paste
+  real output).
 
-## Open questions
+## Spec / documentation sync
 
-- Flag name: reuse `--force`, or add `--while-running` (clearer) with `--force` as
-  an alias? Does `-y/--yes` alone authorize proceeding while running, or must the
-  running-risk override be its own explicit flag? (Lean: separate explicit flag;
-  `-y` covers only the ordinary typed confirm.)
-- Fail-closed on Linux for destructive ops when enumeration is available?
-- Should `backup restore` be even stricter (always refuse while running, no
-  override), since it overwrites the whole DB family under a live writer?
-- Interaction with `check_opencode_process_lock`'s current hard-raise: this IPD
-  REPLACES the two-outcome behavior with the three-outcome guard; ensure a single
-  code path so behavior is uniform.
+- README: document that destructive commands refuse while OpenCode is running and
+  how to proceed (`--while-running`), and the fail-closed-on-Linux behavior.
+- ARCHITECTURE: record the single `require_safe_to_mutate` guard, the three-state
+  (`some`/`none`/`unknown`) enumeration signal, and the fail-closed policy.
+- CHANGELOG under Unreleased (note `--force` is now an alias of `--while-running`
+  for the running-instance override).
+
+## Resolved decisions (maintainer, 2026-07-17)
+
+- **Override flag:** add `--while-running`; keep `--force` as a back-compat alias.
+  `-y/--yes` authorizes only the ordinary typed confirm, NOT the running-instance
+  override.
+- **Reliability:** fail-CLOSED on Linux (enumeration failure -> refuse unless
+  `--while-running`); fail-OPEN on non-Linux with a printed skipped-check caveat.
+- **`backup restore`:** same three-outcome guard as other mutators (louder warning,
+  but keeps the override).
+- **Single code path:** `check_opencode_process_lock` is refactored to delegate to
+  the one `require_safe_to_mutate` guard so all mutators behave uniformly.
+
+## Open questions (remaining, non-blocking)
+
+- Exact `require_safe_to_mutate` signature / where the three-state enumeration
+  signal lives (new function vs out-param on `detect_running_opencode`); settle in
+  implementation.
 
 ## Approval and execution gate
 
-DRAFT. Do NOT execute. This guard changes destructive-command behavior, so it must
-be plan-reviewed (security + anti-regression lens: existing destructive tests must
-still pass when nothing is running) before code. Sequencing: it can ship before the
-full `list running` feature (it only needs coarse enumeration + a listing); if both
-are approved, share the enumeration/rendering code. On execution follow the repo
-contract: path-scoped commits, never push, paste real test output, and move this
-IPD to `executed/` when done.
+This IPD is a proposal (`Status: to-review`); NOT approved, NOT executed. It changes
+destructive-command behavior, so it must be plan-reviewed (security + ANTI-REGRESSION
+lens: the existing destructive-op tests MUST still pass unchanged when nothing is
+running) before code. Sequencing: the enumerator/listing it depends on already
+shipped with `list running` (commit 0b9470c), so this can proceed independently. On
+execution follow the repo contract: implement only the agreed scope, add the tests
+above, paste the REAL pytest runner output, commit path-scoped (never push, never
+tag), sync docs, and move this IPD to `.agents/plans/executed/`.
