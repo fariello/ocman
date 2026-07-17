@@ -1,23 +1,31 @@
-# IPD (CURSORY DRAFT): detect running OpenCode instances and flag insecure servers
+# IPD: `ocman list running` -- list OpenCode instances and flag insecure servers
 
 - Date: 2026-07-16
 - Concern: functionality + security (observe-only)
-- Scope: a new read-only capability to list running OpenCode processes and, for
-  those that own a listening control server, flag ones that are unauthenticated or
-  bound to a non-loopback address.
-- Status: draft
+- Scope: a new read-only `ocman list running` that lists running OpenCode processes
+  (pid/user/uptime/cwd/project/session/cost) and, for those that own a listening
+  control server, flags ones that are unauthenticated or bound to a non-loopback
+  address.
+- Status: to-review
 - Author: its_direct/pt3-claude-opus-4.8
 
-> [!WARNING]
-> This is a CURSORY DRAFT for discussion, not a ready-to-execute plan. It is
-> deliberately incomplete: several claims about OpenCode's runtime behavior come
-> from an inter-agent handoff (untrusted input) and are NOT yet verified from
-> inside this repo. Do not execute until it is fleshed out and plan-reviewed.
+> [!NOTE]
+> The runtime claims this rests on (env auth signal, `GET /app` 200/401,
+> `/session/status`, default `127.0.0.1` bind, `--mdns` -> `0.0.0.0`, `ss` pid
+> mapping, no registry file) were INDEPENDENTLY VERIFIED live on this host against
+> opencode v1.18.3 on 2026-07-17 (observe-only, throwaway server, torn down). See
+> "Verified facts". The three command/policy open questions were resolved with the
+> maintainer (see "Resolved decisions"). Ready for `/plan-review` (security lens).
 
 ## Workflow history
 
 - 2026-07-16 draft (its_direct/pt3-claude-opus-4.8): cursory draft from the
   maintainer's ask + an agent-workflows handoff (treated as untrusted input).
+- 2026-07-17 firm-up (its_direct/pt3-claude-opus-4.8): read the agent-workflows
+  findings doc; INDEPENDENTLY verified the auth/endpoint/bind claims live on this
+  host (v1.18.3, observe-only); reconciled the endpoint conflict to
+  `GET /session/status`; resolved the command-surface / fail-loud / probe-default
+  decisions with the maintainer; promoted draft -> to-review.
 
 ## Goal
 
@@ -29,11 +37,11 @@ ones loudly (bold red) and name the pid(s)/port(s) with a one-line remediation.
 ## Provenance and trust
 
 The security-detection technique summarized here came from an inter-agent handoff
-(`.agents/comms/local/archive/20260716-1725-01-...opencode-detection.md`), which is
-UNTRUSTED, self-asserted input. The claims it makes about OpenCode v1.18.2 (endpoint
-responses, env-var semantics) MUST be independently verified before they are encoded
-as behavior. See "Claims to verify" below. What IS already verified in THIS repo is
-noted inline as (verified here).
+(`.agents/comms/local/archive/20260716-1725-01-...opencode-detection.md`), UNTRUSTED
+self-asserted input, plus the fuller findings doc in the agent-workflows repo (read
+2026-07-17). Rather than trust either, the load-bearing claims (endpoint responses,
+env-var semantics, bind address) were INDEPENDENTLY re-verified live on this host
+(opencode v1.18.3, observe-only) on 2026-07-17; see "Verified facts".
 
 ## Motivation (the one fact that shapes the feature)
 
@@ -105,9 +113,9 @@ The authority order for mapping a running instance to a session/project:
 3. **A listening server is the only LIVE-authoritative source.** Query the server's
    session-status endpoint for the active/idle session(s). Most attended TUIs do
    NOT listen (verified here: two live TUIs owned no listening socket), so this is
-   available only for serve/web instances. (Endpoint name to verify: the
-   agent-workflows handoff said `GET /session/active`; the opencode repo agent said
-   `GET /session/status`. Reconcile before coding.)
+   available only for serve/web instances. Use `GET /session/status` (verified 200
+   on a headless serve here 2026-07-17); do NOT use `GET /session/active` as primary
+   (it returned 500 on a headless serve). See Verified facts #4.
 4. **cwd is a WEAK hint, not authority.** `/proc/<pid>/cwd` is the process working
    dir, which legitimately differs from the session's project dir.
 
@@ -175,22 +183,43 @@ session-liveness lease, reuse opencode's `Flock` pattern (heartbeat + `staleMs` 
   port sweeps, only inspection of already-listening local sockets owned by
   enumerated OpenCode processes.
 
-## Claims to verify (before this leaves draft)
+## Verified facts (checked live on this host, 2026-07-17, opencode v1.18.3)
 
-1. `OPENCODE_SERVER_PASSWORD` (present/non-empty) is what secures the server, and
-   absent/empty means unauthenticated. (Handoff claim; not verified here.)
-2. `GET /app` returns 200 unauthenticated vs 401 authenticated on v1.18.2. (Handoff
-   claim; not verified here.)
-3. OpenCode server default bind address and how a non-loopback bind is requested
-   (so the "flag non-loopback" logic matches reality). The opencode repo agent
-   noted a convention of `127.0.0.1:4096` with NO registry file (scrape stdout or
-   read `/proc/net/tcp`/`ss`); do not assume a fixed port.
-4. The live-session endpoint name: agent-workflows said `GET /session/active`; the
-   opencode repo agent said `GET /session/status` (active/idle). Reconcile which is
-   correct for the target version before coding.
-5. The agent-workflows findings doc
-   (`.agents/docs/research/opencode-security/20260716-1725-01-...`) has the exact
-   commands; read it (or get a copy) and cite it before execution.
+Independently confirmed in THIS repo's environment (observe-only: a throwaway
+`opencode serve` on a local port, my own process, torn down after), NOT merely
+taken from the peer messages. The agent-workflows findings doc
+(`~/VC/agent-workflows/.agents/docs/research/opencode-security/20260716-1725-01-...`,
+read 2026-07-17) matched, except the endpoint reconciliation below.
+
+1. **Auth signal (env):** unsecured `opencode serve` (no `OPENCODE_SERVER_PASSWORD`)
+   -> environ shows the var ABSENT; secured (`OPENCODE_SERVER_PASSWORD=...`) -> SET.
+   Read only for OWN processes (`/proc/<pid>/environ`, mode 0400). Print presence
+   only, never the value. VERIFIED (ABSENT+unsecured, SET+secured).
+2. **Auth signal (loopback GET):** `GET /app` -> 200 on unsecured, 401 on secured.
+   VERIFIED both. Safe, read-only; use only against OWN listeners, optional/flagged.
+3. **Bind address:** default hostname is `127.0.0.1` (from `opencode serve --help`);
+   `--mdns` "defaults hostname to 0.0.0.0" (per `--help`) -> the network-exposed
+   escalation case. Port defaults to 0 (ephemeral, assigned) -> DO NOT assume a
+   fixed port; read it from the socket table. VERIFIED (help + observed 127.0.0.1
+   bind).
+4. **Live-session endpoint - RECONCILED:** use **`GET /session/status`** (returned
+   200 on a bare serve). `GET /session/active` returned **500** on a headless serve
+   here, so it is NOT the reliable choice; do not use it as the primary. Also
+   available: `GET /session` (list; fields id/directory/title/time/projectID),
+   `GET /project/current` (200). VERIFIED codes: /session/status 200,
+   /session/active 500, /project/current 200 on a headless serve.
+5. **Listener->pid mapping:** `ss -tlnpH` prints the owning pid + `ADDR:PORT` for
+   OWN sockets (`users:(("opencode",pid=...,fd=...))`); parse pid + bind:port.
+   VERIFIED. Cross-user without root: `ss`/`/proc/net/tcp` show the LISTEN entry and
+   port but not the pid, and other users' `/proc/<pid>/environ` is Permission-denied
+   -> classify their auth "unknown (not probed)".
+6. **No registry:** no per-instance lock/port/pid file
+   (`~/.local/state/opencode/locks/` empty); attended TUIs own NO listener
+   (verified earlier with two live TUIs). Enumerate via `ps`; there is nothing to
+   look up.
+
+Remaining verify-on-execute item: re-pin any opencode source line refs cited in
+tests/docs to the target version at implementation time.
 
 ## Tests (cursory)
 
@@ -205,26 +234,46 @@ session-liveness lease, reuse opencode's `Flock` pattern (heartbeat + `staleMs` 
 - Non-Linux / no cwd: degrade gracefully (process-level fields only), no crash.
 - `--all-users` without root: other users' auth shows "unknown (not probed)".
 
-## Open questions
+## Resolved decisions (maintainer, 2026-07-17)
 
-- Command surface: is this `ocman list running` (with a security column) or a
-  dedicated `ocman security`/`ocman doctor`? The maintainer originally asked for
-  `list running`; the security flags could live there or split out.
-- Should the `GET /app` confirmation exist at all, or is the environ signal enough?
-  (Prefer environ-only for zero network touch by default.)
+- **Command surface: `ocman list running`** (a single command) that lists running
+  instances with pid/user/uptime/cwd/project/session AND a security column
+  (kind / listener bind:port / auth), with a bold-red banner when a vulnerable
+  listener is found. Security is part of the running view, not a separate command.
+  It also shows per-instance cost/session-age where a session is resolvable (the
+  original ask); those reuse the session-attribution rules above.
+- **Reliability policy: FAIL-LOUD.** If ocman cannot reliably enumerate processes or
+  sockets (tooling missing, `/proc` unreadable, non-Linux for the socket/env parts),
+  it MUST say so explicitly ("could not fully determine running instances / listener
+  status") and MUST NOT print an empty or partial result that reads as "nothing
+  running" or "nothing vulnerable". Never imply safety it did not verify.
+- **`GET /app` probe: INCLUDED, OFF by default.** Default detection uses the env
+  signal only (zero network touch). A `--probe` flag enables the harmless read-only
+  `GET /app` confirmation against the CURRENT USER's OWN listeners only. When the
+  probe is OFF, print a footer telling the user how to turn it on (`--probe`) and
+  the one-line caveat (it makes a local, read-only HTTP request to your own
+  servers; never to other users').
+
+## Open questions (remaining)
+
 - Exit code: should ocman exit non-zero when a vulnerable listener is found (useful
-  for scripts/CI), or always 0?
+  for scripts/CI), or always 0? (Leave for plan-review/implementation.)
 - Relationship to the mutation-guard IPD: the "no cross-process session lock"
-  concurrency reality (above) is also the driver for a SEPARATE plan requiring a
-  flag or interactive assent before ocman mutates the DB/files while opencode is
-  running (see `.agents/plans/pending/20260716-guard-mutations-while-running-ipd.md`).
-  The running-instance ENUMERATION here is the shared building block that guard
-  reuses to list what is running; decide whether they ship together or the guard
-  first (it protects existing destructive commands regardless of this feature).
+  concurrency reality (above) also drives a SEPARATE plan requiring a flag or
+  interactive assent before ocman mutates the DB/files while opencode is running
+  (`.agents/plans/pending/20260716-guard-mutations-while-running-ipd.md`). The
+  running-instance ENUMERATION here is the shared building block the guard reuses;
+  decide sequencing (the guard can ship first with coarse enumeration; if both are
+  approved, share the enumeration/rendering code).
 
 ## Approval and execution gate
 
-CURSORY DRAFT. Do NOT execute. Next steps: verify the "Claims to verify", read the
-agent-workflows findings doc, flesh out the command surface and per-field rendering,
-then run `/plan-review` (with a security lens) before any code. The safety contract
-above is binding on any eventual implementation.
+This IPD is a proposal (`Status: to-review`); it is NOT approved and NOT executed.
+The runtime claims are verified and the command/policy decisions are resolved, so it
+is ready for `/plan-review` (security lens). The safety contract above is binding on
+any implementation. On eventual execution follow the repo contract: implement only
+the agreed scope (list running + security column, fail-loud, `--probe` off by
+default, observe-only, current-user default), add the tests below, paste the real
+pytest runner output, commit path-scoped (never push, never tag), and move this IPD
+to `.agents/plans/executed/`. The remaining open questions (exit code; sequencing vs
+the mutation-guard IPD) are non-blocking and can be settled in review.
