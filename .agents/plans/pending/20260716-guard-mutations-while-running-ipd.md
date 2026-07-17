@@ -6,7 +6,7 @@
   must, when one or more OpenCode instances are running, refuse by default and
   proceed only with an explicit flag (`--while-running`) or interactive typed
   assent, after LISTING the running instances.
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -20,6 +20,7 @@
   (`--while-running` + `--force` alias), fail-closed-on-Linux, and restore-strictness
   decisions with the maintainer; added spec/doc-sync + anti-regression tests;
   promoted draft -> to-review.
+- 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED; PR-001 (FIXED, guard cli_restore not the internal db_restore_rollback_backup rollback helper), PR-002 (FIXED, make broadening-the-gate an explicit deliberate change + no-accidental-narrowing test), PR-003 (FIXED, TUI paths must honor the guard without a raw input() or be explicitly deferred), PR-004 (FIXED, add the three-state signal backward-compatibly). Claims re-verified against cli.py (5 lock sites, detect returns [] on both none/error, unguarded mutators confirmed). Status -> reviewed.
 
 ## Goal
 
@@ -67,9 +68,16 @@ is exactly the race to prevent.
      `detect_running_opencode()` with the default `broad=False` (`opencode`+`continue`
      only), so it MISSES a bare `opencode`, `opencode serve`/`web`, or a TUI without
      `--continue`. The guard must enumerate with `broad=True` so ANY running instance
-     gates a mutation. (This intentionally MAKES THE GATE MORE INCLUSIVE than today;
-     that is the point, and anti-regression tests must confirm the no-instances path
-     is unchanged.)
+     gates a mutation.
+     ANTI-REGRESSION NOTE: this is a DELIBERATE behavior change to the safety gate
+     shared by the 5 already-guarded functions (delete session/project, batch delete,
+     cleanup, clean-orphans) -- it makes the gate STRICTLY MORE inclusive (a superset
+     of what it caught before). `list running` intentionally kept the default matcher
+     narrow (commit 0b9470c); this IPD changes only the GATE's call to pass
+     `broad=True`, not the default. Required tests: (a) a `--continue` TUI that tripped
+     the gate before STILL trips it (no accidental narrowing); (b) a bare `opencode` /
+     `opencode serve` now ALSO trips it; (c) the no-instances path is byte-identical
+     to today (existing destructive-op tests unchanged).
   2. **Coverage is inconsistent (VERIFIED).** The lock is NOT called by
      `_execute_move` (session/project move), `extract_and_import_session` /
      `extract_and_import_project`, `backup restore` (`db_restore_rollback_backup`),
@@ -114,9 +122,13 @@ is exactly the race to prevent.
    deliberate change from today's fail-open; the no-instances happy path is
    unchanged, so it only adds friction when detection genuinely breaks on Linux.
    Note: `detect_running_opencode` currently swallows errors and returns `[]`
-   (indistinguishable from "none running"); the guard needs a THREE-state signal
-   (`some` / `none` / `unknown`) -- add an enumerator variant or out-param that
-   reports enumeration failure distinctly, so fail-closed can trigger.
+   (indistinguishable from "none running"; verified `cli.py:7247+`); the guard needs
+   a THREE-state signal (`some` / `none` / `unknown`) -- add an enumerator variant or
+   out-param that reports enumeration failure distinctly, so fail-closed can trigger.
+   Do this BACKWARD-COMPATIBLY: the existing callers (the 5 gate sites and
+   `list running`) must keep working unchanged, e.g. a new
+   `detect_running_opencode_status()` returning `(state, procs)` that the old
+   function is expressed in terms of, rather than changing the current return type.
 5. **The listing.** Show each running instance: pid, user, uptime, cwd, project
    (best-effort per the attribution rules in the list-running IPD), and session
    hint. Reuse the `list running` rendering; a minimal listing is acceptable.
@@ -134,8 +146,12 @@ NOT guarded today -- must be ADDED (verified 2026-07-17 they do not call the loc
 - `session move` / `project move` (`_execute_move`) -- physical dir move + DB rebase.
 - `session import` (`extract_and_import_session` / `extract_and_import_project`) --
   inserts rows + writes diff files.
-- `backup restore` (`db_restore_rollback_backup` and the restore command path) --
-  overwrites the whole `opencode.db` family; loudest warning.
+- `backup restore` -- guard the USER-FACING command `cli_restore`
+  (`ocman/cli.py:11681`), which overwrites the whole `opencode.db` family; loudest
+  warning. Do NOT guard the internal `db_restore_rollback_backup` helper
+  (`cli.py:8293`): it is called by delete/move/import/cleanup ON FAILURE to ROLL
+  BACK (`cli.py:8661,9667,10023,8855`), so guarding it would double-guard and could
+  wrongly fire during a rollback. (Verified 2026-07-17.)
 - `db rebase` (`db_rebase_paths`) -- bulk UPDATE of path prefixes.
 - `history clear` -- rewrites the ledger sidecar (lower risk; included for
   consistency).
@@ -150,6 +166,15 @@ Note on remote `session/project move`: the print-only remote runbook path does N
 mutate local state until the guarded delete step, so the guard applies to the LOCAL
 move/relocate and to the `--confirm-remote-delete` deletion, not to merely printing
 a runbook.
+
+TUI paths (`ocman_tui/`): the TUI's delete/move actions call the SAME underlying
+`db_delete_*` / move functions, so guarding at those functions covers the TUI too.
+BUT the guard's interaction model differs in a TUI (a blocking stdin `input()` typed
+prompt is wrong inside a Textual app). Execution MUST verify how the TUI invokes
+these mutators and ensure the guard there uses a TUI-appropriate confirm (or the
+TUI passes an explicit assent), never a raw `input()`. If the TUI cannot be made to
+honor the guard cleanly in this pass, scope the TUI to a follow-up and say so; do
+NOT leave a raw `input()` firing under Textual.
 
 ## Non-goals
 
@@ -177,10 +202,18 @@ a runbook.
 - Fail-closed (Linux): when the enumerator reports enumeration FAILURE (not "none"),
   the mutator refuses by default and `--while-running` overrides; fail-open on
   non-Linux prints the skipped-check caveat and proceeds.
-- Coverage: each newly-guarded mutator (`_execute_move`, import, `backup restore`,
+- Coverage: each newly-guarded mutator (`_execute_move`, import, `cli_restore`,
   `db rebase`) actually calls the guard -- one test per mutator, plus an AST/registry
   check that no DB/file mutator bypasses `require_safe_to_mutate`.
-- `backup restore` shows its louder warning but still honors the override.
+- `backup restore` (`cli_restore`) shows its louder warning but still honors the
+  override; the internal `db_restore_rollback_backup` rollback helper is NOT guarded
+  (a rollback under a running instance must still complete).
+- No-accidental-narrowing: a `--continue` TUI that tripped the gate pre-change still
+  trips it (PR-002 anti-regression).
+- TUI path: the TUI's delete/move honors the guard without a raw stdin `input()`
+  (or the TUI scope is explicitly deferred; assert whichever was chosen).
+- Backward-compat: existing callers of `detect_running_opencode` keep working after
+  the three-state signal is added.
 - Full suite green: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` (paste
   real output).
 
