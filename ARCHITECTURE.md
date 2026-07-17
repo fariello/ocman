@@ -163,6 +163,24 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   prompt. The prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
   op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).
 
+- **Large-session chunking (`chunk_turns` + `part_recovery_name`).** `recover`/`compact`
+  can split a large session into ordered parts instead of truncating. The pure seam
+  `chunk_turns(turns, max_interactions=, max_lines=)` groups turns by the same
+  interaction-boundary rule as `count_interactions` (a new interaction starts on a
+  user turn whose predecessor was not a user turn) and packs whole interactions into
+  each part up to the size limits; it never splits a turn or an interaction, and an
+  oversized single interaction ships as its own part (nothing is dropped). Part files
+  are named by `part_recovery_name(sid, dt, kind, part, total)` =
+  `YYYYMMDD-HHMM-<sid>.part-NNofMM.<kind>.md` (zero-padded to the width of `total`;
+  `total==1` yields the plain canonical name). This reuses the filter `.<scope>`
+  sub-segment convention, and `parse_recovery_name` strips one trailing segment so both
+  the chunk and filter forms round-trip to the bare session id. `recover --chunk`
+  writes N transcript/restart/prompt sets; `compact --chunk` runs `run_compaction`
+  (with an `output_name` per part) once per part and aggregates the cost table. Export
+  (.ocbox) is intentionally NOT chunked (a bundle is DB rows for wholesale import, not
+  readable/LLM text). The interactive `prompt_for_truncation` now returns a
+  `LargeSessionChoice(mode=full|truncate|chunk, max_lines, max_interactions)`.
+
 - **Running-OpenCode mutation guard (`require_safe_to_mutate`).** OpenCode has no
   cross-process session lock, so mutating the shared DB/files while an instance runs can
   corrupt state. Every mutating op routes through `require_safe_to_mutate(action, while_running=...)`

@@ -80,7 +80,26 @@ ocman session compact SESSION_ID model:uri/its_direct/pt1-qwen3-32b-us -mi 50
 
 # Compact multiple sessions in one batch with a single confirmation
 ocman session compact sess1 sess2 project:myproj model:gpt-4
+
+# Split a very large session into ordered parts instead of truncating (nothing dropped)
+ocman session recover SESSION_ID --chunk
+# Compact a large session in parts (one API call per part, each fits the model)
+ocman session compact SESSION_ID model:gpt-4 --chunk
 ```
+
+> [!TIP]
+> **Chunking vs truncating a large session.** By default, when a session exceeds the
+> built-in size trigger (2500 transcript lines or 100 interactions) ocman offers to
+> TRUNCATE it (keep only the most recent turns). With `--chunk` it instead SPLITS the
+> whole session into ordered, self-contained files named
+> `YYYYMMDD-HHMM-<session_id>.part-NNofMM.<kind>.md`, breaking only on interaction
+> boundaries (never mid-turn) so nothing is dropped. The interactive large-session
+> prompt also offers a `[c]hunk` choice. `--max-lines` / `--max-interactions` set the
+> size of EACH part; the per-part defaults are the `chunk_max_lines` /
+> `chunk_max_interactions` config keys. For `compact --chunk`, each part is sent to the
+> LLM separately (so each fits the context window) and written as
+> `...part-NNofMM.compacted.md`, with the pre-run cost table summing all parts. (This
+> applies to `recover` and `compact`; `.ocbox` `export` is not chunked.)
 
 > [!TIP]
 > **Compacted files land in your project's prompts.** When you compact (`ocman session compact`) and the
@@ -296,8 +315,8 @@ Global options work on any subcommand and may appear before or after it.
 | `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Also `session list in NAME`. Add `-A/--all-sessions` to include subagents. |
 | `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents. Also `search QUERY in [project\|session] NAME`. |
 | `ocman session show [specs...]` | Show details for sessions (bare form shows details). Accepts multiple target specs. `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
-| `ocman session recover [specs...]` | Recover sessions to restart-ready Markdown (omit specs to pick interactively). Accepts multiple target specs. |
-| `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). |
+| `ocman session recover [specs...]` | Recover sessions to restart-ready Markdown (omit specs to pick interactively). Accepts multiple target specs. `--chunk` splits a large session into ordered `.part-NNofMM` files instead of truncating (nothing dropped); `-ml`/`-mi` set the per-part size. |
+| `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). `--chunk` compacts each part separately (one API call per part) and writes `...part-NNofMM.compacted.md`. |
 | `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. Multi-target and project-expanded deletes run as ONE consolidated batch: a single backup, one transaction, one `VACUUM`, and one grand-total report (not once per session). Deleting a whole project's sessions by naming the project also removes the now-empty project row. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
 | `ocman session export ID --to FILE` | Export a session and its subagents to a portable `.ocbox` bundle. |
 | `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only). Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
@@ -309,8 +328,9 @@ Global options work on any subcommand and may appear before or after it.
 |:---|:---|:---|
 | `-o DIR` | `--out DIR` | Output directory for recovery files (default: `./opencode-recovery`) |
 | `-d DIR` | `--session-dir DIR` | Directory the session originally ran in |
-| `-mi N` | `--max-interactions N` | Keep at most N user+assistant turn pairs |
-| `-ml N` | `--max-lines N` | Keep at most N transcript lines (truncates older turns) |
+| `-mi N` | `--max-interactions N` | Keep at most N user+assistant turn pairs (per part when `--chunk`) |
+| `-ml N` | `--max-lines N` | Keep at most N transcript lines (truncates older turns; per part when `--chunk`) |
+| | `--chunk` | Split a large session into ordered `.part-NNofMM` files instead of truncating (nothing dropped); `-ml`/`-mi` set the per-part size |
 | `-t` | `--include-tools` | Include tool execution results and tool call messages |
 | | `--all-roles` | Write all roles, not just user/assistant |
 | `-ic FILE` | `--input-compact FILE` | Prepend a prior compacted file as context (repeatable) |

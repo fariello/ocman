@@ -282,6 +282,16 @@ filter_max_bytes = {filter_max_bytes}
 # sensitive environments). A detection stops the send unless --allow-secrets is given.
 # Default: conservative
 filter_secret_scan = {filter_secret_scan}
+
+# Chunk sizing for `recover --chunk` / `compact --chunk` (splitting a large session
+# into ordered .part-NNofMM files instead of truncating). NOTE the two-knob split:
+# the built-in "is this session large enough to prompt/offer chunking" TRIGGER is a
+# fixed threshold (2500 lines / 100 interactions); these two keys instead set how big
+# EACH resulting part is. Per-run overrides: --max-lines / --max-interactions.
+# Max interactions per chunk part. Default: 100
+chunk_max_interactions = {chunk_max_interactions}
+# Max rendered transcript lines per chunk part. Default: 2500
+chunk_max_lines = {chunk_max_lines}
 """
 
 DEFAULT_CONFIG = {
@@ -298,6 +308,8 @@ DEFAULT_CONFIG = {
     "all_roles": False,
     "filter_max_bytes": 5 * 1024 * 1024,
     "filter_secret_scan": "conservative",
+    "chunk_max_interactions": LONG_SESSION_INTERACTION_THRESHOLD,
+    "chunk_max_lines": LONG_SESSION_LINE_THRESHOLD,
 }
 
 PATH_KEYS = {"db_path", "history_path", "default_out_dir", "default_backup_dir"}
@@ -2530,28 +2542,100 @@ def apply_truncation(
     return result
 
 
+def _group_turns_by_interaction(turns: list[Turn]) -> list[list[Turn]]:
+    """Group turns into interactions using the SAME boundary rule as count_interactions:
+    a new interaction begins on a user turn whose previous turn was not a user turn
+    (and the very first turn always begins one). Never splits within an interaction."""
+    groups: list[list[Turn]] = []
+    prev_role: str | None = None
+    for turn in turns:
+        starts_new = (turn.role == "user" and prev_role != "user") or prev_role is None
+        if starts_new or not groups:
+            groups.append([turn])
+        else:
+            groups[-1].append(turn)
+        prev_role = turn.role
+    return groups
+
+
+def chunk_turns(turns: list[Turn], *, max_interactions: int, max_lines: int) -> list[list[Turn]]:
+    """Split turns into ordered parts, packing whole INTERACTIONS into each part up to
+    the size limits. Never splits a turn or an interaction across parts.
+
+    Rules:
+      - Group turns into interactions (the count_interactions boundary rule).
+      - Start a new part when adding the next whole interaction would exceed either
+        max_interactions (interactions per part) or max_lines (rendered lines per
+        part), whichever hits first.
+      - A single interaction that alone exceeds max_lines still ships as its own part
+        (never dropped, never split).
+      - Returns [turns] (a single part) when everything fits, so callers can treat
+        chunking uniformly. Returns [] for empty input.
+    """
+    if not turns:
+        return []
+    if max_interactions < 1:
+        max_interactions = 1
+    interactions = _group_turns_by_interaction(turns)
+
+    parts: list[list[Turn]] = []
+    current: list[Turn] = []
+    current_interactions = 0
+    current_lines = 6  # transcript document header (see count_transcript_lines)
+
+    for group in interactions:
+        group_lines = sum(rendered_lines_for_turn(t) for t in group)
+        would_exceed = current and (
+            current_interactions + 1 > max_interactions
+            or current_lines + group_lines > max_lines
+        )
+        if would_exceed:
+            parts.append(current)
+            current = []
+            current_interactions = 0
+            current_lines = 6
+        current.extend(group)
+        current_interactions += 1
+        current_lines += group_lines
+
+    if current:
+        parts.append(current)
+    return parts
+
+
+@dataclass
+class LargeSessionChoice:
+    """The user's choice for a large session. `mode` is one of:
+      - "full":     write everything, no truncation and no chunking.
+      - "truncate": keep only the tail per max_lines / max_interactions.
+      - "chunk":    split into .part-NNofMM files; max_lines/max_interactions bound
+                    the PER-PART size.
+    """
+    mode: str  # "full" | "truncate" | "chunk"
+    max_lines: int | None = None
+    max_interactions: int | None = None
+
+
 def prompt_for_truncation(
     turns: list[Turn],
     total_lines: int,
     total_interactions: int,
-) -> tuple[int | None, int | None]:
+) -> LargeSessionChoice:
     """
-    Interactively ask the user whether to truncate a long session.
+    Interactively ask the user what to do with a long session: write it in full,
+    truncate to the most-recent tail, or split it into chunk parts.
 
     Args:
-        turns:
-            The full turn list.
-
-        total_lines:
-            Estimated line count.
-
-        total_interactions:
-            Total interaction count.
+        turns: The full turn list.
+        total_lines: Estimated line count.
+        total_interactions: Total interaction count.
 
     Returns:
-        A tuple of (max_lines, max_interactions) chosen by the user.
-        Both are None if the user wants no truncation.
+        A LargeSessionChoice. Non-interactive input yields mode="full".
     """
+    cfg = load_ocman_config()
+    chunk_i_default = int(cfg.get("chunk_max_interactions", LONG_SESSION_INTERACTION_THRESHOLD))
+    chunk_l_default = int(cfg.get("chunk_max_lines", LONG_SESSION_LINE_THRESHOLD))
 
     print()
     print(color_yellow("This session is large:"))
@@ -2560,39 +2644,47 @@ def prompt_for_truncation(
     print(f"  Total turns:       {color_bold(str(len(turns)))}")
     print()
     print("Truncation keeps only the most recent (tail) interactions.")
+    print("Chunking splits the whole session into ordered .part-NNofMM files (nothing dropped).")
     print()
 
     # Check if stdin is interactive.
     if not (hasattr(sys.stdin, "isatty") and sys.stdin.isatty()):
-        print(color_dim("Non-interactive mode: writing full output (use --max-lines or --max-interactions to limit)."))
-        return None, None
+        print("Non-interactive mode: writing full output (use --max-lines/--max-interactions to limit, or --chunk to split).")
+        return LargeSessionChoice("full")
 
     while True:
         answer = input(
-            "Truncate output? [N]o / [l]ines / [i]nteractions / [b]oth: "
+            "Output? [N]o-change(full) / [l]ines / [i]nteractions / [b]oth / [c]hunk: "
         ).strip().lower()
 
         if answer in {"", "n", "no"}:
-            return None, None
+            return LargeSessionChoice("full")
 
         if answer in {"l", "lines"}:
             raw = input(f"  Max lines [{LONG_SESSION_LINE_THRESHOLD}]: ").strip()
             max_lines = int(raw) if raw.isdigit() else LONG_SESSION_LINE_THRESHOLD
-            return max_lines, None
+            return LargeSessionChoice("truncate", max_lines=max_lines)
 
         if answer in {"i", "interactions"}:
             raw = input(f"  Max interactions [{LONG_SESSION_INTERACTION_THRESHOLD}]: ").strip()
             max_inter = int(raw) if raw.isdigit() else LONG_SESSION_INTERACTION_THRESHOLD
-            return None, max_inter
+            return LargeSessionChoice("truncate", max_interactions=max_inter)
 
         if answer in {"b", "both"}:
             raw_l = input(f"  Max lines [{LONG_SESSION_LINE_THRESHOLD}]: ").strip()
             raw_i = input(f"  Max interactions [{LONG_SESSION_INTERACTION_THRESHOLD}]: ").strip()
             max_lines = int(raw_l) if raw_l.isdigit() else LONG_SESSION_LINE_THRESHOLD
             max_inter = int(raw_i) if raw_i.isdigit() else LONG_SESSION_INTERACTION_THRESHOLD
-            return max_lines, max_inter
+            return LargeSessionChoice("truncate", max_lines=max_lines, max_interactions=max_inter)
 
-        print("Please enter N, l, i, or b.")
+        if answer in {"c", "chunk"}:
+            raw_i = input(f"  Max interactions per part [{chunk_i_default}]: ").strip()
+            raw_l = input(f"  Max lines per part [{chunk_l_default}]: ").strip()
+            part_i = int(raw_i) if raw_i.isdigit() else chunk_i_default
+            part_l = int(raw_l) if raw_l.isdigit() else chunk_l_default
+            return LargeSessionChoice("chunk", max_lines=part_l, max_interactions=part_i)
+
+        print("Please enter N, l, i, b, or c.")
 
 
 def safe_filename(value: str) -> str:
@@ -3495,6 +3587,23 @@ def canonical_recovery_name(session_id: str, dt: datetime, kind: str) -> str:
     return f"{dt:%Y%m%d-%H%M}-{safe_filename(session_id)}.{kind}.md"
 
 
+def part_recovery_name(session_id: str, dt: datetime, kind: str, part: int, total: int) -> str:
+    """Filename for one chunk part: ``YYYYMMDD-HHMM-<sid>.part-NNofMM.<kind>.md``.
+
+    Inserts a ``.part-NNofMM`` sub-segment (zero-padded to the width of ``total``)
+    before the ``.<kind>.md`` suffix, mirroring the filter ``.<scope>`` sub-segment
+    convention so ``parse_recovery_name`` still recovers the bare session id.
+    When ``total == 1`` there is no split, so the plain canonical name is returned
+    (no part segment) - identical to a normal single-file recovery.
+    """
+    base = canonical_recovery_name(session_id, dt, kind)  # validates kind
+    if total <= 1:
+        return base
+    stem = base[: -len(f".{kind}.md")]
+    width = len(str(total))
+    return f"{stem}.part-{part:0{width}d}of{total:0{width}d}.{kind}.md"
+
+
 def parse_recovery_name(path: Path) -> tuple[str, datetime | None, str]:
     """Parse a recovery-artifact filename into ``(session_id, datetime|None, kind)``.
 
@@ -3555,7 +3664,18 @@ def parse_recovery_name(path: Path) -> tuple[str, datetime | None, str]:
 
     parsed = _try_parse(stem)
     if parsed is not None:
-        return (parsed[0], parsed[1], kind)
+        sid, dt = parsed
+        # The greedy `(.+)` for the session id also swallows any trailing
+        # ".<segment>" (a filter ".<scope>" or a chunk ".part-NNofMM"). If the sid
+        # still contains a dot, try dropping the LAST segment and re-parsing; prefer
+        # the shorter parse whose session id is dot-free (i.e. the real sid without a
+        # trailing segment), so both the filter scope form and chunk part names
+        # round-trip to the bare session id.
+        if "." in sid:
+            shorter = _try_parse(stem.rsplit(".", 1)[0])
+            if shorter is not None and "." not in shorter[0]:
+                return (shorter[0], shorter[1], kind)
+        return (sid, dt, kind)
     # No timestamp prefix recognized: treat the whole stem as the session id.
     return (stem, None, kind)
 
@@ -3661,6 +3781,7 @@ def recover_from_export(
     output_compact: Path | None = None,
     quiet: bool = False,
     preview: bool | None = None,
+    chunk: bool = False,
 ) -> list[Path]:
     """
     Generate recovery Markdown files from an opencode export JSON file.
@@ -3746,17 +3867,51 @@ def recover_from_export(
         or total_interactions > LONG_SESSION_INTERACTION_THRESHOLD
     )
 
-    # If thresholds exceeded and no explicit limits given, prompt the user.
-    if exceeds_threshold and max_lines is None and max_interactions is None:
-        prompted_max_lines, prompted_max_interactions = prompt_for_truncation(
-            selected_turns, total_lines, total_interactions
-        )
-        if prompted_max_lines is not None:
-            max_lines = prompted_max_lines
-        if prompted_max_interactions is not None:
-            max_interactions = prompted_max_interactions
+    chunk_mode = chunk
+    # If thresholds exceeded and no explicit limits or --chunk given, prompt the user.
+    if exceeds_threshold and not chunk and max_lines is None and max_interactions is None:
+        choice = prompt_for_truncation(selected_turns, total_lines, total_interactions)
+        if choice.mode == "chunk":
+            chunk_mode = True
+            max_lines = choice.max_lines
+            max_interactions = choice.max_interactions
+        elif choice.mode == "truncate":
+            max_lines = choice.max_lines
+            max_interactions = choice.max_interactions
+        # mode == "full": leave limits as None (write everything).
 
-    # Apply truncation if limits are set.
+    # --- Chunk mode: split into ordered .part-NNofMM files, nothing dropped. ---
+    if chunk_mode:
+        cfg = load_ocman_config()
+        part_max_i = max_interactions if max_interactions is not None else int(
+            cfg.get("chunk_max_interactions", LONG_SESSION_INTERACTION_THRESHOLD))
+        part_max_l = max_lines if max_lines is not None else int(
+            cfg.get("chunk_max_lines", LONG_SESSION_LINE_THRESHOLD))
+        parts = chunk_turns(selected_turns, max_interactions=part_max_i, max_lines=part_max_l)
+        total = len(parts)
+        dt = _STARTUP_TIME_LOCAL
+        generated: list[Path] = []
+        if not quiet:
+            print(color_yellow(
+                f"Chunking into {total} part(s) "
+                f"(<= {part_max_i} interactions / <= {part_max_l} lines each)."))
+        for idx, part in enumerate(parts, start=1):
+            t_path = output_dir / part_recovery_name(session.session_id, dt, "transcript", idx, total)
+            r_path = output_dir / part_recovery_name(session.session_id, dt, "restart", idx, total)
+            p_path = output_dir / part_recovery_name(session.session_id, dt, "prompt", idx, total)
+            part_note = f"(Part {idx} of {total} of a chunked session.)"
+            write_text(t_path, render_transcript(
+                part, f"Recovered opencode transcript {part_note}"))
+            write_text(r_path, render_restart_context(
+                turns=part, source_name=export_path.name, session=session))
+            write_text(p_path, render_compact_prompt(
+                turns=part, source_name=export_path.name, session=session,
+                prior_context=(prior_context + "\n" + part_note).strip()))
+            generated.extend([t_path, r_path, p_path])
+            log(f"Wrote part {idx}/{total}: {t_path.name}", verbosity)
+        return generated
+
+    # --- Non-chunk mode (unchanged): optionally truncate, then write one set. ---
     total_turns_before_truncation = len(selected_turns)
     if max_lines is not None or max_interactions is not None:
         selected_turns = apply_truncation(
@@ -5711,9 +5866,12 @@ def _add_recovery_opts(p: argparse.ArgumentParser) -> None:
     p.add_argument("-d", "--session-dir", type=Path, default=None,
                    help="Directory the session originally ran in.")
     p.add_argument("-mi", "--max-interactions", type=int, default=None, metavar="N",
-                   help="Keep at most N user+assistant pairs.")
+                   help="Keep at most N user+assistant pairs (per part when --chunk).")
     p.add_argument("-ml", "--max-lines", type=int, default=None, metavar="N",
-                   help="Keep at most N transcript lines.")
+                   help="Keep at most N transcript lines (per part when --chunk).")
+    p.add_argument("--chunk", action="store_true", default=False,
+                   help="Split a large session into ordered .part-NNofMM files instead "
+                        "of truncating (nothing is dropped). --max-* set the per-part size.")
     p.add_argument("-t", "--include-tools",
                    action=argparse.BooleanOptionalAction, default=None,
                    help="Include tool/function messages.")
@@ -6210,6 +6368,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     def carry_recovery():
         carry("session_dir", "max_lines", "max_interactions",
               "output_compact", "output_restart", "output_transcript")
+        out["chunk"] = bool(g("chunk", False))
         if g("out") is not None:
             out["out"] = g("out")
         if g("include_tools") is not None:
@@ -6631,9 +6790,14 @@ def run_compaction(
     allow_secrets: bool = False,
     expunge_secrets: bool = False,
     show_secrets: str | None = None,
+    output_name: str | None = None,
 ) -> tuple[Path | None, dict[str, Any] | None, bool]:
     """
     Run LLM-based compaction on the recovery transcript.
+
+    ``output_name`` overrides the compacted output filename (used for chunk parts so
+    each part writes its own ``...part-NNofMM.compacted.md`` instead of colliding on
+    the single canonical name).
 
     Loads the compact prompt, calls the API, and writes the compacted result.
     """
@@ -6663,9 +6827,9 @@ def run_compaction(
     )
 
     # Write the compacted output.
-    compacted_path = output_dir / canonical_recovery_name(
+    compacted_path = output_dir / (output_name or canonical_recovery_name(
         session.session_id, _STARTUP_TIME_LOCAL, "compacted"
-    )
+    ))
 
     # Collision handling shared with filter/migration (safety-check then backup/delete).
     resolve_recovery_collision(compacted_path, force=force, verbosity=verbosity)
@@ -13309,6 +13473,7 @@ def main() -> None:
                             output_transcript=args.output_transcript,
                             output_restart=args.output_restart,
                             output_compact=args.output_compact,
+                            chunk=getattr(args, "chunk", False),
                         )
                         print(f"Temporary export preserved at: {color_cyan(str(export_path))}")
                     else:
@@ -13332,6 +13497,7 @@ def main() -> None:
                                 output_transcript=args.output_transcript,
                                 output_restart=args.output_restart,
                                 output_compact=args.output_compact,
+                                chunk=getattr(args, "chunk", False),
                             )
                     
                     if generated_paths:
@@ -13424,6 +13590,7 @@ def main() -> None:
                     cwd=opencode_cwd,
                 )
 
+                chunk_requested = getattr(args, "chunk", False)
                 generated_paths = recover_from_export(
                     export_path=export_path,
                     output_dir=temp_dir,
@@ -13434,54 +13601,58 @@ def main() -> None:
                     max_lines=args.max_lines,
                     max_interactions=args.max_interactions,
                     prior_context=prior_context,
-                    output_transcript=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "transcript"),
-                    output_restart=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "restart"),
-                    output_compact=temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "prompt"),
+                    output_transcript=(None if chunk_requested else temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "transcript")),
+                    output_restart=(None if chunk_requested else temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "restart")),
+                    output_compact=(None if chunk_requested else temp_dir / canonical_recovery_name(session.session_id, _STARTUP_TIME_LOCAL, "prompt")),
                     quiet=True,
                     preview=True,
+                    chunk=chunk_requested,
                 )
 
-                compact_prompt_file = next(
-                    (p for p in generated_paths if p.name.endswith(".prompt.md")),
-                    None,
-                )
-                if not compact_prompt_file:
+                # One estimate entry per prompt file: exactly one for a normal session,
+                # or one per chunk part when --chunk split the session (Phase 2).
+                prompt_files = [p for p in generated_paths if p.name.endswith(".prompt.md")]
+                if not prompt_files:
                     raise RecoveryError(f"Compaction prompt file was not generated for session {session.session_id}")
+                # Group each part's sibling artifacts (share the part stem) so the run
+                # loop moves the right transcript/restart/prompt together.
+                for compact_prompt_file in prompt_files:
+                    part_stem = compact_prompt_file.name[: -len(".prompt.md")]
+                    part_paths = [p for p in generated_paths
+                                  if p.name.startswith(part_stem + ".")]
+                    prompt_content = compact_prompt_file.read_text(encoding="utf-8")
+                    prompt_content = check_egress_guards(
+                        prompt_content,
+                        source_desc=f"Compaction prompt for session {session.session_id}",
+                        config=load_ocman_config(),
+                        force=args.force,
+                        allow_secrets=args.allow_secrets,
+                        expunge_secrets=args.expunge_secrets,
+                        show_secrets=args.show_secrets,
+                        interactive=None if not args.yes else False,
+                    )
+                    compact_prompt_file.write_text(prompt_content, encoding="utf-8")
 
-                prompt_content = compact_prompt_file.read_text(encoding="utf-8")
+                    input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
+                    output_tokens_est = max(500, input_tokens // 5)
+                    cost = estimate_cost(input_tokens, output_tokens_est, model)
 
-                prompt_content = check_egress_guards(
-                    prompt_content,
-                    source_desc=f"Compaction prompt for session {session.session_id}",
-                    config=load_ocman_config(),
-                    force=args.force,
-                    allow_secrets=args.allow_secrets,
-                    expunge_secrets=args.expunge_secrets,
-                    show_secrets=args.show_secrets,
-                    interactive=None if not args.yes else False,
-                )
-                compact_prompt_file.write_text(prompt_content, encoding="utf-8")
+                    estimates.append({
+                        "session": session,
+                        "temp_dir": temp_dir,
+                        "generated_paths": part_paths,
+                        "compact_prompt_file": compact_prompt_file,
+                        "input_tokens": input_tokens,
+                        "output_tokens_est": output_tokens_est,
+                        "cost": cost
+                    })
 
-                input_tokens = estimate_tokens(COMPACTION_SYSTEM_PROMPT) + estimate_tokens(prompt_content)
-                output_tokens_est = max(500, input_tokens // 5)
-                cost = estimate_cost(input_tokens, output_tokens_est, model)
-
-                estimates.append({
-                    "session": session,
-                    "temp_dir": temp_dir,
-                    "generated_paths": generated_paths,
-                    "compact_prompt_file": compact_prompt_file,
-                    "input_tokens": input_tokens,
-                    "output_tokens_est": output_tokens_est,
-                    "cost": cost
-                })
-
-                total_input_tokens += input_tokens
-                total_output_tokens += output_tokens_est
-                if cost is not None:
-                    total_est_cost += cost
-                else:
-                    has_unknown_cost = True
+                    total_input_tokens += input_tokens
+                    total_output_tokens += output_tokens_est
+                    if cost is not None:
+                        total_est_cost += cost
+                    else:
+                        has_unknown_cost = True
 
             # Render the whole table in one shot with vistab AFTER all data is
             # collected, so nothing printed during the build phase can split it.
@@ -13575,6 +13746,11 @@ def main() -> None:
 
                         compact_prompt_file_dest = output_dir / est["compact_prompt_file"].name
 
+                        # Chunk parts share a `...part-NNofMM` stem; name the compacted
+                        # output after that stem so parts do not collide on one file.
+                        _pname = est["compact_prompt_file"].name
+                        _out_name = (_pname[: -len(".prompt.md")] + ".compacted.md"
+                                     if ".part-" in _pname else None)
                         compacted_path, usage_info, did_expunge = run_compaction(
                             compact_prompt_path=compact_prompt_file_dest,
                             output_dir=output_dir,
@@ -13585,6 +13761,7 @@ def main() -> None:
                             allow_secrets=args.allow_secrets,
                             expunge_secrets=args.expunge_secrets,
                             show_secrets=args.show_secrets,
+                            output_name=_out_name,
                         )
 
                         if compacted_path:

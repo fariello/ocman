@@ -44,6 +44,31 @@ def test_round_trip_all_kinds(kind):
     assert pdt.strftime("%Y%m%d-%H%M") == "20260706-1432"
 
 
+@pytest.mark.parametrize("kind", RECOVERY_KINDS)
+def test_parse_strips_chunk_part_segment(kind):
+    """A chunk part name `...<sid>.part-NNofMM.<kind>.md` round-trips to the BARE sid
+    (the trailing .part- segment must not be folded into the session id)."""
+    name = f"20260706-1432-ses_abc.part-01of03.{kind}.md"
+    sid, dt, k = parse_recovery_name(Path(name))
+    assert sid == "ses_abc"
+    assert k == kind
+    assert dt is not None and dt.strftime("%Y%m%d-%H%M") == "20260706-1432"
+
+
+def test_parse_strips_filter_scope_segment():
+    """Regression (PR-001/PR-006): the filter output form
+    `...<sid>.<scope>.compacted.md` now parses the session id as the BARE <sid>, not
+    `<sid>.<scope>`. The filter output filename is rebuilt from this sid, so a clean
+    sid keeps filter's observable output unchanged."""
+    sid, dt, kind = parse_recovery_name(Path("20260706-1432-ses_abc.ocman-only.compacted.md"))
+    assert sid == "ses_abc"
+    assert kind == "compacted"
+    assert dt is not None
+    # And the rebuilt filter stem matches the pre-fix output name.
+    stem = canonical_recovery_name(sid, dt, "compacted")[: -len(".compacted.md")]
+    assert f"{stem}.ocman-only.compacted.md" == "20260706-1432-ses_abc.ocman-only.compacted.md"
+
+
 def test_parse_legacy_utc_seconds():
     sid, dt, kind = parse_recovery_name(Path("opencode-20260101-235959-ses_x.restart.md"))
     assert sid == "ses_x" and kind == "restart"

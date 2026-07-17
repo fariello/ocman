@@ -467,6 +467,25 @@ def test_dir_usage(tmp_path):
     assert dir_usage(tmp_path / "nope") == (0, 0)
 
 
+def test_chunk_size_config_keys_present_and_roundtrip(tmp_path):
+    from ocman import (save_ocman_config, load_ocman_config, DEFAULT_CONFIG,
+                       LONG_SESSION_INTERACTION_THRESHOLD, LONG_SESSION_LINE_THRESHOLD)
+    # Present in defaults with the documented default values.
+    assert DEFAULT_CONFIG["chunk_max_interactions"] == LONG_SESSION_INTERACTION_THRESHOLD
+    assert DEFAULT_CONFIG["chunk_max_lines"] == LONG_SESSION_LINE_THRESHOLD
+    p = tmp_path / "ocman.toml"
+    save_ocman_config(dict(DEFAULT_CONFIG), p)
+    # Template renders the keys.
+    text = p.read_text(encoding="utf-8")
+    assert "chunk_max_interactions =" in text
+    assert "chunk_max_lines =" in text
+    # Read back defaults, then an override.
+    assert load_ocman_config(p)["chunk_max_lines"] == LONG_SESSION_LINE_THRESHOLD
+    p.write_text(text.replace(f"chunk_max_lines = {LONG_SESSION_LINE_THRESHOLD}",
+                              "chunk_max_lines = 777"), encoding="utf-8")
+    assert load_ocman_config(p)["chunk_max_lines"] == 777
+
+
 def test_db_show_info_backups_section(temp_db, capsys, monkeypatch, tmp_path):
     import ocman
     from ocman import db_show_info, save_ocman_config, DEFAULT_CONFIG, OCMAN_CONFIG_PATH

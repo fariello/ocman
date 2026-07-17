@@ -6,7 +6,8 @@
   recovered transcript/restart Markdown and the compaction LLM input stay manageable,
   instead of only being able to TRUNCATE (drop older turns). Export (.ocbox) chunking
   is explicitly OUT of scope (see Non-goals).
-- Status: reviewed
+- Status: EXECUTED
+- Approval: approved by maintainer 2026-07-17
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -19,6 +20,9 @@
   OUT, see plan-review); (3) split on INTERACTION boundaries, never mid-turn; (4)
   filenames use the filter-style stem sub-segment `.part-NNofMM`. Promoted to to-review.
 - 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED. Re-verified claims against cli.py. PR-001 (HIGH, FIXED): the filename claim was false - parse_recovery_name does NOT strip a trailing segment (greedy `(.+)` folds `.part-NNofMM` and even today's filter `.<scope>` INTO the sid, cli.py:3539,3556-3560); D-3 now REQUIRES fixing the parser + a filter regression test. PR-002 (HIGH, RESOLVED BY SCOPE CUT): export `--to` is a file not a dir (cli.py:12292-12305); maintainer decided export chunking is OUT of scope entirely, removing the problem. PR-003 (MEDIUM, FIXED): recover_from_export has THREE call sites (cli.py:13299,13322,13427), all must thread `chunk`. PR-004 (MEDIUM, FIXED): removed the silent "chunk wins / ignore --max-lines" framing - under --chunk, --max-* set per-part size (no conflict). PR-005 (LOW, FIXED): CONFIG_TEMPLATE must explain the two-knob (trigger vs part-size) relationship. PR-006 (LOW, FIXED): added the filter-parse regression test. Also removed a stray code-fence and added an execution-contract gate. Maintainer decisions: interactive prompt gets a [c]hunk choice AND a --chunk flag; export chunking dropped (YAGNI + partial-bundle integrity cost). Status -> reviewed.
+
+- 2026-07-17 approved by maintainer; export chunking confirmed OUT (YAGNI); Status -> approved.
+- 2026-07-17 EXECUTED (its_direct/pt3-claude-opus-4.8): PR-001 fixed parse_recovery_name (strips one trailing .part-/.scope segment, re-parses; round-trip + filter-regression tests). Added chunk_turns() (interaction-boundary packing, never splits a turn, oversized interaction -> own part) and part_recovery_name() (.part-NNofMM, zero-padded, total==1 => plain name) with unit tests. Added chunk_max_interactions/chunk_max_lines to DEFAULT_CONFIG + CONFIG_TEMPLATE (two-knob doc) with a round-trip test. Reworked prompt_for_truncation to return LargeSessionChoice(full|truncate|chunk) with a [c]hunk choice; anti-regression + non-interactive tests. recover_from_export gained chunk= (threaded to all 3 call sites); chunk mode writes N transcript/restart/prompt parts. compact --chunk expands to one estimate/run entry per part, run_compaction gained output_name so parts do not collide; cost table sums parts. --chunk flag added to session recover|compact via _add_recovery_opts + carry_recovery. Export untouched (out of scope). O-1 (per-part restart index) not implemented (non-blocking nicety). Full suite: 327 passed, 2 skipped. Docs (README, ARCHITECTURE, CHANGELOG, CONFIG_TEMPLATE) updated. Status -> EXECUTED.
 
 ## Goal
 

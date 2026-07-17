@@ -2,6 +2,23 @@
 
 ## [Unreleased]
 
+### Added
+- **Chunk large sessions (`--chunk` on `recover` / `compact`).** Instead of only being
+  able to truncate a large session (dropping older turns), you can now split it into
+  ordered, self-contained parts named `YYYYMMDD-HHMM-<session_id>.part-NNofMM.<kind>.md`.
+  Splitting happens on interaction boundaries (never mid-turn), so nothing is dropped.
+  `--max-lines` / `--max-interactions` set the per-part size (defaults from the new
+  `chunk_max_lines` / `chunk_max_interactions` config keys); the interactive large-
+  session prompt gains a `[c]hunk` choice. `compact --chunk` sends each part to the LLM
+  separately (so each fits the context window), writes `...part-NNofMM.compacted.md`,
+  and sums all parts in the pre-run cost table. Export (.ocbox) is not chunked.
+
+### Fixed
+- **`parse_recovery_name` folded a trailing name segment into the session id.** A
+  filter output like `...<sid>.<scope>.compacted.md` (and now chunk part names) parsed
+  the session id as `<sid>.<scope>` instead of the bare `<sid>`. It now strips one
+  trailing segment and re-parses, so both forms round-trip correctly.
+
 ### Changed
 - **Guard against mutating the DB while OpenCode is running.** Every destructive/
   mutating command (session/project delete, batch delete, db clean, clean-orphans,

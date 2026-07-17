@@ -27,11 +27,15 @@ from ocman import (
     call_compaction_api,
     estimate_tokens,
     estimate_cost,
+    chunk_turns,
+    count_interactions,
+    part_recovery_name,
     SessionInfo,
     ModelInfo,
     Turn,
     RecoveryError,
 )
+from datetime import datetime
 
 FIXTURE = Path(__file__).parent / "fixtures" / "opencode_export.json"
 
@@ -205,6 +209,77 @@ def test_recover_from_export_writes_outputs(tmp_path):
     assert "ses_fixture01" in restart_text
 
 
+def test_recover_from_export_chunk_writes_multiple_parts(tmp_path):
+    """--chunk splits the fixture into >1 part with .part-NNofMM names; every part
+    parses and no turn is dropped (all interactions appear across the parts)."""
+    from ocman import parse_recovery_name, find_turns, count_interactions
+    import json as _json
+    out_dir = tmp_path / "out"
+    total_interactions = count_interactions(
+        find_turns(_json.loads(FIXTURE.read_text(encoding="utf-8")), include_tools=False, verbosity=0))
+    assert total_interactions >= 2  # fixture must have enough to split
+
+    written = recover_from_export(
+        export_path=FIXTURE,
+        output_dir=out_dir,
+        session=_session(),
+        include_tools=False,
+        all_roles=False,
+        verbosity=0,
+        max_interactions=1,  # 1 interaction per part -> forces multiple parts
+        chunk=True,
+    )
+    transcripts = sorted(p for p in written if p.name.endswith(".transcript.md"))
+    assert len(transcripts) == total_interactions  # one part per interaction
+    for p in transcripts:
+        assert ".part-" in p.name
+        sid, dt, kind = parse_recovery_name(p)
+        assert sid == "ses_fixture01"
+        assert kind == "transcript"
+    # Every part file was actually written.
+    for p in written:
+        assert p.exists()
+
+
+def test_prompt_for_truncation_choices_backward_compat(monkeypatch):
+    """Anti-regression: the old N/l/i/b choices still map to the same effective
+    (max_lines, max_interactions); the new [c] choice yields mode='chunk'."""
+    from ocman import prompt_for_truncation, Turn
+    turns = [Turn("user", "q", 1, "$"), Turn("assistant", "a", 2, "$")]
+    monkeypatch.setattr("sys.stdin.isatty", lambda: True)
+
+    def _answers(seq):
+        it = iter(seq)
+        monkeypatch.setattr("builtins.input", lambda _p="": next(it))
+
+    _answers(["n"])
+    c = prompt_for_truncation(turns, 9999, 999)
+    assert c.mode == "full" and c.max_lines is None and c.max_interactions is None
+
+    _answers(["l", "500"])
+    c = prompt_for_truncation(turns, 9999, 999)
+    assert c.mode == "truncate" and c.max_lines == 500 and c.max_interactions is None
+
+    _answers(["i", "42"])
+    c = prompt_for_truncation(turns, 9999, 999)
+    assert c.mode == "truncate" and c.max_interactions == 42 and c.max_lines is None
+
+    _answers(["b", "500", "42"])
+    c = prompt_for_truncation(turns, 9999, 999)
+    assert c.mode == "truncate" and c.max_lines == 500 and c.max_interactions == 42
+
+    _answers(["c", "10", "1000"])
+    c = prompt_for_truncation(turns, 9999, 999)
+    assert c.mode == "chunk" and c.max_interactions == 10 and c.max_lines == 1000
+
+
+def test_prompt_for_truncation_non_interactive_is_full(monkeypatch):
+    from ocman import prompt_for_truncation, Turn
+    monkeypatch.setattr("sys.stdin.isatty", lambda: False)
+    c = prompt_for_truncation([Turn("user", "q", 1, "$")], 9999, 999)
+    assert c.mode == "full"
+
+
 # --------------------------------------------------------------------------------------
 # TEST-7: pure estimators
 # --------------------------------------------------------------------------------------
@@ -224,3 +299,67 @@ def test_estimate_cost_math_and_none_model():
 
     unpriced = ModelInfo("p", "m", "M", "https://x/v1", "k", None, None, True)
     assert estimate_cost(1000, 500, unpriced) is None
+
+
+# --------------------------------------------------------------------------------------
+# chunk_turns (D-2) and part_recovery_name (D-3)
+# --------------------------------------------------------------------------------------
+
+def _convo(n_interactions: int) -> list[Turn]:
+    """n user+assistant interaction pairs."""
+    turns = []
+    for i in range(n_interactions):
+        turns.append(Turn("user", f"q{i}", 2 * i + 1, f"$.m[{2*i}]"))
+        turns.append(Turn("assistant", f"a{i}", 2 * i + 2, f"$.m[{2*i+1}]"))
+    return turns
+
+
+def test_chunk_turns_empty():
+    assert chunk_turns([], max_interactions=10, max_lines=1000) == []
+
+
+def test_chunk_turns_fits_in_one_part():
+    turns = _convo(3)
+    parts = chunk_turns(turns, max_interactions=10, max_lines=10000)
+    assert len(parts) == 1
+    assert parts[0] == turns
+
+
+def test_chunk_turns_by_interaction_limit():
+    turns = _convo(5)
+    parts = chunk_turns(turns, max_interactions=2, max_lines=1_000_000)
+    # 5 interactions, 2 per part -> 3 parts (2,2,1)
+    assert [sum(1 for t in p if t.role == "user") for p in parts] == [2, 2, 1]
+    # concatenation equals the original (nothing dropped / reordered)
+    flat = [t for p in parts for t in p]
+    assert flat == turns
+
+
+def test_chunk_turns_never_splits_an_interaction_and_ordering_preserved():
+    turns = _convo(4)
+    parts = chunk_turns(turns, max_interactions=1, max_lines=1_000_000)
+    assert len(parts) == 4
+    for p in parts:
+        # each part is exactly one whole interaction (user + assistant), never split
+        assert [t.role for t in p] == ["user", "assistant"]
+    assert [t for p in parts for t in p] == turns
+
+
+def test_chunk_turns_oversized_single_interaction_is_own_part():
+    big = Turn("user", "x\n" * 5000, 1, "$.m[0]")  # far exceeds max_lines alone
+    turns = [big, Turn("assistant", "ok", 2, "$.m[1]"),
+             Turn("user", "small", 3, "$.m[2]"), Turn("assistant", "ok2", 4, "$.m[3]")]
+    parts = chunk_turns(turns, max_interactions=100, max_lines=100)
+    # The oversized interaction ships as its own part; nothing is dropped or split.
+    assert [t for p in parts for t in p] == turns
+    assert big in parts[0]
+    assert len(parts[0]) >= 1
+
+
+def test_part_recovery_name_scheme_and_padding():
+    dt = datetime(2026, 7, 6, 14, 32)
+    # total==1 -> plain canonical name (no part segment)
+    assert part_recovery_name("ses_abc", dt, "transcript", 1, 1) == "20260706-1432-ses_abc.transcript.md"
+    # multi-part -> zero-padded to width of total
+    assert part_recovery_name("ses_abc", dt, "transcript", 1, 3) == "20260706-1432-ses_abc.part-1of3.transcript.md"
+    assert part_recovery_name("ses_abc", dt, "compacted", 7, 123) == "20260706-1432-ses_abc.part-007of123.compacted.md"
