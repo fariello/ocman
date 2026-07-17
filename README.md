@@ -310,10 +310,25 @@ Global options work on any subcommand and may appear before or after it.
 
 ### `session` (work with sessions)
 
+Every place ocman lists sessions (`session list`, `ls`, `list sessions`, `search`, and
+the interactive pickers) prints the same per-session "header": an identity line
+(`Session ID: ... Name: ...`, prefixed with a list number where applicable) followed by
+two aligned tables, all grouped under a `Project:` line:
+
+- Table 1: Start, Last active, Duration, Tokens In, Tok Out, Tok Cache.
+- Table 2: Messages, Interactions, DB Parts, Cost.
+
+"Duration" is derived from the timestamps and "Last active" is the last-updated time
+(there is no separate "finished" marker). Headers are shown bold on a blue background
+when color is enabled (honoring `NO_COLOR`/`FORCE_COLOR`; never low-contrast). Pass
+`-b`/`--brief` for a terse one-line-per-session form instead of the tables. Session
+counts (Messages / Interactions / DB Parts) are cheap DB-derived approximations; an
+Interactions value of `n/a` means that session lacks reliable role data.
+
 | Command | Description |
 |:---|:---|
-| `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Also `session list in NAME`. Add `-A/--all-sessions` to include subagents. |
-| `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents. Also `search QUERY in [project\|session] NAME`. |
+| `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Sessions are grouped by `Project:` and each is shown with a two-table header (Start / Last active / Duration / Tokens; and Messages / Interactions / DB Parts / Cost). Add `-A/--all-sessions` to include subagents; `-b/--brief` for the terse one-line-per-session form. Also `session list in NAME`. |
+| `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. Each hit uses the same per-session two-table header as `session list`, followed by the matching-line snippets. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents; `-b/--brief` for the terse form. Also `search QUERY in [project\|session] NAME`. |
 | `ocman session show [specs...]` | Show details for sessions (bare form shows details). Accepts multiple target specs. `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
 | `ocman session recover [specs...]` | Recover sessions to restart-ready Markdown (omit specs to pick interactively). Accepts multiple target specs. `--chunk` splits a large session into ordered `.part-NNofMM` files instead of truncating (nothing dropped); `-ml`/`-mi` set the per-part size. |
 | `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). `--chunk` compacts each part separately (one API call per part) and writes `...part-NNofMM.compacted.md`. |

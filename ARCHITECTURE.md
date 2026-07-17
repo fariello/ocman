@@ -163,6 +163,25 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   prompt. The prompt is skipped only via `confirm_destructive(assume_yes=...)`, wired from an
   op's existing prompt-skip condition (e.g. the delete functions' `confirm=False`, used by the TUI).
 
+- **Unified session-header rendering (`render_session_header` + `render_session_list`).**
+  Every CLI surface that lists sessions (`session list`/`ls`/`list sessions`, `search`,
+  and the interactive `display_sessions` picker) funnels through ONE renderer so the
+  per-session block is byte-identical everywhere. `render_session_header(row, stats, *,
+  index=, compact=)` emits the identity line plus two vistab tables (Start/Last
+  active/Duration/Tokens; Messages/Interactions/DB Parts/Cost); `compact=True` returns
+  the legacy one-line form (also single-source). `render_session_list` groups rows by
+  project (`Project:` header per distinct project, first-appearance order) and shows a
+  continuous global 1..N index that matches `resolve_session_spec` fetch-order indexing,
+  so `recover <N>` stays correct. Tables use vistab `style="none"` with a bold
+  bright-white-on-blue header, gated by `table.set_color(_color_enabled())` (vistab's
+  library API does not auto-honor `NO_COLOR`, so ocman gates it explicitly; never
+  faint/dim per the accessibility rule). Duration is derived via `_fmt_duration`
+  (`updated - created`, ASCII `-` when unknown); "Last active" is the last-updated time
+  (no true finish marker). The picker adapts `SessionInfo` to a row dict but looks up
+  real tokens/cost/stats from `db_list_sessions`/`db_get_session_stats` so its tables are
+  truthful, not zeros. The `-b/--brief` flag selects the compact form. The TUI is
+  separate and unaffected.
+
 - **Large-session chunking (`chunk_turns` + `part_recovery_name`).** `recover`/`compact`
   can split a large session into ordered parts instead of truncating. The pure seam
   `chunk_turns(turns, max_interactions=, max_lines=)` groups turns by the same

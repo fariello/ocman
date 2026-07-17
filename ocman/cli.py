@@ -1542,9 +1542,26 @@ def format_timestamp(value: str) -> str:
     return value
 
 
+def _sessioninfo_to_row(session: "SessionInfo", db_row: dict | None) -> dict:
+    """Adapt a SessionInfo (+ optional db_list_sessions row) to the row dict shape
+    render_session_header consumes. Prefer the DB row (has tokens/cost/project_dir);
+    fall back to the SessionInfo's id/title/created/updated when the id is not in the
+    DB map (never fabricate non-zero token/cost values)."""
+    if db_row is not None:
+        return db_row
+    return {
+        "id": session.session_id, "title": session.title,
+        "created": session.created, "updated": session.updated,
+        "cost": None, "tokens_input": None, "tokens_output": None,
+        "tokens_cache_read": None, "project_dir": None, "parent_id": None,
+    }
+
+
 def display_sessions(sessions: list[SessionInfo]) -> None:
     """
-    Display sessions in an interactive numbered list.
+    Display sessions in an interactive numbered list, using the shared per-session
+    renderer so a picker looks identical to `ocman session list`. Looks up real
+    stats/tokens/cost from the DB so the two tables are truthful (D-4a).
 
     Args:
         sessions:
@@ -1555,18 +1572,16 @@ def display_sessions(sessions: list[SessionInfo]) -> None:
     print(color_bold("Available opencode sessions"))
     print()
 
-    index_width = len(str(len(sessions)))
+    # Real-data lookup: build id -> db row and id -> stats maps once.
+    try:
+        db_rows = {r["id"]: r for r in db_list_sessions()}
+        stats_map = db_get_session_stats()
+    except Exception:
+        db_rows, stats_map = {}, {}
 
-    for index, session in enumerate(sessions, start=1):
-        title = truncate(session.title, 72)
-
-        print(f"{color_cyan(f'{index:>{index_width}}.')} {color_bold(title)}")
-        print(f"    ID:      {color_dim(session.session_id)}")
-        print(f"    Updated: {format_timestamp(session.updated)}")
-        print(f"    Created: {format_timestamp(session.created)}")
-        print()
-
-    pass
+    rows = [_sessioninfo_to_row(s, db_rows.get(s.session_id)) for s in sessions]
+    print(render_session_list(rows, stats_map))
+    print()
 
 
 def collapse_to_preview(text: str, max_chars: int = 100) -> str:
@@ -4628,6 +4643,31 @@ def _fmt_ts(epoch_ms) -> str:
         return str(epoch_ms)
 
 
+def _fmt_duration(created_ms, updated_ms) -> str:
+    """Human duration between two epoch-ms timestamps (updated - created).
+
+    Returns a plain ASCII ``-`` (NOT the em-dash glyph used elsewhere for empty
+    cells) when either bound is missing/unparseable or when updated < created, so a
+    numeric column never shows a bogus duration. Format: ``<d>d HH:MM:SS`` (the
+    ``<d>d `` prefix is dropped when the span is under a day).
+    """
+    if created_ms is None or updated_ms is None:
+        return "-"
+    try:
+        start = int(created_ms)
+        end = int(updated_ms)
+    except (TypeError, ValueError):
+        return "-"
+    if end < start:
+        return "-"
+    total_s = (end - start) // 1000
+    days, rem = divmod(total_s, 86400)
+    h, rem = divmod(rem, 3600)
+    m, s = divmod(rem, 60)
+    hms = f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{days}d {hms}" if days else hms
+
+
 def _display_worktree(worktree: str) -> str:
     """
     Human-friendly label for a project worktree.
@@ -4639,6 +4679,102 @@ def _display_worktree(worktree: str) -> str:
     if worktree in ("/", "", None):
         return "global (/)"
     return worktree
+
+
+def _session_stats_for(row: dict, stats: dict | None) -> dict:
+    """Resolve a session's stats dict (msgs/interactions/parts/has_interactions),
+    falling back to zeros/unknown when not provided."""
+    if stats:
+        return stats
+    return {"msgs": 0, "interactions": 0, "parts": 0, "has_interactions": False}
+
+
+def render_session_header(row: dict, stats: dict | None = None, *,
+                          index: int | None = None, compact: bool = False,
+                          indent: str = "  ") -> str:
+    """The ONE canonical per-session block used by every session-listing surface.
+
+    ``row`` is a db_list_sessions dict; ``stats`` is that session's
+    db_get_session_stats entry (or None -> zeros/"n/a"). ``index`` (1-based) prefixes
+    ``<N>. `` when the caller enumerated a list; omitted when None. ``compact=True``
+    returns the legacy one-line-per-session form. BOTH forms are produced here so they
+    are byte-identical across list / search / pickers; no caller builds its own string.
+    """
+    st = _session_stats_for(row, stats)
+    sid = row.get("id", "")
+    title = row.get("title") or "(untitled)"
+    prefix = "⤷ " if row.get("parent_id") else ""
+    num = f"{index}. " if index is not None else ""
+    has_inter = st.get("has_interactions", False)
+    inter_str = fmt_int(st.get("interactions", 0)) if has_inter else "n/a"
+
+    if compact:
+        # Legacy terse one-line-per-session form (single source of truth).
+        stats_str = (f"~msgs: {fmt_int(st.get('msgs', 0))}  "
+                     f"~interactions: {inter_str}  ~parts: {fmt_int(st.get('parts', 0))}")
+        line1 = f"{indent}{num}{color_bold(f'{prefix}{title}')}"
+        line2 = f"{indent}     ID: {sid}  Updated: {_fmt_ts(row.get('updated'))}  {stats_str}"
+        return f"{line1}\n{line2}"
+
+    # Full form: identity line + two tables.
+    ident = f"{indent}{num}Session ID: {color_bold(sid)}   Name: {color_bold(f'{prefix}{title}')}"
+
+    # Color/style is gated on ocman's own NO_COLOR/FORCE_COLOR/TTY rule; when off,
+    # set_color(False) makes vistab emit a plain (ANSI-free) table. Header styling is
+    # high-contrast (bold bright-white on blue), never faint/dim (accessibility rule).
+    color_on = _color_enabled()
+
+    def _styled(tbl):
+        tbl.set_color(color_on)
+        if color_on:
+            tbl.set_header_style(fg="bright_white", bg="blue", bold=True)
+        return tbl
+
+    t1 = _styled(vistab.Vistab(style="none",
+                               header=["Start", "Last active", "Duration",
+                                       "Tokens In", "Tok Out", "Tok Cache"]))
+    t1.add_row([
+        _fmt_ts(row.get("created")), _fmt_ts(row.get("updated")),
+        _fmt_duration(row.get("created"), row.get("updated")),
+        fmt_int(row.get("tokens_input")), fmt_int(row.get("tokens_output")),
+        fmt_int(row.get("tokens_cache_read")),
+    ])
+    t1.set_cols_align(["l", "l", "r", "r", "r", "r"])
+
+    t2 = _styled(vistab.Vistab(style="none",
+                               header=["Messages", "Interactions", "DB Parts", "Cost"]))
+    t2.add_row([
+        fmt_int(st.get("msgs", 0)), inter_str,
+        fmt_int(st.get("parts", 0)), fmt_cost(row.get("cost")),
+    ])
+    t2.set_cols_align(["r", "r", "r", "r"])
+
+    tbl_indent = indent + "  "  # small 2-space indent under the identity line
+    body = "\n".join(tbl_indent + ln for ln in (t1.draw() + "\n" + t2.draw()).splitlines())
+    return f"{ident}\n{body}"
+
+
+def render_session_list(rows: list[dict], stats_map: dict | None = None, *,
+                        compact: bool = False, enumerate_from: int = 1) -> str:
+    """Render an ordered list of session rows, grouped by project.
+
+    Emits ``Project: <dir>`` once whenever the project changes (and always at least
+    once, including for a single project). The index shown next to each session is its
+    GLOBAL 1-based position in ``rows`` (fetch order), so it matches what
+    ``resolve_session`` resolves for a numeric spec (never a per-project reset).
+    """
+    stats_map = stats_map or {}
+    out: list[str] = []
+    current_project = object()  # sentinel so the first row always prints a header
+    for offset, row in enumerate(rows):
+        idx = enumerate_from + offset
+        proj = _display_worktree(row.get("project_dir"))
+        if proj != current_project:
+            out.append(f"Project: {proj}")
+            current_project = proj
+        out.append(render_session_header(
+            row, stats_map.get(row.get("id")), index=idx, compact=compact))
+    return "\n".join(out)
 
 
 def print_projects(
@@ -5749,6 +5885,7 @@ def _legacy_defaults(config: dict) -> dict:
         "list_projects": False,
         "project": None,
         "list_sessions": False,
+        "brief_list": False,
         "all_sessions": False,
         "limit": None,
         "json_output": False,
@@ -5917,6 +6054,8 @@ def _add_search_opts(p: argparse.ArgumentParser) -> None:
                    help="Max matching lines to show per session (default: 10).")
     p.add_argument("-A", "--all-sessions", action="store_true",
                    help="Include subagent/child sessions.")
+    p.add_argument("-b", "--brief", dest="brief_list", action="store_true",
+                   help="Terse one-line-per-session results instead of the two-table view.")
 
 
 def _add_while_running(p: argparse.ArgumentParser) -> None:
@@ -5990,6 +6129,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Include subagent/child sessions.")
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N sessions (a truncation note reports the rest).")
+    sp.add_argument("-b", "--brief", dest="brief_list", action="store_true",
+                    help="Terse one-line-per-session listing instead of the two-table view.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     sp = new_action(p_session, s_sub, "search", help="Search session content and titles.")
@@ -6245,6 +6386,7 @@ def _apply_search(out: dict, ns: argparse.Namespace, g) -> None:
     out["search"] = g("query")
     out["limit"] = g("limit", 10)
     out["all_sessions"] = bool(g("all_sessions", False))
+    out["brief_list"] = bool(g("brief_list", False))
 
     scope_name = g("scope_name") or g("name")
     scope_kind = g("scope_kind")
@@ -6395,6 +6537,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["all_sessions"] = bool(g("all_sessions", False))
             out["limit"] = g("limit", None)
             out["json_output"] = bool(g("json", False))
+            out["brief_list"] = bool(g("brief_list", False))
         elif action == "search":
             _apply_search(out, ns, g)
         elif action == "show":
@@ -12866,47 +13009,11 @@ def main() -> None:
         print()
         
         session_stats = db_get_session_stats()
-        for idx, s in enumerate(sessions, start=1):
-            title = s["title"]
-            if len(title) > 60:
-                title = title[:57] + "..."
-            sid = s["id"]
-            stat = session_stats.get(sid, {})
-            msgs = stat.get("msgs", 0)
-            interactions = stat.get("interactions", 0)
-            parts = stat.get("parts", 0)
-            has_interactions = stat.get("has_interactions", True)
-            prefix = "⤷ " if s["parent_id"] else ""
-
-            if _project_id:
-                # Single-project listing: keep the compact, characterized form.
-                updated = _fmt_ts(s["updated"])
-                if has_interactions:
-                    stats_str = f"~msgs: {msgs}  ~interactions: {interactions}  ~parts: {parts}"
-                else:
-                    stats_str = f"~msgs: {msgs}  ~parts: {parts}"
-                print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')}")
-                print(f"       ID: {sid}  Updated: {updated}  {color_dim(stats_str)}")
-                continue
-
-            # Multi-project (dir-scope / all-projects) listing: rich multi-line
-            # stanza. Users pick sessions by directory + content, so surface the
-            # project dir, first/last active, cost, and split tokens.
-            proj_dir = _display_worktree(s["project_dir"]) if s["project_dir"] else "(no project)"
-            first = _fmt_ts(s["created"])
-            last = _fmt_ts(s["updated"])
-            if has_interactions:
-                counts = (f"Msgs: {fmt_int(msgs, 8)}  Interactions: {fmt_int(interactions, 8)}"
-                          f"  DB Parts: {fmt_int(parts, 8)}")
-            else:
-                counts = f"Msgs: {fmt_int(msgs, 8)}  DB Parts: {fmt_int(parts, 8)}"
-            print(f"  {idx:>3}. ID: {color_bold(sid)} in {proj_dir}. Name: {color_bold(f'{prefix}{title}')}")
-            print(f"       {color_dim(counts)}")
-            print(color_dim(
-                f"       First active: {first}, Last active: {last}, Cost: {fmt_cost(s['cost'])}, "
-                f"Tokens: {fmt_int(s['tokens_input'], 11)} in / {fmt_int(s['tokens_output'], 11)} out"
-                f" / {fmt_int(s['tokens_cache_read'], 11)} cache"
-            ))
+        # Single canonical renderer for EVERY session-listing surface: the two-table
+        # per-session block grouped by project (or the terse one-line form under
+        # --brief). See render_session_header / render_session_list.
+        print(render_session_list(sessions, session_stats,
+                                  compact=bool(getattr(args, "brief_list", False))))
         print()
         if _limit_withheld:
             print(color_dim(
@@ -12976,23 +13083,20 @@ def main() -> None:
 
         print(color_bold(f"Search results for {args.search!r}{scope} ({len(results)} shown):"))
         print()
+        _search_stats = db_get_session_stats()
+        _search_brief = bool(getattr(args, "brief_list", False))
         for idx, s in enumerate(results, start=1):
-            title = s["title"]
-            if len(title) > 60:
-                title = title[:57] + "..."
-            updated = _fmt_ts(s["updated"])
-            project_hint = f"  [{s['project_dir'][:30]}]" if not _project_id and s["project_dir"] else ""
-            prefix = "⤷ " if s["parent_id"] else ""
-            where = color_dim(f"({s['match_where']})")
-            print(f"  {idx:>3}. {color_bold(f'{prefix}{title}')} {where}{project_hint}")
-            print(f"       ID: {s['id']}  Updated: {updated}")
+            # Same canonical per-session header as `session list`, then the
+            # search-specific match-location + snippet lines beneath it.
+            print(render_session_header(s, _search_stats.get(s["id"]),
+                                        index=idx, compact=_search_brief))
+            print(f"       (matched in {s['match_where']})")
             shown = s.get("snippets") or ([s["snippet"]] if s.get("snippet") else [])
             for line in shown:
-                print(f"       {color_dim(line)}")
+                print(f"       {line}")
             extra = s.get("match_count", len(shown)) - len(shown)
             if extra > 0:
-                print(color_dim(f"       … +{extra} more matching line(s)"
-                                f" (use -n to show more)"))
+                print(f"       ... +{extra} more matching line(s) (use -n to show more)")
         print()
         print("Use 'ocman session show <id>' to view details, or add -H/-T for a preview.")
         return

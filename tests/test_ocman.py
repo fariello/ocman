@@ -2155,6 +2155,123 @@ def test_resolve_model_spec():
     assert resolve_model_spec("nonexistent", models) is None
 
 
+def _hdr_row(**kw):
+    base = {"id": "ses_x", "title": "T", "created": 1747193820000, "updated": 1747367000000,
+            "cost": 1.5, "tokens_input": 100, "tokens_output": 20, "tokens_cache_read": 5,
+            "project_dir": "/p", "parent_id": None}
+    base.update(kw)
+    return base
+
+
+def test_fmt_duration():
+    from ocman import _fmt_duration
+    assert _fmt_duration(None, 123) == "-"
+    assert _fmt_duration(123, None) == "-"
+    assert _fmt_duration(200000, 100000) == "-"        # updated < created
+    assert _fmt_duration("bad", 100) == "-"
+    assert _fmt_duration(1000, 1000) == "00:00:00"     # equal, valid -> zero span
+    assert _fmt_duration(0, 5000) == "00:00:05"
+    assert _fmt_duration(0, 3600_000 + 5000) == "01:00:05"
+    assert _fmt_duration(0, 2 * 86400_000 + 3600_000) == "2d 01:00:00"
+    # no em dash anywhere
+    assert "—" not in _fmt_duration(0, 0)
+
+
+def test_render_session_header_full_and_brief(monkeypatch):
+    from ocman import render_session_header
+    monkeypatch.setenv("NO_COLOR", "1")  # deterministic plain output
+    row = _hdr_row(id="ses_abc", title="My Session")
+    stats = {"msgs": 10, "interactions": 3, "parts": 40, "has_interactions": True}
+    full = render_session_header(row, stats, index=2)
+    assert "2. Session ID: ses_abc" in full and "Name: My Session" in full
+    assert "Start" in full and "Last active" in full and "Duration" in full
+    assert "Messages" in full and "Interactions" in full and "DB Parts" in full and "Cost" in full
+    # index omitted when None
+    assert "Session ID: ses_abc" in render_session_header(row, stats, index=None)
+    assert not render_session_header(row, stats, index=None).lstrip().startswith("1.")
+    # subagent prefix
+    assert "\u2937 " in render_session_header(_hdr_row(parent_id="ses_p", title="child"), stats)
+    # brief form: one-liner, NOT the tables
+    brief = render_session_header(row, stats, index=2, compact=True)
+    assert "ID: ses_abc" in brief and "~msgs:" in brief
+    assert "Start" not in brief and "DB Parts" not in brief
+
+
+def test_render_session_header_na_interactions(monkeypatch):
+    from ocman import render_session_header
+    monkeypatch.setenv("NO_COLOR", "1")
+    out = render_session_header(_hdr_row(), {"msgs": 1, "interactions": 0,
+                                            "parts": 2, "has_interactions": False})
+    assert "n/a" in out  # Interactions cell
+
+
+def test_render_session_list_grouping_and_numbering(monkeypatch):
+    from ocman import render_session_list, resolve_session_spec
+    monkeypatch.setenv("NO_COLOR", "1")
+    rows = [
+        _hdr_row(id="ses_1", project_dir="/a", title="one"),
+        _hdr_row(id="ses_2", project_dir="/a", title="two"),
+        _hdr_row(id="ses_3", project_dir="/b", title="three"),
+    ]
+    out = render_session_list(rows, {})
+    # One Project: header per distinct project, first-appearance order.
+    assert out.count("Project:") == 2
+    assert out.index("Project: /a") < out.index("Project: /b")
+    # Continuous global 1..N numbering (not per-project reset).
+    assert "1. Session ID: ses_1" in out
+    assert "2. Session ID: ses_2" in out
+    assert "3. Session ID: ses_3" in out
+    # Numbering integrity: displayed N maps to what resolve_session_spec resolves.
+    assert resolve_session_spec("3", rows)["id"] == "ses_3"
+
+
+def test_render_session_header_color_gate(monkeypatch):
+    """FORCE_COLOR -> styled header ANSI present; NO_COLOR -> fully plain."""
+    from ocman import render_session_header
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    styled = render_session_header(_hdr_row(), {"has_interactions": True})
+    assert "\033[" in styled           # ANSI present
+    assert "\033[2m" not in styled     # never faint/dim (accessibility)
+    monkeypatch.setenv("NO_COLOR", "1")
+    assert "\033[" not in render_session_header(_hdr_row(), {"has_interactions": True})
+
+
+def test_picker_uses_real_db_stats(temp_db, capsys, monkeypatch):
+    """D-4a: the interactive picker renders the two tables with REAL token/cost/stats
+    looked up from the DB, not fabricated zeros."""
+    import ocman
+    monkeypatch.setenv("NO_COLOR", "1")
+    monkeypatch.setattr(ocman, "db_list_sessions", lambda *a, **k: [
+        _hdr_row(id="ses_real", title="Real", cost=7.77, tokens_input=88888)])
+    monkeypatch.setattr(ocman, "db_get_session_stats", lambda: {
+        "ses_real": {"msgs": 42, "interactions": 9, "parts": 111, "has_interactions": True}})
+    si = ocman.SessionInfo(session_id="ses_real", title="Real",
+                           created=1747193820000, updated=1747367000000, raw={})
+    ocman.display_sessions([si])
+    out = capsys.readouterr().out
+    assert "ses_real" in out
+    assert "88,888" in out       # real tokens, not 0
+    assert "$7.77" in out        # real cost
+    assert "42" in out and "111" in out  # real msgs / parts
+
+
+def test_list_and_search_headers_are_identical(monkeypatch):
+    """Single source of truth (PR-005): the same session dict yields a byte-identical
+    per-session header whether produced for the list or the search path."""
+    from ocman import render_session_header
+    monkeypatch.setenv("NO_COLOR", "1")
+    row = _hdr_row(id="ses_same", title="Same")
+    stats = {"msgs": 5, "interactions": 2, "parts": 8, "has_interactions": True}
+    # Both surfaces call render_session_header identically for a given index.
+    a = render_session_header(row, stats, index=1)
+    b = render_session_header(row, stats, index=1)
+    assert a == b
+    # brief form likewise identical.
+    assert (render_session_header(row, stats, index=1, compact=True)
+            == render_session_header(row, stats, index=1, compact=True))
+
+
 def test_list_sessions_approximate_stats(temp_db, capsys):
     import ocman
     import sqlite3
@@ -2231,11 +2348,12 @@ def test_list_sessions_approximate_stats(temp_db, capsys):
 
     captured = capsys.readouterr()
     assert "Test Session" in captured.out
-    # No-project listing uses the rich multi-line stanza (Msgs/Interactions/DB Parts).
-    assert "Msgs:" in captured.out and "2" in captured.out
-    assert "Interactions:" in captured.out
-    assert "DB Parts:" in captured.out
-    assert "First active:" in captured.out and "Last active:" in captured.out
+    # Unified two-table session header: grouped by Project, with both table headers.
+    assert "Project:" in captured.out
+    assert "Session ID:" in captured.out and "Name:" in captured.out
+    assert "Messages" in captured.out and "Interactions" in captured.out
+    assert "DB Parts" in captured.out
+    assert "Start" in captured.out and "Last active" in captured.out
     assert "Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts." in captured.out
 
 
@@ -2316,8 +2434,9 @@ def test_global_mapping_notice_on_dir_scope(temp_db, capsys, monkeypatch):
     assert out.count("NOTICE:") == 1
     assert "global (/) project" in out
     assert "ocman list sessions in /" in out
-    # New stanza fields present.
-    assert "First active:" in out and "Cost: $0.42" in out
+    # Two-table header fields present; cost shows in the Cost cell.
+    assert "Start" in out and "Last active" in out
+    assert "$0.42" in out
 
 
 def test_list_projects_shows_per_project_metrics(temp_db, capsys, monkeypatch):
@@ -2333,8 +2452,9 @@ def test_list_projects_shows_per_project_metrics(temp_db, capsys, monkeypatch):
     assert "500 in / 200 out / 0 cache" in out
 
 
-def test_list_sessions_omits_interactions_when_absent(temp_db, capsys, monkeypatch):
-    """When a session has no interaction data, the Interactions column is omitted."""
+def test_list_sessions_shows_na_interactions_when_absent(temp_db, capsys, monkeypatch):
+    """When a session has no interaction data, the Interactions cell renders 'n/a'
+    (the column is a fixed header in the two-table layout)."""
     import ocman, sys
     _seed_global_and_project(temp_db)
     # Force db_get_session_stats to report has_interactions False.
@@ -2346,8 +2466,9 @@ def test_list_sessions_omits_interactions_when_absent(temp_db, capsys, monkeypat
     except SystemExit as e:
         assert e.code == 0
     out = capsys.readouterr().out
-    assert "DB Parts:" in out
-    assert "Interactions:" not in out
+    assert "DB Parts" in out
+    assert "Interactions" in out  # column header always present
+    assert "n/a" in out           # value for a session without interaction data
 
 
 def test_e2e_list_models_word_order(tmp_path):

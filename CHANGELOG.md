@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Changed
+- **Unified, richer session listings.** `session list` (and `ls` / `list sessions`),
+  `search`, and the interactive session pickers now render every session through one
+  shared "header": an identity line plus two tables (Start / Last active / Duration /
+  Tokens In / Tok Out / Tok Cache; and Messages / Interactions / DB Parts / Cost),
+  grouped under a `Project:` line. Table headers are bold on a blue background when
+  color is enabled (honoring `NO_COLOR` / `FORCE_COLOR`; never low-contrast). The list
+  number matches what `recover <N>` resolves. Pass `-b` / `--brief` for the previous
+  terse one-line-per-session form. "Last active" is the last-updated time and
+  "Duration" is derived from the timestamps (there is no separate "finished" marker).
+
 ### Added
 - **Chunk large sessions (`--chunk` on `recover` / `compact`).** Instead of only being
   able to truncate a large session (dropping older turns), you can now split it into

@@ -6,7 +6,8 @@
   plus two vistab tables) and route every session-listing surface through it, grouping
   by project when more than one project is shown. Add a `--brief` opt-out that keeps
   the old terse one-line-per-session form.
-- Status: reviewed
+- Status: EXECUTED
+- Approval: approved by maintainer 2026-07-17
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -25,6 +26,9 @@
   no true finish marker).
 
 - 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED. Claims re-verified vs cli.py. PR-001 (HIGH, FIXED): `--compact` opt-out collided with the existing `-C/--compact` compaction-model flag (cli.py:6207); renamed to `--brief`. PR-002 (HIGH, RESOLVED by maintainer): pickers only have SessionInfo (id/title/created/updated, cli.py:995-1015) so full tables would be all-zeros; maintainer chose full tables anyway, so D-4a now REQUIRES a real db_list_sessions/db_get_session_stats lookup in the picker path (never fabricated zeros). PR-003 (MEDIUM, FIXED): the numeric `recover <N>` resolves via resolve_session indexing db_list_sessions FETCH order (cli.py:4845-4856), independent of the print pass; D-3 now requires the displayed index == that global fetch-order index (stable partition, no per-project renumber) + a test. PR-004 (MEDIUM, FIXED): aligned the SessionInfo adapter with the real-lookup decision. PR-005 (LOW, FIXED): made the single-source-of-truth test concrete (list vs search per-session header byte-identical, both full and --brief). Open questions resolved with maintainer: flag=`--brief`; pickers=full tables w/ real lookup; single-project prints `Project:` once at top. Status -> reviewed.
+
+- 2026-07-17 approved by maintainer; Status -> approved.
+- 2026-07-17 EXECUTED (its_direct/pt3-claude-opus-4.8): re-verified the peer vistab recipes against installed vistab 1.2.1. Added _fmt_duration (fixed a zero-timestamp edge: a valid 0 is not "missing"; only None/unparseable/negative-span -> "-"), render_session_header (full two tables + compact/--brief one-liner, single source of truth), render_session_list (group by Project once per distinct project, continuous global index matching resolve_session_spec). Routed the session-list block, search hits, and the display_sessions picker (with a real db_list_sessions/db_get_session_stats lookup, not zeros) through it. Added -b/--brief on session list + search (dest brief_list, avoids the -C/--compact collision) threaded through the normalizer. Live-styling decisions made with the maintainer during execution: vistab style="none" (borderless) with a bold bright-white-on-blue header gated by set_color(_color_enabled()) (NO_COLOR->plain, FORCE_COLOR->styled, never faint/dim); 2-space table indent under the identity line; single-project prints Project: once at top; pickers show the full tables. Updated the 3 old list-format tests to the new headers; added _fmt_duration, render_session_header (full/brief/na/color-gate), grouping+numbering, picker-real-lookup, and list==search identical-header tests. Full suite: 334 passed, 2 skipped. Docs (README, ARCHITECTURE, CHANGELOG) updated. Status -> EXECUTED.
 
 ## Goal
 
