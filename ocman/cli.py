@@ -5527,6 +5527,8 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} session show ID", "Show session details"),
         (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
+        (f"{prog} spend", "LLM spend by project (--sessions, --historical)"),
+        (f"{prog} list running", "List running OpenCode instances; flag insecure servers"),
         (f"{prog} logs", "Show historical cleanup/recovery activity"),
         (f"{prog} ui", "Launch the interactive terminal dashboard"),
     ]
@@ -5543,6 +5545,7 @@ def build_help(topic: str | None = None) -> str:
     ]
 
     maintain = [
+        (f"{prog} doctor", "Read-only storage checkup; suggests what to reclaim"),
         (f"{prog} db clean 30 days", "Delete sessions older than a duration"),
         (f"{prog} db clean --older-than 6mo", "Same, compact form (2h/5d/6w/6mo/1y)"),
         (f"{prog} db clean-orphans", "Remove orphaned DB records and sidecar diffs"),
@@ -5604,7 +5607,8 @@ def build_help(topic: str | None = None) -> str:
 
     lines.append(_h_head("Usage", c))
     lines.append(f"  {_h_cmd(prog + ' <command> [options]', c)}")
-    lines.append(f"  {_h_cmd(prog, c)}{_h_dim('   (no args: lists your projects)', c)}")
+    _noarg = "   (no args: lists this directory's sessions, or all projects if none)"
+    lines.append(f"  {_h_cmd(prog, c)}{_h_dim(_noarg, c)}")
     lines.append("")
 
     lines += section("Browse", browse)
@@ -5618,7 +5622,8 @@ def build_help(topic: str | None = None) -> str:
     lines.append(_help_row(f"{prog} <command> -h", "Options for one command (e.g. 'db clean -h')", c))
     lines.append(_help_row("-v, -vv", "Increase verbosity", c))
     lines.append("")
-    lines.append(_h_dim("Commands are grouped: session, project, db, backup, history, config.", c))
+    lines.append(_h_dim("Groups: session, project, db, backup, history, config; plus "
+                        "doctor, spend, list running.", c))
     lines.append(_h_dim(f"See '{prog} help all' for the complete reference.", c))
     return "\n".join(lines)
 
@@ -5658,6 +5663,20 @@ def build_help_reference() -> str:
             ("create [DEST]", "ZIP backup of all opencode state (streams progress)"),
             ("restore PATH", "Restore from a ZIP archive or directory"),
             ("clean [AGE] [--dry-run]", "Prune old backups (--older-than / '30 days')"),
+        ]),
+        ("storage checkup & reclaim", [
+            ("doctor [--fast|--deep] [--json] [-v]", "Read-only storage checkup (DB/WAL, event bloat, orphans, temp, snapshots)"),
+            ("reclaim", "Guarded cleanup: offline WAL checkpoint + VACUUM (needs OpenCode stopped)"),
+            ("reclaim --reclaim-temp", "Also delete leftover temp files no live process is using"),
+            ("reclaim --reclaim-parts", "Also empty compacted tool-output (verify-or-skip)"),
+            ("reclaim --backups-dir PATH", "Prune a named foreign backup dir (path-safe)"),
+            ("reclaim --force-snapshots PATH", "Delete a snapshot dir (dangerous; distinct confirm)"),
+            ("reclaim [--dry-run --while-running -y]", "Preview / bypass the running guard / skip the normal confirm"),
+        ]),
+        ("spend / running", [
+            ("spend [PROJECT] [--sessions]", "LLM spend by project, or per-session for one project"),
+            ("spend --historical [--json]", "Include spend + tokens on since-deleted sessions"),
+            ("list running [--long --all-users --probe --json]", "Running OpenCode instances; flag insecure control servers"),
         ]),
         ("history / config", [
             ("history show", "Historical activity (alias: 'ocman logs')"),
@@ -6581,8 +6600,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["clean_tmp"] = bool(g("clean_tmp", False))
 
     if group in (None,) and action is None:
-        # No subcommand: behave like the old no-arg default (list projects
-        # via the no-project-context path in main()).
+        # No subcommand: main() lists the current directory's sessions when CWD maps to
+        # a project (or has sessions), otherwise falls back to listing all projects.
         return argparse.Namespace(**out)
 
     if group == "session":
