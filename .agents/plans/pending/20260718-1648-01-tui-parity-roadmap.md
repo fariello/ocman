@@ -1,17 +1,46 @@
-# IPD: Assess functionality - bring the TUI to feature parity with the CLI
+# Roadmap: bring the TUI to feature parity with the CLI (umbrella)
 
 - Date: 2026-07-18
 - Concern: functionality (feature completeness / CLI<->TUI parity), with a ui-ux lens
 - Scope: the Textual TUI package `ocman_tui/` (app + widgets + modals), measured
   against the current CLI feature set in `ocman/cli.py`. The CLI itself is NOT in scope
   (it is the reference implementation).
-- Status: approved (2026-07-18; full 5-phase parity is the release gate; execute phase by phase)
+- Status: roadmap (umbrella; the executable work lives in the per-phase IPDs below)
 - Author: its_direct/pt3-claude-opus-4.8
+
+## What this document is
+
+This is the UMBRELLA / roadmap for the TUI-parity effort, not a single executable plan.
+The assessment found that "bring the TUI to parity" is really an epic: each phase is its
+own design problem (its own tabs/modals, tests, and risk profile). So the executable work
+is split into one focused IPD per phase; this file is the shared reference (findings
+inventory, architecture notes, cross-cutting decisions, and the phase index). Each
+per-phase IPD is written, hardened via `plan-review`, human-approved, then executed and
+moved to `executed/` on its own.
+
+Full 5-phase parity is the release gate (maintainer decision, OQ-5). New TUI views use new
+top-level tabs (maintainer decision, OQ-6).
+
+## Phase index (one IPD per phase)
+
+| Phase | Scope | IPD | Status |
+|-------|-------|-----|--------|
+| 1 | Delete-safety: extract-on-delete in TUI + working clear-history | `executed/20260718-1648-02-tui-p1-delete-safety-ipd.md` | EXECUTED (commit 45eb8c4) |
+| 2 | Storage checkup (read-only doctor view) + guarded reclaim | `pending/20260718-1648-03-tui-p2-doctor-reclaim-ipd.md` | to-review |
+| 3 | Reporting: spend + running views (read-only) | `pending/20260718-1648-04-tui-p3-spend-running-ipd.md` | to-review |
+| 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `pending/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | to-review |
+| 5 | Breadth: project bundles, local move, backup clean, content search | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | to-review |
+
+The one hard exclusion across all phases: the reclaim snapshot-force mode stays CLI-only
+(OQ-2); the TUI shows a note pointing to `ocman reclaim --force-snapshots` / `ocman doctor`.
 
 ## Workflow history
 
 - 2026-07-18 /assess functionality tui-parity (its_direct/pt3-claude-opus-4.8): assessed
   the TUI against the CLI; proposed a phased parity plan.
+- 2026-07-18 restructured into this umbrella + per-phase IPDs (maintainer direction: the
+  parity work should generate several distinct, reviewable IPDs, not one). Phase 1 was
+  already executed (45eb8c4) and is retro-documented as its own executed IPD.
 
 ## Goal
 
@@ -86,12 +115,11 @@ QA = quality/QA. Class: Required (blocks the TUI's purpose as a management UI), 
 | T-14 | Low | Low | NOV | Required (honesty) | **history clear is a stub** ("Planned" button -> `FutureTodoModal`); it should either work (CLI `history clear`) or be removed so the UI does not advertise a dead control. | `app.py:875,1220`; CLI `history clear` |
 | T-15 | Low | Low | PU | Nice | **db rebase absent** (bulk path rewrite). Advanced/rare; `db_rebase_paths` already imported but unwired. | `core.py:51`; CLI `db rebase` |
 
-## Proposed changes (ordered, phased, validatable)
+## Phase breakdown (source spec for the per-phase IPDs)
 
-Each phase is independently executable, testable, and committable. Fix-by-default:
-everything Required/Expected is proposed for THIS parity effort except items whose
-Remediation Risk is Med-High AND whose value is lower (called out as deferrable in Open
-Questions). Order is safety-first, then high-value, then breadth.
+Each phase below is expanded into its own executable IPD (see the Phase index). This
+section is the shared source spec; the per-phase IPD is the authority for execution. Order
+is safety-first, then high-value, then breadth.
 
 ### Phase 1 - Close the safety gap (T-01, T-14). Rem.Risk: Medium.
 1. Wire extract-on-delete into both TUI delete paths so the UI is not more destructive
@@ -201,9 +229,8 @@ Still open (non-blocking for starting; decide before the relevant phase):
   the remote runbook or only the local move.
 - OQ-4 (T-13, Phase 5): is `filter` wanted in the TUI? Under full-parity (OQ-5) this
   likely moves from "deferred" to "included"; confirm at Phase 5.
-- OQ-6 (structure): new top-level tabs per area (Storage/Spend/Running) vs. folding into
-  the existing Database Admin tab. Leaning: a small number of new tabs to avoid crowding
-  one widget. Non-blocking; settle during Phase 2.
+- OQ-6 (structure): RESOLVED - use new top-level tabs per area (Storage/Doctor, Spend,
+  Running), not cards folded into Database Admin (maintainer decision 2026-07-18).
 
 ## Impact of full-parity decision (OQ-5) on the "Not proposed" list
 
@@ -213,15 +240,17 @@ are RECLASSIFIED as in-scope for the release, pending the OQ-3/OQ-4 confirmation
 Phase 5. The only hard exclusion that stands is the reclaim snapshot-force mode (OQ-2),
 which stays CLI-only by explicit decision, with an in-TUI pointer to the CLI.
 
-## Approval and execution gate
+## Execution model (per-phase, not one plan)
 
-This IPD is a proposal. It MUST be reviewed and approved by a human before execution and
-is NOT auto-executed. Recommended next steps:
+This umbrella is NOT executed directly. For each phase:
 
-1. Answer the open questions (especially OQ-5, the release cut line, and OQ-1/OQ-2).
-2. Optionally run `plan-review` to harden it (sets `Status: reviewed`).
-3. On approval, execute phase by phase: implement, run the suite (paste real output),
-   update docs/CHANGELOG, commit path-scoped (never push without direction). Only after a
-   phase is implemented+verified does its work count as done.
-4. When all approved phases are executed, set `Status: executed` and `git mv` this IPD to
-   `.agents/plans/executed/` (verify no pending/executed duplicate).
+1. Its per-phase IPD is written (Status: to-review) using the source spec above.
+2. `plan-review` hardens it (Status: reviewed).
+3. The maintainer approves it (Status: approved).
+4. It is executed: implement, run the suite (paste real output), update docs/CHANGELOG,
+   commit path-scoped (never push without direction).
+5. On completion, its Status becomes `executed` and the per-phase IPD is moved to
+   `.agents/plans/executed/`.
+
+This umbrella stays in `pending/` as the live index until all phases are executed, then it
+too moves to `executed/`. Phase 1's IPD is already in `executed/` (commit 45eb8c4).
