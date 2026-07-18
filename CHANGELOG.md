@@ -14,6 +14,18 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **`ocman doctor` and `ocman reclaim`: diagnose and reclaim OpenCode disk usage.**
+  `doctor` is a read-only checkup (safe even while OpenCode is running) that reports DB/
+  WAL size, integrity, event-log bloat, compacted-part output, orphaned rows/diff files,
+  old sessions, ocman + foreign backup inventory, temp leftovers (`opencode-wal-*.db`,
+  `/tmp/*.so`), and snapshots; each finding names the `ocman` command that fixes it and
+  links the upstream OpenCode issue where relevant, with a summary that separates
+  "ocman can reclaim now" from opt-in and report-only bytes. `reclaim` performs guarded
+  cleanup: a bare run does only offline `wal_checkpoint(TRUNCATE)` + `VACUUM` (refused
+  while any process holds the DB open unless `--while-running`, backup taken first);
+  `--reclaim-temp`, `--reclaim-parts` (verify-or-skip, never deletes the event log),
+  `--backups-dir PATH`, and `--force-snapshots PATH` are opt-in, previewed, and
+  path-safe. New config keys `reclaim_tmp_min_age_hours` and `reclaim_parts_retention_days`.
 - **Chunk large sessions (`--chunk` on `recover` / `compact`).** Instead of only being
   able to truncate a large session (dropping older turns), you can now split it into
   ordered, self-contained parts named `YYYYMMDD-HHMM-<session_id>.part-NNofMM.<kind>.md`.

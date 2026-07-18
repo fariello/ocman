@@ -200,6 +200,28 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   readable/LLM text). The interactive `prompt_for_truncation` now returns a
   `LargeSessionChoice(mode=full|truncate|chunk, max_lines, max_interactions)`.
 
+- **Storage doctor + reclaim (`cli_doctor` / `cli_reclaim`).** `doctor` is a read-only
+  full checkup: `discover_storage_locations()` resolves the OpenCode data dir the way
+  OpenCode itself does (honors `$OPENCODE_DB`, `$XDG_DATA_HOME`, `OPENCODE_CONFIG_DIR`,
+  and the `opencode-<channel>.db` name, resolving the DB path and the data-dir subtrees
+  independently), and `run_doctor_checks()` runs a list of small `check_*` functions that
+  each return a `{status, size, count, detail, fix_cmd, issue_url}` record. DB checks use
+  `db_connect_readonly()` (SQLite `file:...?mode=ro` URI, works on both `_get_sqlite()`
+  backends) so diagnosis provably cannot write and is safe while OpenCode runs; they are
+  schema-defensive (probe `PRAGMA table_info`/`sqlite_master` and `db_schema_fingerprint`
+  via the `migration` table, degrading to `UNKNOWN` rather than guessing or crashing).
+  `reclaim` is guarded: every DB write goes through `_reclaim_guard_db_writes`, which
+  refuses unless BOTH `require_safe_to_mutate` (process enumeration) AND
+  `db_family_open_by_live_pid` (an own-UID `/proc/<pid>/fd` scan for a live handle on the
+  db/-wal/-shm family) are clear, or `--while-running` is given. The only unconditional
+  DB action is offline `wal_checkpoint(TRUNCATE)` + `VACUUM` after a backup;
+  `--reclaim-parts` is verify-or-skip (migration-gated + empirical `time.compacted`
+  probe + `json_set(data,'$.state.output','')` preserving valid JSON), event-row deletion
+  is never offered (report-only), and temp/backups/snapshot deletion is opt-in and
+  path-safe. Design reuses `dir_usage`/`human_size_local`, the `SESSION_RELATIONAL_TABLES`
+  orphan predicate, the `opencode-db-cleanup-*` backup pattern, `emit_json`, and the
+  session-header vistab styling. The TUI is unaffected.
+
 - **Running-OpenCode mutation guard (`require_safe_to_mutate`).** OpenCode has no
   cross-process session lock, so mutating the shared DB/files while an instance runs can
   corrupt state. Every mutating op routes through `require_safe_to_mutate(action, while_running=...)`

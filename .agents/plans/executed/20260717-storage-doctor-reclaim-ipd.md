@@ -9,7 +9,8 @@
   command (and upstream issue link where relevant); and a guarded `ocman reclaim` that
   CLEANS the safe categories (with previews + confirmation), reusing ocman's existing
   sizing, orphan-detection, delete/VACUUM, backup, and running-guard machinery.
-- Status: reviewed
+- Status: EXECUTED
+- Approval: approved by maintainer 2026-07-17
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -72,6 +73,9 @@
   claims carry file:line for the executing agent to re-verify.
 
 - 2026-07-17 /plan-review round 2 (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED (re-review of the re-scoped plan after the opencode.repo-agent verification rounds). Re-verified the ocman-side reuse refs against cli.py (db_show_info WAL/SHM 11640, SESSION_RELATIONAL_TABLES 399, orphan predicate 10748, backups block 11864, helpers dir_usage/human_size_local/emit_json/_get_sqlite/require_safe_to_mutate/_per_project_disk_usage all present). Findings: PR-007 (MEDIUM, FIXED) - the fd-on-DB-family "running" check does not exist yet (require_safe_to_mutate uses PROCESS enumeration); specified a new db_family_open_by_live_pid helper reusing the /proc own-UID scan, called alongside the guard. PR-008 (MEDIUM, FIXED) - tests need a schema-faithful event/part JSON fixture (real fixtures lack it); specified it. PR-009 (LOW, FIXED) - footer must split "ocman can reclaim now" vs opt-in vs report-only, never sum report-only into a headline reclaimable figure. PR-010 (LOW, FIXED) - RO helper must work on both sqlite backends + skip :memory:/missing. PR-011 (LOW, FIXED) - doctor reuses the global -v. opencode source citations (compaction.ts:281, message-v2.ts:293-296, global.ts, database.ts) are gated for the executing agent to re-verify (that repo is out of ocman's tree). Status -> reviewed.
+
+- 2026-07-17 approved by maintainer; Status -> approved.
+- 2026-07-17 EXECUTED (its_direct/pt3-claude-opus-4.8): implemented `ocman doctor` (read-only checkup) + `ocman reclaim` (guarded) in ocman/cli.py (~12520-end): discover_storage_locations, db_connect_readonly (mode=ro, both backends, skip :memory:/missing), db_family_open_by_live_pid (/proc own-UID fd scan), db_schema_fingerprint (migration table), 12 schema-defensive check_* functions + run_doctor_checks + cli_doctor (vistab round-header, 3-bucket footer, --json, global -v), _reclaim_guard_db_writes (dual guard), reclaim_checkpoint_vacuum, reclaim_parts (migration-gate + empirical time.compacted probe + json_set output-empty + retention + mandatory backup; event rows NEVER deleted), reclaim_temp (fd/mmap-aware, keep-newest), reclaim_backups_dir + reclaim_snapshots (path-safe), cli_reclaim; CLI subcommands + normalizer + config keys reclaim_tmp_min_age_hours(24)/reclaim_parts_retention_days(30). SAFETY INVARIANTS PERSONALLY VERIFIED in-code: no DELETE FROM event anywhere; doctor uses db_connect_readonly only; reclaim DB writes call both guards; reclaim_parts json_set (never null) + verify-or-skip; em-dash-clean. LIVE smoke test on this host: doctor reported real 6.27GB DB + 1.61GB /tmp/*.so (10 held-and-skipped) + 23 old sessions with the 3-bucket footer, schema fingerprint correctly UNKNOWN for the live DB's migration level (fail-safe); reclaim --dry-run correctly REFUSED (live fd holds the DB). Fixed the issue-URL host (sst -> anomalyco). Full suite: 366 passed, 2 skipped. Docs (README, ARCHITECTURE, CHANGELOG, CONFIG_TEMPLATE) updated. O-1/O-2 taken as: totals-in-main-table (per-project under -v); bare reclaim on a clean system prints the safe checkpoint+VACUUM outcome. attachments-clearing intentionally deferred. Status -> EXECUTED.
 
 ## Goal
 

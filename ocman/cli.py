@@ -292,6 +292,16 @@ filter_secret_scan = {filter_secret_scan}
 chunk_max_interactions = {chunk_max_interactions}
 # Max rendered transcript lines per chunk part. Default: 2500
 chunk_max_lines = {chunk_max_lines}
+
+# Minimum age (hours) a temp artifact must reach before `reclaim --reclaim-temp` will
+# delete it (guards against removing a file a just-started run still needs). Overridden
+# per-run by --tmp-min-age-hours. Default: 24
+reclaim_tmp_min_age_hours = {reclaim_tmp_min_age_hours}
+
+# Retention window (days) for `reclaim --reclaim-parts`: only compacted tool parts whose
+# data.state.time.compacted is older than this are eligible for output reclaim.
+# Default: 30
+reclaim_parts_retention_days = {reclaim_parts_retention_days}
 """
 
 DEFAULT_CONFIG = {
@@ -310,6 +320,8 @@ DEFAULT_CONFIG = {
     "filter_secret_scan": "conservative",
     "chunk_max_interactions": LONG_SESSION_INTERACTION_THRESHOLD,
     "chunk_max_lines": LONG_SESSION_LINE_THRESHOLD,
+    "reclaim_tmp_min_age_hours": 24,
+    "reclaim_parts_retention_days": 30,
 }
 
 PATH_KEYS = {"db_path", "history_path", "default_out_dir", "default_backup_dir"}
@@ -5919,6 +5931,14 @@ def _legacy_defaults(config: dict) -> dict:
         "spend_sessions": False,
         "spend_historical": False,
         "show_compaction_prompt": False,
+        # doctor / reclaim
+        "run_doctor": False,
+        "run_reclaim": False,
+        "reclaim_parts": False,
+        "reclaim_temp": False,
+        "backups_dir": None,
+        "force_snapshots": None,
+        "tmp_min_age_hours": None,
         # move / rebase / transfer
         "move_project": None,
         "move_session": None,
@@ -6365,6 +6385,31 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--probe", action="store_true",
                     help="Confirm auth via a read-only GET /app on your OWN loopback listeners.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    # ---- doctor / reclaim (storage checkup + guarded cleanup) --------------
+    sp = new_sub("doctor", help="Read-only storage checkup (DB/WAL, orphans, temp, snapshots).")
+    sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+
+    sp = new_sub("reclaim", help="Guarded cleanup of safe/opt-in storage categories.")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Preview only; perform zero writes/deletes.")
+    sp.add_argument("-y", "--yes", action="store_true",
+                    help="Skip the ordinary confirmation (NOT --force-snapshots).")
+    sp.add_argument("--while-running", dest="while_running", action="store_true",
+                    help="Proceed even if OpenCode is running (may corrupt its state).")
+    sp.add_argument("--reclaim-parts", dest="reclaim_parts", action="store_true",
+                    help="Verify-or-skip reclaim of compacted tool-part output.")
+    sp.add_argument("--reclaim-temp", dest="reclaim_temp", action="store_true",
+                    help="Guarded delete of temp opencode-wal-*.db / /tmp/*.so artifacts.")
+    sp.add_argument("--backups-dir", dest="backups_dir", default=None, metavar="PATH",
+                    help="Delete foreign backup files by age within PATH (path-safe).")
+    sp.add_argument("--force-snapshots", dest="force_snapshots", default=None, metavar="PATH",
+                    help="Delete the named snapshot dir (distinct confirm; -y does NOT bypass).")
+    sp.add_argument("--tmp-min-age-hours", dest="tmp_min_age_hours", type=float,
+                    default=None, metavar="N",
+                    help="Override the minimum temp-file age (hours) for --reclaim-temp.")
+    sp.add_argument("--force", dest="force", action="store_true",
+                    help="Required on non-Linux to reap /tmp/*.so (no /proc mmap check).")
+
     new_sub("compaction-prompt", help="Print the compaction prompt template.")
     new_sub("ui", help="Launch the interactive terminal dashboard.")
     new_sub("gui", help="Alias of 'ui'.")
@@ -6749,6 +6794,22 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["all_users"] = bool(g("all_users", False))
         out["probe"] = bool(g("probe", False))
         out["json_output"] = bool(g("json", False))
+
+    elif group == "doctor":
+        out["run_doctor"] = True
+        out["json_output"] = bool(g("json", False))
+
+    elif group == "reclaim":
+        out["run_reclaim"] = True
+        out["dry_run"] = bool(g("dry_run", False))
+        out["yes"] = bool(g("yes", False))
+        out["while_running"] = bool(g("while_running", False))
+        out["reclaim_parts"] = bool(g("reclaim_parts", False))
+        out["reclaim_temp"] = bool(g("reclaim_temp", False))
+        out["backups_dir"] = g("backups_dir")
+        out["force_snapshots"] = g("force_snapshots")
+        out["tmp_min_age_hours"] = g("tmp_min_age_hours")
+        out["force"] = bool(g("force", False))
 
     elif group == "compaction-prompt":
         out["show_compaction_prompt"] = True
@@ -12444,6 +12505,1455 @@ def cli_clean_backups(days: float, dry_run: bool, verbosity: int, assume_yes: bo
     print(color_green("Backup cleanup complete!"))
 
 
+# ===========================================================================
+# ocman doctor / ocman reclaim  (storage checkup + guarded cleanup)
+# ===========================================================================
+#
+# See the IPD 20260717-storage-doctor-reclaim. Key invariants enforced here:
+#   - `doctor` is READ-ONLY (db_connect_readonly uses mode=ro, never writes,
+#     degrades to filesystem-only if the DB is missing/:memory:/unreadable).
+#   - Event rows are NEVER deleted (report-only; there is no --compact-events).
+#   - DB writes (checkpoint/VACUUM, --reclaim-parts) are refused unless OpenCode
+#     is stopped, verified by BOTH require_safe_to_mutate AND
+#     db_family_open_by_live_pid (a live fd on the .db/-wal/-shm family).
+#   - --reclaim-parts is VERIFY-OR-SKIP + migration-gated + backed up.
+#   - Temp reap and snapshots are report-only without their opt-in flags.
+
+# Upstream OpenCode issue references surfaced by doctor (report rows).
+_OC_ISSUE_URL = "https://github.com/anomalyco/opencode/issues/{n}"
+
+# Doctor status vocabulary. A check returns one of these in its `status` field.
+DOCTOR_OK = "ok"
+DOCTOR_NOTICE = "notice"
+DOCTOR_WARN = "warn"
+DOCTOR_UNKNOWN = "unknown"
+DOCTOR_SKIPPED = "skipped"
+
+# Which buckets a check's reclaimable bytes count toward in the footer split.
+# "now"   -> ocman can reclaim now (bare reclaim / stale ocman backups).
+# "optin" -> requires an explicit flag (e.g. --reclaim-parts, --reclaim-temp).
+# "report"-> reported only, NOT ocman-reclaimable (event bloat, foreign backups,
+#            snapshots) -> NEVER summed into a headline reclaimable number.
+
+
+def _oc_issue(n: int) -> str:
+    """Return the canonical upstream OpenCode issue URL for issue number ``n``."""
+    return _OC_ISSUE_URL.format(n=n)
+
+
+def discover_storage_locations(db_path: Path | None = None) -> dict:
+    """Resolve the OpenCode storage locations ocman inspects (D-1).
+
+    Mirrors OpenCode's own resolution: the DB path and the data-dir subtrees are
+    resolved INDEPENDENTLY (an absolute ``$OPENCODE_DB`` can point outside the data
+    dir, and ``$OPENCODE_DB=:memory:`` has no file at all). Returns a dict of Paths
+    (and helper values) that never raises; callers guard on ``.exists()``.
+
+    Keys:
+      db_path            resolved DB file Path, or None for :memory:/unset-missing.
+      db_is_memory       True when the DB is an in-memory database (no file).
+      data_dir           ${XDG_DATA_HOME:-$HOME/.local/share}/opencode.
+      config_dir         $OPENCODE_CONFIG_DIR or <config>/opencode.
+      snapshot_dir/log_dir/repos_dir/storage_dir   data-dir subtrees.
+      backup_dir         ocman's OWN backup dir (the only backups ocman prunes).
+      tmp_dir            tempfile.gettempdir().
+      temp_wal_glob      list of $TMPDIR/opencode-wal-*.db Paths.
+      temp_so_glob       list of /tmp/*.so Paths (the tmp dir top level).
+    """
+    env = os.environ
+
+    # --- DB path (independent of the data-dir subtrees). ---
+    db_is_memory = False
+    resolved_db: Path | None = None
+    oc_db = env.get("OPENCODE_DB")
+    if oc_db is not None:
+        if oc_db.strip() == ":memory:":
+            db_is_memory = True
+        else:
+            resolved_db = Path(oc_db).expanduser()
+    elif db_path is not None:
+        resolved_db = Path(db_path)
+    else:
+        resolved_db = Path(OPENCODE_DB_PATH)
+
+    # --- Data dir + config dir (honor XDG / OPENCODE_CONFIG_DIR). ---
+    xdg_data = env.get("XDG_DATA_HOME")
+    if xdg_data:
+        data_dir = Path(xdg_data).expanduser() / "opencode"
+    else:
+        data_dir = Path.home() / ".local" / "share" / "opencode"
+
+    config_dir_env = env.get("OPENCODE_CONFIG_DIR")
+    if config_dir_env:
+        config_dir = Path(config_dir_env).expanduser()
+    else:
+        xdg_config = env.get("XDG_CONFIG_HOME")
+        base_config = Path(xdg_config).expanduser() if xdg_config else (Path.home() / ".config")
+        config_dir = base_config / "opencode"
+
+    # If no explicit DB path was resolved via env/arg, prefer detecting the live DB
+    # by globbing opencode*.db at the DATA-DIR TOP LEVEL, EXCLUDING ocman's own
+    # backup name prefixes so a backup is never misreported as the live DB.
+    if resolved_db is None and not db_is_memory:
+        resolved_db = _detect_db_in_data_dir(data_dir) or (data_dir / "opencode.db")
+
+    # ocman's own backup dir. Prefer the configured value when a user has customized it
+    # (differs from the frozen default); otherwise derive it from the resolved data dir
+    # so discovery honors XDG / a redirected HOME rather than the import-time default.
+    default_backup = str(Path(DEFAULT_CONFIG["default_backup_dir"]).expanduser())
+    try:
+        cfg_backup = str(Path(load_ocman_config()["default_backup_dir"]).expanduser())
+    except Exception:
+        cfg_backup = default_backup
+    if cfg_backup != default_backup:
+        backup_dir = Path(cfg_backup)
+    else:
+        backup_dir = data_dir / "backups"
+
+    tmp_dir = Path(tempfile.gettempdir())
+
+    def _glob(base: Path, pattern: str) -> list[Path]:
+        try:
+            return sorted(base.glob(pattern))
+        except OSError:
+            return []
+
+    return {
+        "db_path": resolved_db,
+        "db_is_memory": db_is_memory,
+        "data_dir": data_dir,
+        "config_dir": config_dir,
+        "snapshot_dir": data_dir / "snapshot",
+        "log_dir": data_dir / "log",
+        "repos_dir": data_dir / "repos",
+        "storage_dir": data_dir / "storage" / "session_diff",
+        "backup_dir": backup_dir,
+        "tmp_dir": tmp_dir,
+        "temp_wal_glob": _glob(tmp_dir, "opencode-wal-*.db"),
+        "temp_so_glob": _glob(tmp_dir, "*.so"),
+    }
+
+
+def _detect_db_in_data_dir(data_dir: Path) -> Path | None:
+    """Detect the live OpenCode DB by globbing ``opencode*.db`` at the data-dir top level.
+
+    Excludes ocman's own backup name prefixes (``opencode-db-cleanup-*`` /
+    ``opencode-backup-*``) so a backup is never misreported as the live DB. Prefers
+    a plain ``opencode.db`` if present, else the first channel DB found. Returns None
+    if none exists.
+    """
+    try:
+        candidates = sorted(data_dir.glob("opencode*.db"))
+    except OSError:
+        return None
+    filtered = []
+    for c in candidates:
+        name = c.name
+        if name.startswith("opencode-db-cleanup-") or name.startswith("opencode-backup-"):
+            continue
+        filtered.append(c)
+    if not filtered:
+        return None
+    for c in filtered:
+        if c.name == "opencode.db":
+            return c
+    return filtered[0]
+
+
+def db_connect_readonly(path):
+    """Open a provably READ-ONLY SQLite connection via the ``file:<path>?mode=ro`` URI.
+
+    Uses ``mode=ro`` (NOT ``immutable``): ``immutable`` asserts the file will not
+    change while open, which with a live OpenCode writer can return stale/garbage
+    reads; plain ``mode=ro`` both blocks writes AND reflects a concurrent writer's
+    committed state, so diagnosis is safe even while OpenCode runs. Works on either
+    ``_get_sqlite()`` backend (pysqlite3 and the stdlib fallback both support
+    ``uri=True``). Raises on a missing DB / :memory: / driver error so the caller can
+    degrade to filesystem-only reporting (never crash).
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RuntimeError("sqlite3 module not available.")
+    p = str(path)
+    if p == ":memory:":
+        raise RuntimeError("in-memory database has no file to open read-only")
+    if not Path(p).exists():
+        raise RuntimeError(f"database not found at {p}")
+    # Build a proper file: URI (percent-encode the path so odd characters are safe).
+    from urllib.parse import quote
+    uri = "file:" + quote(os.path.abspath(p)) + "?mode=ro"
+    return sqlite3.connect(uri, uri=True)
+
+
+def db_family_open_by_live_pid(db_path) -> bool:
+    """Return True if any own-UID live process holds the DB ``.db``/``-wal``/``-shm`` family open.
+
+    This is the authoritative "OpenCode is running" signal for a DB write (a live fd
+    on the DB family, across ALL same-UID processes: Desktop server, TUI-embedded
+    server, ``serve``, ``web``). Reuses the own-UID ``/proc/<pid>`` st_uid pattern from
+    the `list running` enumerator: it scans ``/proc/<pid>/fd`` symlinks for own-UID
+    pids only and resolves each to a real path, comparing against the DB family.
+
+    Any live fd is treated as "held" (fail-safe: a short-lived CLI can transiently
+    open/close the DB, but ocman refuses to distinguish transient from real). On
+    non-Linux (no ``/proc``) this returns False; the caller then relies on the process
+    guard alone (reduced fidelity, documented).
+    """
+    if not sys.platform.startswith("linux"):
+        return False
+    if db_path is None:
+        return False
+    try:
+        db = Path(db_path).resolve()
+    except Exception:
+        db = Path(db_path)
+    family = {
+        str(db),
+        str(db.parent / f"{db.name}-wal"),
+        str(db.parent / f"{db.name}-shm"),
+    }
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    proc = Path("/proc")
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return False
+    for entry in entries:
+        name = entry.name
+        if not name.isdigit():
+            continue
+        pid = name
+        # Own-ness by UID (NOT the process name), matching the list-running pattern.
+        if my_uid is not None:
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                    continue
+            except OSError:
+                continue
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            fds = os.listdir(fd_dir)
+        except OSError:
+            continue
+        for fd in fds:
+            try:
+                target = os.readlink(os.path.join(fd_dir, fd))
+            except OSError:
+                continue
+            # A deleted file shows up as "<path> (deleted)"; strip that suffix.
+            if target.endswith(" (deleted)"):
+                target = target[: -len(" (deleted)")]
+            if target in family:
+                return True
+    return False
+
+
+def _proc_pids_mapping_or_holding(paths: set) -> set:
+    """Return the subset of ``paths`` mmap'd or held-open by any own-UID live PID.
+
+    Reads ``/proc/<pid>/fd`` (open files) and ``/proc/<pid>/maps`` (mmap'd files) for
+    own-UID pids only (the same own-UID pattern as the running enumerator). Used to
+    protect a temp file that a live process still needs. Non-Linux (no ``/proc``)
+    returns an empty set (the caller then requires ``--force`` and is age-only).
+    """
+    held: set = set()
+    if not sys.platform.startswith("linux") or not paths:
+        return held
+    want = {str(p) for p in paths}
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    try:
+        entries = os.listdir("/proc")
+    except OSError:
+        return held
+    for name in entries:
+        if not name.isdigit():
+            continue
+        pid = name
+        if my_uid is not None:
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                    continue
+            except OSError:
+                continue
+        # Open fds.
+        fd_dir = f"/proc/{pid}/fd"
+        try:
+            for fd in os.listdir(fd_dir):
+                try:
+                    target = os.readlink(os.path.join(fd_dir, fd))
+                except OSError:
+                    continue
+                if target.endswith(" (deleted)"):
+                    target = target[: -len(" (deleted)")]
+                if target in want:
+                    held.add(target)
+        except OSError:
+            pass
+        # mmap'd files.
+        try:
+            with open(f"/proc/{pid}/maps", "r") as fh:
+                for line in fh:
+                    # Last whitespace-delimited field is the mapped path (if any).
+                    parts = line.rstrip("\n").split(None, 5)
+                    if len(parts) < 6:
+                        continue
+                    mapped = parts[5]
+                    if mapped.endswith(" (deleted)"):
+                        mapped = mapped[: -len(" (deleted)")]
+                    if mapped in want:
+                        held.add(mapped)
+        except OSError:
+            pass
+        if len(held) == len(want):
+            break
+    return held
+
+
+# --- schema-defensive DB probing helpers -----------------------------------
+
+def _table_exists(cur, table: str) -> bool:
+    """True if ``table`` exists in sqlite_master (schema-defensive probe)."""
+    try:
+        cur.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,))
+        return cur.fetchone() is not None
+    except Exception:
+        return False
+
+
+def _table_columns(cur, table: str) -> set:
+    """Return the set of column names for ``table`` (empty set if absent/unreadable)."""
+    try:
+        cur.execute(f"PRAGMA table_info({table})")
+        return {row[1] for row in cur.fetchall()}
+    except Exception:
+        return set()
+
+
+def db_schema_fingerprint(cur) -> dict:
+    """Fingerprint the OpenCode schema via the ``migration`` table (no user_version).
+
+    Returns ``{"recognized": bool, "newest_id": int|None, "detail": str}``. The
+    ``migration`` table is the correct gate (there is no ``user_version``). We accept
+    a newest id we understand and REFUSE (recognized=False) an unknown/absent one, so
+    the DB-mutating paths fail closed on an unfamiliar schema.
+    """
+    if not _table_exists(cur, "migration"):
+        return {"recognized": False, "newest_id": None,
+                "detail": "no migration table (unrecognized schema)"}
+    cols = _table_columns(cur, "migration")
+    id_col = "id" if "id" in cols else (next(iter(cols)) if cols else None)
+    if id_col is None:
+        return {"recognized": False, "newest_id": None,
+                "detail": "migration table has no columns"}
+    try:
+        cur.execute(f"SELECT MAX({id_col}) FROM migration")
+        newest = cur.fetchone()[0]
+    except Exception as e:
+        return {"recognized": False, "newest_id": None,
+                "detail": f"could not read migration table: {e}"}
+    if newest is None:
+        return {"recognized": False, "newest_id": None,
+                "detail": "migration table is empty"}
+    try:
+        newest_int = int(newest)
+    except (TypeError, ValueError):
+        return {"recognized": False, "newest_id": newest,
+                "detail": f"unrecognized migration id {newest!r}"}
+    # A migration id is recognized when it is a non-negative integer within a sane
+    # bound. OpenCode's migrations are small sequential integers; a wildly large or
+    # negative value is treated as unrecognized (fail closed).
+    if 0 <= newest_int <= 10000:
+        return {"recognized": True, "newest_id": newest_int,
+                "detail": f"migration level {newest_int}"}
+    return {"recognized": False, "newest_id": newest_int,
+            "detail": f"migration id {newest_int} out of recognized range"}
+
+
+# --- individual doctor checks (each returns a result record) ----------------
+#
+# A check record: {key, title, status, size_bytes, count, detail, fix_cmd,
+#                   issue_url, bucket}. Every DB check schema-probes first and
+# returns unknown/skipped (never a crash, never a false-ok) if the shape is absent.
+
+def _check_record(key, title, status, *, size_bytes=0, count=0, detail="",
+                  fix_cmd=None, issue_url=None, bucket="report"):
+    return {
+        "key": key, "title": title, "status": status,
+        "size_bytes": int(size_bytes or 0), "count": int(count or 0),
+        "detail": detail, "fix_cmd": fix_cmd, "issue_url": issue_url,
+        "bucket": bucket,
+    }
+
+
+def check_db_size(loc: dict, cur) -> dict:
+    """Check 1: DB + WAL + SHM family size; WARN on a runaway WAL (#37495)."""
+    db_path = loc.get("db_path")
+    if loc.get("db_is_memory") or db_path is None or not Path(db_path).exists():
+        return _check_record("db_size", "DB size (family)", DOCTOR_SKIPPED,
+                             detail="no DB file (in-memory or missing).")
+    db_path = Path(db_path)
+    db_size = get_file_size_local(db_path)
+    wal_file = db_path.parent / f"{db_path.name}-wal"
+    shm_file = db_path.parent / f"{db_path.name}-shm"
+    total = db_size
+    parts = [f"DB {human_size_local(db_size)}"]
+    wal_size = 0
+    if wal_file.exists():
+        wal_size = get_file_size_local(wal_file)
+        total += wal_size
+        parts.append(f"WAL {human_size_local(wal_size)}")
+    if shm_file.exists():
+        shm_size = get_file_size_local(shm_file)
+        total += shm_size
+        parts.append(f"SHM {human_size_local(shm_size)}")
+    detail = "Family: " + ", ".join(parts) + "."
+    # Runaway WAL: WARN when the WAL is large in absolute terms and comparable to the
+    # DB (a healthy WAL is checkpointed small). Reclaimable via checkpoint+VACUUM.
+    runaway = wal_size > 64 * 1024 * 1024 and wal_size > db_size * 0.5
+    if runaway:
+        return _check_record(
+            "db_size", "DB size (family)", DOCTOR_WARN,
+            size_bytes=wal_size, detail=detail + " Runaway WAL detected.",
+            fix_cmd="ocman reclaim", issue_url=_oc_issue(37495), bucket="now")
+    return _check_record("db_size", "DB size (family)", DOCTOR_OK,
+                         size_bytes=total, detail=detail,
+                         fix_cmd="ocman reclaim", bucket="now")
+
+
+def check_db_integrity(loc: dict, cur, *, running: bool) -> dict:
+    """Check 2: read-only PRAGMA quick_check. Non-ok while running -> NOTICE (recheck)."""
+    try:
+        cur.execute("PRAGMA quick_check")
+        res = cur.fetchone()
+        val = res[0] if res else "unknown"
+    except Exception as e:
+        return _check_record("db_integrity", "DB integrity", DOCTOR_UNKNOWN,
+                             detail=f"quick_check unavailable: {e}")
+    if val == "ok":
+        return _check_record("db_integrity", "DB integrity", DOCTOR_OK,
+                             detail="quick_check ok.")
+    if running:
+        return _check_record(
+            "db_integrity", "DB integrity", DOCTOR_NOTICE,
+            detail=("quick_check reported an issue while OpenCode is running; this can "
+                    "be a transient mid-write artifact. Recheck when OpenCode is stopped."))
+    return _check_record(
+        "db_integrity", "DB integrity", DOCTOR_WARN,
+        detail=f"quick_check failed while OpenCode is stopped: {val}.")
+
+
+def check_event_bloat(loc: dict, cur) -> dict:
+    """Check 3: REPORT-ONLY event-table bloat (#33356). ocman NEVER deletes event rows."""
+    if not _table_exists(cur, "event"):
+        return _check_record("event_bloat", "Event log bloat", DOCTOR_SKIPPED,
+                             detail="no event table.")
+    cols = _table_columns(cur, "event")
+    if "data" not in cols:
+        return _check_record("event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
+                             detail="event table has no recognized 'data' column.")
+    try:
+        cur.execute("SELECT COUNT(*), SUM(length(data)) FROM event")
+        row = cur.fetchone()
+        total_rows = int(row[0] or 0)
+        total_bytes = int(row[1] or 0)
+    except Exception as e:
+        return _check_record("event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
+                             detail=f"could not measure event data: {e}")
+    if total_rows == 0:
+        return _check_record("event_bloat", "Event log bloat", DOCTOR_OK,
+                             detail="no event rows.")
+    # message.updated snapshot bytes (the dominant bloat category, #33356).
+    updated_bytes = 0
+    superseded_bytes = 0
+    has_agg = "aggregate_id" in cols
+    try:
+        cur.execute("SELECT SUM(length(data)) FROM event WHERE type LIKE 'message.updated%'")
+        r = cur.fetchone()
+        updated_bytes = int((r[0] if r else 0) or 0)
+    except Exception:
+        updated_bytes = 0
+    # Estimate superseded waste: for each (aggregate_id, info.id) group, all rows
+    # beyond the max seq are superseded snapshots (would-be reclaimable UPSTREAM).
+    if has_agg and "seq" in cols:
+        try:
+            cur.execute("""
+                SELECT SUM(length(data)) FROM event e
+                WHERE e.type LIKE 'message.updated%'
+                  AND e.seq < (
+                    SELECT MAX(e2.seq) FROM event e2
+                    WHERE e2.aggregate_id = e.aggregate_id
+                      AND json_extract(e2.data,'$.info.id') = json_extract(e.data,'$.info.id')
+                      AND e2.type LIKE 'message.updated%'
+                  )
+            """)
+            r = cur.fetchone()
+            superseded_bytes = int((r[0] if r else 0) or 0)
+        except Exception:
+            superseded_bytes = 0
+    detail = (f"event={human_size_local(total_bytes)} ({fmt_int(total_rows)} rows), "
+              f"message.updated={human_size_local(updated_bytes)}. "
+              f"Superseded (would-be reclaimable UPSTREAM): "
+              f"{human_size_local(superseded_bytes)}. ocman will NOT delete event rows "
+              f"(the log is replayed to rebuild state); the fix is upstream.")
+    status = DOCTOR_NOTICE if updated_bytes else DOCTOR_OK
+    return _check_record("event_bloat", "Event log bloat", status,
+                         size_bytes=superseded_bytes, count=total_rows,
+                         detail=detail, fix_cmd=None,
+                         issue_url=_oc_issue(33356), bucket="report")
+
+
+def _part_compacted_stats(cur, retention_days: float | None = None):
+    """Return (candidate_count, candidate_bytes, any_compacted) for compacted tool parts.
+
+    Schema-defensive. ``any_compacted`` is True iff at least one part has
+    ``data.state.time.compacted`` populated (the empirical marker). When
+    ``retention_days`` is given, candidate_* count only parts whose marker is older
+    than the window. Returns (None, None, None) when the schema is unrecognized.
+    """
+    if not _table_exists(cur, "part"):
+        return (None, None, None)
+    cols = _table_columns(cur, "part")
+    if "data" not in cols:
+        return (None, None, None)
+    # Any part carrying the compaction marker?
+    try:
+        cur.execute("""
+            SELECT COUNT(*) FROM part
+            WHERE json_extract(data,'$.type') = 'tool'
+              AND json_extract(data,'$.state.status') = 'completed'
+              AND json_extract(data,'$.state.time.compacted') IS NOT NULL
+        """)
+        any_compacted = int(cur.fetchone()[0] or 0) > 0
+    except Exception:
+        return (None, None, None)
+    cutoff_clause = ""
+    params: tuple = ()
+    if retention_days is not None:
+        import time as _t
+        cutoff_ms = int(_t.time() * 1000 - float(retention_days) * 86400000)
+        cutoff_clause = " AND json_extract(data,'$.state.time.compacted') < ?"
+        params = (cutoff_ms,)
+    try:
+        cur.execute(f"""
+            SELECT COUNT(*), SUM(length(COALESCE(json_extract(data,'$.state.output'),'')))
+            FROM part
+            WHERE json_extract(data,'$.type') = 'tool'
+              AND json_extract(data,'$.state.status') = 'completed'
+              AND json_extract(data,'$.state.time.compacted') IS NOT NULL
+              {cutoff_clause}
+        """, params)
+        row = cur.fetchone()
+        count = int(row[0] or 0)
+        size = int(row[1] or 0)
+    except Exception:
+        return (None, None, None)
+    return (count, size, any_compacted)
+
+
+def check_compacted_parts(loc: dict, cur) -> dict:
+    """Check 4: bytes in compacted tool-part outputs (#16101); opt-in reclaim."""
+    count, size, any_compacted = _part_compacted_stats(cur)
+    if count is None:
+        return _check_record("compacted_parts", "Compacted part output", DOCTOR_UNKNOWN,
+                             detail="part table/JSON shape not recognized.")
+    if not any_compacted:
+        return _check_record(
+            "compacted_parts", "Compacted part output", DOCTOR_NOTICE,
+            detail=("no part carries data.state.time.compacted; reclaim is not currently "
+                    "actionable (marker unpopulated)."),
+            issue_url=_oc_issue(16101), bucket="optin")
+    return _check_record(
+        "compacted_parts", "Compacted part output", DOCTOR_NOTICE,
+        size_bytes=size, count=count,
+        detail=(f"{fmt_int(count)} compacted tool part(s) hold "
+                f"{human_size_local(size)} of output."),
+        fix_cmd="ocman reclaim --reclaim-parts", issue_url=_oc_issue(16101),
+        bucket="optin")
+
+
+def check_orphan_rows(loc: dict, cur) -> dict:
+    """Check 5: orphaned session-scoped rows + sessions with a dangling project_id."""
+    if not _table_exists(cur, "session"):
+        return _check_record("orphan_rows", "Orphaned DB rows", DOCTOR_SKIPPED,
+                             detail="no session table.")
+    total = 0
+    per_table = []
+    for table, col in SESSION_RELATIONAL_TABLES:
+        if table == "session":
+            continue
+        if not _table_exists(cur, table):
+            continue
+        if col not in _table_columns(cur, table):
+            continue
+        try:
+            cur.execute(f"""
+                SELECT COUNT(*) FROM {table}
+                WHERE NOT EXISTS (SELECT 1 FROM session s WHERE s.id = {table}.{col})
+            """)
+            n = int(cur.fetchone()[0] or 0)
+        except Exception:
+            continue
+        if n:
+            total += n
+            per_table.append(f"{table}={n}")
+    # Sessions with a project_id that has no project row.
+    dangling = 0
+    if _table_exists(cur, "project") and "project_id" in _table_columns(cur, "session"):
+        try:
+            cur.execute("""
+                SELECT COUNT(*) FROM session s
+                WHERE s.project_id IS NOT NULL AND s.project_id <> ''
+                  AND NOT EXISTS (SELECT 1 FROM project p WHERE p.id = s.project_id)
+            """)
+            dangling = int(cur.fetchone()[0] or 0)
+        except Exception:
+            dangling = 0
+    if dangling:
+        per_table.append(f"session(dangling project_id)={dangling}")
+        total += dangling
+    if total == 0:
+        return _check_record("orphan_rows", "Orphaned DB rows", DOCTOR_OK,
+                             detail="no orphaned rows.")
+    detail = "Orphaned rows: " + ", ".join(per_table) + "."
+    return _check_record("orphan_rows", "Orphaned DB rows", DOCTOR_WARN,
+                         count=total, detail=detail,
+                         fix_cmd="ocman db clean-orphans", bucket="report")
+
+
+def check_orphan_diff_files(loc: dict, cur) -> dict:
+    """Check 6: session-diff *.json on disk with no matching session row."""
+    storage_dir = loc.get("storage_dir")
+    if storage_dir is None or not Path(storage_dir).exists():
+        return _check_record("orphan_diff_files", "Orphaned session-diff files",
+                             DOCTOR_SKIPPED, detail="no session_diff storage dir.")
+    if not _table_exists(cur, "session"):
+        return _check_record("orphan_diff_files", "Orphaned session-diff files",
+                             DOCTOR_UNKNOWN, detail="no session table to compare against.")
+    try:
+        cur.execute("SELECT id FROM session")
+        valid = {row[0] for row in cur.fetchall()}
+    except Exception as e:
+        return _check_record("orphan_diff_files", "Orphaned session-diff files",
+                             DOCTOR_UNKNOWN, detail=f"could not read sessions: {e}")
+    orphan_count = 0
+    orphan_bytes = 0
+    try:
+        for entry in Path(storage_dir).iterdir():
+            if entry.is_file() and entry.suffix == ".json":
+                if entry.stem not in valid:
+                    orphan_count += 1
+                    orphan_bytes += get_file_size_local(entry)
+    except OSError as e:
+        return _check_record("orphan_diff_files", "Orphaned session-diff files",
+                             DOCTOR_UNKNOWN, detail=f"could not read storage dir: {e}")
+    if orphan_count == 0:
+        return _check_record("orphan_diff_files", "Orphaned session-diff files",
+                             DOCTOR_OK, detail="no orphaned diff files.")
+    return _check_record(
+        "orphan_diff_files", "Orphaned session-diff files", DOCTOR_WARN,
+        size_bytes=orphan_bytes, count=orphan_count,
+        detail=f"{fmt_int(orphan_count)} diff file(s) with no session "
+               f"({human_size_local(orphan_bytes)}).",
+        fix_cmd="ocman db clean-orphans", bucket="report")
+
+
+def check_old_sessions(loc: dict, cur, retention_days: float) -> dict:
+    """Check 7: root sessions older than the retention window + their diff-file bytes."""
+    if not _table_exists(cur, "session"):
+        return _check_record("old_sessions", "Old sessions", DOCTOR_SKIPPED,
+                             detail="no session table.")
+    import time as _t
+    cutoff_ms = int(_t.time() * 1000 - float(retention_days) * 86400000)
+    try:
+        cur.execute("""
+            SELECT id FROM session
+            WHERE (parent_id IS NULL OR parent_id = '') AND time_created < ?
+        """, (cutoff_ms,))
+        old_ids = [row[0] for row in cur.fetchall()]
+    except Exception as e:
+        return _check_record("old_sessions", "Old sessions", DOCTOR_UNKNOWN,
+                             detail=f"could not query sessions: {e}")
+    if not old_ids:
+        return _check_record("old_sessions", "Old sessions", DOCTOR_OK,
+                             detail=f"no root sessions older than {retention_days:g}d.")
+    # Attributable diff-file bytes only (the DB is a single shared file; its bytes are
+    # NOT per-session attributable, so we do NOT report a per-session DB size).
+    storage_dir = loc.get("storage_dir")
+    diff_bytes = 0
+    if storage_dir is not None and Path(storage_dir).exists():
+        for sid in old_ids:
+            f = Path(storage_dir) / f"{sid}.json"
+            if f.exists():
+                diff_bytes += get_file_size_local(f)
+    return _check_record(
+        "old_sessions", "Old sessions", DOCTOR_NOTICE,
+        size_bytes=diff_bytes, count=len(old_ids),
+        detail=(f"{fmt_int(len(old_ids))} root session(s) older than {retention_days:g}d; "
+                f"diff files {human_size_local(diff_bytes)} (DB bytes reclaimed on VACUUM "
+                f"after delete)."),
+        fix_cmd=f"ocman db clean --older-than {int(retention_days)}d", bucket="report")
+
+
+def check_ocman_backups(loc: dict) -> dict:
+    """Check 8: inventory of ocman's OWN backups + a stale-backup suggestion."""
+    backup_dir = loc.get("backup_dir")
+    if backup_dir is None or not Path(backup_dir).exists() or not Path(backup_dir).is_dir():
+        return _check_record("ocman_backups", "ocman backups", DOCTOR_OK,
+                             detail="no backups directory.")
+    backup_dir = Path(backup_dir)
+    total, count = dir_usage(backup_dir)
+    if count == 0:
+        return _check_record("ocman_backups", "ocman backups", DOCTOR_OK,
+                             detail="no backups.")
+    import time as _t
+    now = _t.time()
+    stale_threshold_days = 30
+    cutoff = now - stale_threshold_days * 86400
+    stale_bytes = 0
+    stale_count = 0
+    oldest = None
+    newest = None
+    try:
+        for entry in os.scandir(backup_dir):
+            name = entry.name
+            if not (name.startswith("opencode-backup-")
+                    or name.startswith("rollback-before-restore-")
+                    or name.startswith("opencode-db-cleanup-")):
+                continue
+            try:
+                mtime = entry.stat(follow_symlinks=False).st_mtime
+            except OSError:
+                continue
+            oldest = mtime if oldest is None else min(oldest, mtime)
+            newest = mtime if newest is None else max(newest, mtime)
+            if mtime < cutoff:
+                stale_count += 1
+                if entry.is_dir(follow_symlinks=False):
+                    sz, _ = dir_usage(Path(entry.path))
+                else:
+                    try:
+                        sz = entry.stat(follow_symlinks=False).st_size
+                    except OSError:
+                        sz = 0
+                stale_bytes += sz
+    except OSError:
+        pass
+    from datetime import datetime as _dt
+    oldest_s = _dt.fromtimestamp(oldest).strftime("%Y-%m-%d") if oldest else "-"
+    newest_s = _dt.fromtimestamp(newest).strftime("%Y-%m-%d") if newest else "-"
+    base = (f"{fmt_int(count)} backup(s), {human_size_local(total)}; "
+            f"oldest {oldest_s}, newest {newest_s}.")
+    if stale_count:
+        return _check_record(
+            "ocman_backups", "ocman backups", DOCTOR_NOTICE,
+            size_bytes=stale_bytes, count=count,
+            detail=base + (f" {fmt_int(stale_count)} older than {stale_threshold_days}d "
+                           f"reclaim {human_size_local(stale_bytes)}."),
+            fix_cmd=f"ocman backup clean --older-than {stale_threshold_days}d", bucket="now")
+    return _check_record("ocman_backups", "ocman backups", DOCTOR_OK,
+                         size_bytes=total, count=count, detail=base, bucket="report")
+
+
+def check_temp_wal(loc: dict) -> dict:
+    """Check 9 (temp_wal): $TMPDIR/opencode-wal-*.db count/size; report-only (#36831)."""
+    files = loc.get("temp_wal_glob") or []
+    if not files:
+        return _check_record("temp_wal", "Temp WAL DBs", DOCTOR_OK,
+                             detail="none found.")
+    total = sum(get_file_size_local(f) for f in files)
+    return _check_record(
+        "temp_wal", "Temp WAL DBs", DOCTOR_NOTICE,
+        size_bytes=total, count=len(files),
+        detail=(f"{fmt_int(len(files))} {loc['tmp_dir']}/opencode-wal-*.db "
+                f"({human_size_local(total)}); runtime/driver artifacts. Reclaim needs "
+                f"OpenCode stopped + no live fd."),
+        fix_cmd="ocman reclaim --reclaim-temp", issue_url=_oc_issue(36831),
+        bucket="optin")
+
+
+def check_temp_so(loc: dict) -> dict:
+    """Check 10 (temp_so): /tmp/*.so NOT mmap'd by a live PID; report-only (#28089)."""
+    files = loc.get("temp_so_glob") or []
+    if not files:
+        return _check_record("temp_so", "Temp .so libs", DOCTOR_OK,
+                             detail="none found.")
+    held = _proc_pids_mapping_or_holding({str(f) for f in files})
+    free_files = [f for f in files if str(f) not in held]
+    total = sum(get_file_size_local(f) for f in free_files)
+    return _check_record(
+        "temp_so", "Temp .so libs", DOCTOR_NOTICE,
+        size_bytes=total, count=len(free_files),
+        detail=(f"{fmt_int(len(free_files))} /tmp/*.so not mmap'd by a live PID "
+                f"({human_size_local(total)}); Bun-extracted native libs. "
+                f"{fmt_int(len(files) - len(free_files))} still held/mapped."),
+        fix_cmd="ocman reclaim --reclaim-temp", issue_url=_oc_issue(28089),
+        bucket="optin")
+
+
+def check_snapshots(loc: dict) -> dict:
+    """Check 11 (snapshots): <data>/snapshot/** size; report-only (#36093)."""
+    snap = loc.get("snapshot_dir")
+    if snap is None or not Path(snap).exists():
+        return _check_record("snapshots", "Git snapshots", DOCTOR_OK,
+                             detail="no snapshot dir.")
+    total, _ = dir_usage(Path(snap))
+    if total == 0:
+        return _check_record("snapshots", "Git snapshots", DOCTOR_OK,
+                             detail="no snapshot data.")
+    return _check_record(
+        "snapshots", "Git snapshots", DOCTOR_NOTICE,
+        size_bytes=total,
+        detail=(f"snapshot store {human_size_local(total)}; DB references live snapshot "
+                f"hashes, so blind prune can break revert/undo. Never an auto-fix."),
+        fix_cmd="ocman reclaim --force-snapshots <PATH>", issue_url=_oc_issue(36093),
+        bucket="report")
+
+
+def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None = None,
+                      running: bool | None = None) -> list[dict]:
+    """Run every doctor check and return the list of result records (read-only).
+
+    Never mutates. If the DB is missing/:memory:/unreadable, the DB checks degrade to
+    filesystem-only reporting. ``running`` (a live fd on the DB family) softens the
+    integrity check to a NOTICE. This is the single testable entry point used by
+    ``cli_doctor``; individual checks are also callable in isolation.
+    """
+    if loc is None:
+        loc = discover_storage_locations(OPENCODE_DB_PATH)
+    try:
+        cfg = load_ocman_config()
+        default_retention = float(cfg.get("default_retention_days", 5))
+    except Exception:
+        default_retention = 5.0
+    if retention_days is None:
+        retention_days = default_retention
+    if running is None:
+        try:
+            running = db_family_open_by_live_pid(loc.get("db_path"))
+        except Exception:
+            running = False
+
+    records: list[dict] = []
+    conn = None
+    cur = None
+    schema_unknown = False
+    if not loc.get("db_is_memory") and loc.get("db_path") and Path(loc["db_path"]).exists():
+        try:
+            conn = db_connect_readonly(loc["db_path"])
+            cur = conn.cursor()
+            fp = db_schema_fingerprint(cur)
+            schema_unknown = not fp.get("recognized", False)
+        except Exception:
+            conn = None
+            cur = None
+
+    if cur is not None:
+        records.append(check_db_size(loc, cur))
+        if schema_unknown:
+            records.append(_check_record(
+                "db_integrity", "DB integrity", DOCTOR_UNKNOWN,
+                detail="schema migration level unrecognized; DB checks degraded."))
+            records.append(_check_record(
+                "event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
+                detail="schema unrecognized; not measured."))
+            records.append(_check_record(
+                "compacted_parts", "Compacted part output", DOCTOR_UNKNOWN,
+                detail="schema unrecognized; reclaim would fail closed."))
+            records.append(_check_record(
+                "orphan_rows", "Orphaned DB rows", DOCTOR_UNKNOWN,
+                detail="schema unrecognized; not measured."))
+        else:
+            records.append(check_db_integrity(loc, cur, running=bool(running)))
+            records.append(check_event_bloat(loc, cur))
+            records.append(check_compacted_parts(loc, cur))
+            records.append(check_orphan_rows(loc, cur))
+        records.append(check_orphan_diff_files(loc, cur))
+        records.append(check_old_sessions(loc, cur, retention_days))
+    else:
+        # No readable DB: degrade to filesystem-only reporting for DB checks.
+        records.append(check_db_size(loc, None))
+        for key, title in (("db_integrity", "DB integrity"),
+                           ("event_bloat", "Event log bloat"),
+                           ("compacted_parts", "Compacted part output"),
+                           ("orphan_rows", "Orphaned DB rows"),
+                           ("orphan_diff_files", "Orphaned session-diff files"),
+                           ("old_sessions", "Old sessions")):
+            records.append(_check_record(
+                key, title, DOCTOR_SKIPPED,
+                detail="no readable DB (missing/:memory:/unreadable)."))
+
+    if conn is not None:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+    # Filesystem checks (always run, never need a DB).
+    records.append(check_ocman_backups(loc))
+    records.append(check_temp_wal(loc))
+    records.append(check_temp_so(loc))
+    records.append(check_snapshots(loc))
+    return records
+
+
+def _doctor_status_cell(status: str) -> str:
+    """Colorize a doctor status word (color-gated, bold red WARN / yellow NOTICE)."""
+    label = {DOCTOR_OK: "OK", DOCTOR_NOTICE: "NOTICE", DOCTOR_WARN: "WARN",
+             DOCTOR_UNKNOWN: "UNKNOWN", DOCTOR_SKIPPED: "SKIPPED"}.get(status, status.upper())
+    if status == DOCTOR_WARN:
+        return color_red(color_bold(label))
+    if status == DOCTOR_NOTICE:
+        return color_yellow(label)
+    return label
+
+
+def _doctor_size_count_cell(rec: dict) -> str:
+    """Render the Size/Count cell for a doctor row."""
+    parts = []
+    if rec.get("size_bytes"):
+        parts.append(human_size_local(rec["size_bytes"]))
+    if rec.get("count"):
+        parts.append(f"{fmt_int(rec['count'])}")
+    return " / ".join(parts) if parts else "-"
+
+
+def cli_doctor(args) -> None:
+    """`ocman doctor`: READ-ONLY full storage checkup (never mutates, safe anytime)."""
+    verbosity = getattr(args, "verbose", 0) or 0
+    loc = discover_storage_locations(OPENCODE_DB_PATH)
+    running = False
+    try:
+        running = db_family_open_by_live_pid(loc.get("db_path"))
+    except Exception:
+        running = False
+    records = run_doctor_checks(loc, running=running)
+
+    if getattr(args, "json_output", False):
+        emit_json("doctor", records)
+        return
+
+    color_on = _color_enabled()
+
+    def _styled(tbl):
+        tbl.set_color(color_on)
+        if color_on:
+            tbl.set_header_style(bold=True)
+        return tbl
+
+    tbl = _styled(vistab.Vistab(style="round-header", padding=0,
+                                header=["Check", "Status", "Size/Count", "Recommended fix"]))
+    for rec in records:
+        tbl.add_row([
+            rec["title"],
+            _doctor_status_cell(rec["status"]),
+            _doctor_size_count_cell(rec),
+            rec.get("fix_cmd") or "-",
+        ])
+    tbl.set_cols_align(["l", "l", "r", "l"])
+    print(tbl.draw())
+
+    # Details block: one line per non-OK/non-skipped check.
+    detail_rows = [r for r in records if r["status"] in (DOCTOR_NOTICE, DOCTOR_WARN, DOCTOR_UNKNOWN)]
+    if detail_rows:
+        print()
+        for r in detail_rows:
+            head = f"  [{_doctor_status_cell(r['status'])}] {r['title']}: {r['detail']}"
+            print(head)
+            if r.get("issue_url"):
+                print(f"      upstream: {r['issue_url']}")
+
+    # Footer summary: OK/NOTICE/WARN counts + the THREE labeled reclaim buckets.
+    n_ok = sum(1 for r in records if r["status"] == DOCTOR_OK)
+    n_notice = sum(1 for r in records if r["status"] == DOCTOR_NOTICE)
+    n_warn = sum(1 for r in records if r["status"] == DOCTOR_WARN)
+    now_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "now")
+    optin_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "optin")
+    report_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "report")
+    print()
+    print(f"{n_ok} OK / {n_notice} notices / {n_warn} warnings")
+    print(f"  ocman can reclaim now:              {human_size_local(now_bytes)}")
+    print(f"  opt-in (--reclaim-parts/--reclaim-temp): {human_size_local(optin_bytes)}")
+    print(f"  reported only, NOT ocman-reclaimable:    {human_size_local(report_bytes)}")
+
+    if verbosity >= 1:
+        print()
+        print("Locations:")
+        print(f"  DB:        {loc.get('db_path')}")
+        print(f"  Data dir:  {loc.get('data_dir')}")
+        print(f"  Backups:   {loc.get('backup_dir')}")
+        print(f"  Snapshots: {loc.get('snapshot_dir')}")
+        print(f"  Temp dir:  {loc.get('tmp_dir')}")
+
+
+# --- reclaim: guarded cleanup ------------------------------------------------
+
+def _reclaim_guard_db_writes(loc: dict, *, while_running: bool, verbosity: int,
+                             action: str) -> None:
+    """Refuse a DB write unless OpenCode is stopped (BOTH process guard AND fd check).
+
+    Either the process guard (require_safe_to_mutate) OR a live fd on the DB family
+    (db_family_open_by_live_pid) being positive means "do not mutate" unless
+    ``--while-running``. On non-Linux there is no /proc, so only the process guard
+    applies (reduced fidelity).
+    """
+    fd_held = False
+    try:
+        fd_held = db_family_open_by_live_pid(loc.get("db_path"))
+    except Exception:
+        fd_held = False
+    if fd_held and not while_running:
+        raise RecoveryError(
+            f"A live process holds the OpenCode database open (fd on the .db/-wal/-shm "
+            f"family), so ocman will not {action}. Close OpenCode, or re-run with "
+            f"--while-running to proceed anyway.")
+    # The process guard also fires (its own prompt/refuse logic + --while-running).
+    require_safe_to_mutate(action, while_running=while_running, verbosity=verbosity)
+
+
+def _make_db_family_backup(db_path: Path, verbosity: int) -> Path:
+    """Create the mandatory pre-op db+wal+shm backup (opencode-db-cleanup-* pattern)."""
+    from datetime import datetime as _dt
+    backup_dir = (Path.home() / ".local" / "share" / "opencode" / "backups"
+                  / f"opencode-db-cleanup-{get_startup_timestamp_local()}")
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+    shutil.copy2(db_path, backup_dir / db_path.name)
+    wal_file = db_path.parent / f"{db_path.name}-wal"
+    shm_file = db_path.parent / f"{db_path.name}-shm"
+    if wal_file.exists():
+        shutil.copy2(wal_file, backup_dir / f"{db_path.name}-wal")
+    if shm_file.exists():
+        shutil.copy2(shm_file, backup_dir / f"{db_path.name}-shm")
+    print("[+] Backup created successfully.")
+    return backup_dir
+
+
+def reclaim_checkpoint_vacuum(loc: dict, *, dry_run: bool, while_running: bool,
+                              assume_yes: bool, verbosity: int) -> None:
+    """The primary safe DB win: offline WAL checkpoint(TRUNCATE) + VACUUM (#37495/#31526)."""
+    db_path = loc.get("db_path")
+    if loc.get("db_is_memory") or db_path is None or not Path(db_path).exists():
+        print(f"{info_prefix()} No DB file to reclaim (in-memory or missing).")
+        return
+    db_path = Path(db_path)
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    _reclaim_guard_db_writes(loc, while_running=while_running, verbosity=verbosity,
+                             action="checkpoint and VACUUM the database")
+
+    size_before = get_file_size_local(db_path)
+    wal_before = get_file_size_local(db_path.parent / f"{db_path.name}-wal")
+    print(f"{info_prefix()} Database: {db_path}")
+    print(f"  Size before: {human_size_local(size_before)} "
+          f"(WAL {human_size_local(wal_before)})")
+    if dry_run:
+        print(f"{info_prefix()} Dry run: would checkpoint(TRUNCATE) + VACUUM. "
+              f"No changes made.")
+        return
+    if not confirm_destructive(None, assume_yes=assume_yes, render=False,
+                               action_verb="checkpoint and VACUUM the database"):
+        return
+
+    _make_db_family_backup(db_path, verbosity)
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        # Ensure no implicit transaction is open so VACUUM can run.
+        try:
+            conn.isolation_level = None
+        except Exception:
+            pass
+        cur = conn.cursor()
+        print(f"{info_prefix()} Running PRAGMA wal_checkpoint(TRUNCATE)...")
+        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+        cur.fetchall()  # drain the checkpoint result so no statement is in progress
+        cur.close()
+        print(f"{info_prefix()} Running VACUUM...")
+        conn.execute("VACUUM")
+    except Exception as e:
+        raise RecoveryError(f"checkpoint/VACUUM failed: {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    size_after = get_file_size_local(db_path)
+    saved = max(0, size_before - size_after)
+    print("[+] Checkpoint + VACUUM complete.")
+    print(f"  Size after:  {human_size_local(size_after)}")
+    print(f"  Reclaimed:   {human_size_local(saved)}")
+
+
+def reclaim_parts(loc: dict, *, dry_run: bool, while_running: bool, assume_yes: bool,
+                  retention_days: float, verbosity: int) -> None:
+    """--reclaim-parts: VERIFY-OR-SKIP compacted tool-part output reclaim (#16101).
+
+    Migration-gated (abort on unrecognized level). Empirically confirms
+    data.state.time.compacted is populated (else SKIP, fail closed). Rewrites via
+    json_set(data,'$.state.output','') (valid JSON; never nulls the NOT NULL column),
+    only for completed tool parts whose time.compacted is set AND older than the
+    retention window. Mandatory pre-op db+wal+shm backup.
+    """
+    db_path = loc.get("db_path")
+    if loc.get("db_is_memory") or db_path is None or not Path(db_path).exists():
+        print(f"{info_prefix()} No DB file for --reclaim-parts (in-memory or missing).")
+        return
+    db_path = Path(db_path)
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+
+    # (a) migration-gate + (b) empirical marker probe, both on a READ-ONLY connection.
+    ro = None
+    try:
+        ro = db_connect_readonly(db_path)
+        rcur = ro.cursor()
+        fp = db_schema_fingerprint(rcur)
+        if not fp.get("recognized", False):
+            print(color_yellow(f"{info_prefix()} --reclaim-parts aborted: "
+                               f"{fp.get('detail', 'unrecognized schema')} (fail closed)."))
+            return
+        count, size, any_compacted = _part_compacted_stats(rcur, retention_days=retention_days)
+        _, _, any_marker = _part_compacted_stats(rcur)
+    except Exception as e:
+        print(color_yellow(f"{info_prefix()} --reclaim-parts aborted: could not verify "
+                           f"schema/marker ({e}); fail closed."))
+        return
+    finally:
+        if ro is not None:
+            try:
+                ro.close()
+            except Exception:
+                pass
+
+    if count is None or any_marker is None:
+        print(color_yellow(f"{info_prefix()} --reclaim-parts SKIPPED: part table/JSON "
+                           f"shape not recognized (fail closed, nothing written)."))
+        return
+    if not any_marker:
+        print(color_yellow(f"{info_prefix()} --reclaim-parts SKIPPED: no part carries "
+                           f"data.state.time.compacted (marker unpopulated). Failing "
+                           f"closed; nothing written."))
+        return
+    if not count:
+        print(f"{info_prefix()} --reclaim-parts: no compacted tool part older than "
+              f"{retention_days:g}d to reclaim.")
+        return
+
+    print(f"{info_prefix()} --reclaim-parts: {fmt_int(count)} compacted tool part(s) "
+          f"older than {retention_days:g}d hold {human_size_local(size or 0)} of output.")
+    if dry_run:
+        print(f"{info_prefix()} Dry run: would empty data.state.output on those parts. "
+              f"No changes made.")
+        return
+
+    _reclaim_guard_db_writes(loc, while_running=while_running, verbosity=verbosity,
+                             action="reclaim compacted part output")
+
+    if not confirm_destructive(None, assume_yes=assume_yes, render=False,
+                               action_verb="reclaim compacted part output"):
+        return
+
+    _make_db_family_backup(db_path, verbosity)
+
+    import time as _t
+    cutoff_ms = int(_t.time() * 1000 - float(retention_days) * 86400000)
+    conn = None
+    try:
+        conn = sqlite3.connect(str(db_path))
+        cur = conn.cursor()
+        cur.execute("BEGIN TRANSACTION")
+        cur.execute("""
+            UPDATE part
+            SET data = json_set(data, '$.state.output', '')
+            WHERE json_extract(data,'$.type') = 'tool'
+              AND json_extract(data,'$.state.status') = 'completed'
+              AND json_extract(data,'$.state.time.compacted') IS NOT NULL
+              AND json_extract(data,'$.state.time.compacted') < ?
+        """, (cutoff_ms,))
+        updated = cur.rowcount
+        conn.commit()
+    except Exception as e:
+        if conn is not None:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise RecoveryError(f"--reclaim-parts failed: {e}")
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    print(f"[+] Emptied output on {fmt_int(updated)} compacted tool part(s).")
+
+
+def reclaim_temp(loc: dict, *, dry_run: bool, force: bool, min_age_hours: float,
+                 assume_yes: bool, verbosity: int) -> None:
+    """--reclaim-temp: guarded temp reap ($TMPDIR/opencode-wal-*.db, /tmp/*.so).
+
+    Deletes ONLY when no live PID holds/mmaps the file, older than min_age_hours,
+    keeping the newest WAL. Non-Linux requires --force and is age-only (no /proc).
+    """
+    import time as _t
+    now = _t.time()
+    age_cutoff = now - float(min_age_hours) * 3600.0
+    linux = sys.platform.startswith("linux")
+    if not linux and not force:
+        raise RecoveryError(
+            "temp reap on non-Linux cannot check /proc for open/mmap'd files; re-run "
+            "with --force to delete by age only.")
+
+    wal_files = list(loc.get("temp_wal_glob") or [])
+    so_files = list(loc.get("temp_so_glob") or [])
+
+    # Keep the newest WAL as a precaution (a live server may be mid-swap).
+    newest_wal = None
+    if wal_files:
+        try:
+            newest_wal = max(wal_files, key=lambda p: p.stat().st_mtime)
+        except OSError:
+            newest_wal = None
+
+    candidates = [f for f in wal_files if f != newest_wal] + so_files
+    all_paths = {str(f) for f in candidates}
+    held = _proc_pids_mapping_or_holding(all_paths) if linux else set()
+
+    remove: list[PreviewItem] = []
+    keep: list[PreviewItem] = []
+    to_delete: list[Path] = []
+    for f in candidates:
+        try:
+            st = f.stat()
+        except OSError:
+            continue
+        sz = st.st_size
+        age_days = max(0.0, (now - st.st_mtime) / 86400.0)
+        item = PreviewItem(label=str(f), size_bytes=sz,
+                           detail=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                           age_days=age_days)
+        if str(f) in held:
+            item.detail += " (held/mapped)"
+            keep.append(item)
+            continue
+        if st.st_mtime >= age_cutoff:
+            item.detail += " (too new)"
+            keep.append(item)
+            continue
+        remove.append(item)
+        to_delete.append(f)
+    if newest_wal is not None:
+        try:
+            st = newest_wal.stat()
+            keep.append(PreviewItem(
+                label=str(newest_wal), size_bytes=st.st_size,
+                detail="(kept: newest WAL)", age_days=max(0.0, (now - st.st_mtime) / 86400.0)))
+        except OSError:
+            pass
+
+    if not remove:
+        print(f"{info_prefix()} --reclaim-temp: no eligible temp files to delete.")
+        return
+
+    preview = DestructivePreview(
+        remove=remove, keep=keep, action_verb="delete", noun="temp files",
+        detail_header="Modified", irreversible=True, show_age=True, age_header="Days",
+        warn_if_all_removed=False)
+    print(color_bold("Temp artifacts eligible for deletion (no live PID holds/maps them):"))
+    if not confirm_destructive(preview, dry_run=dry_run, assume_yes=assume_yes,
+                               interactive=sys.stdout.isatty()):
+        return
+    deleted = 0
+    reclaimed = 0
+    for f in to_delete:
+        try:
+            sz = get_file_size_local(f)
+            f.unlink()
+            deleted += 1
+            reclaimed += sz
+        except OSError as e:
+            print(color_yellow(f"Warning: could not delete {f}: {e}"))
+    print(f"[-] Deleted {fmt_int(deleted)} temp file(s), "
+          f"reclaimed {human_size_local(reclaimed)}.")
+
+
+def _resolve_user_dir_for_delete(raw_path: str, loc: dict, *, label: str) -> Path:
+    """Apply cli_clean_backups-grade path safety to a user-named delete directory (PR-006).
+
+    Resolves the path and REFUSES dangerous roots (`/`, bare $HOME, the data dir). The
+    caller previews + typed-confirms. Raises RecoveryError on an unsafe target.
+    """
+    p = Path(raw_path).expanduser()
+    try:
+        resolved = p.resolve()
+    except Exception as e:
+        raise RecoveryError(f"{label}: could not resolve path {raw_path!r}: {e}")
+    if not resolved.exists() or not resolved.is_dir():
+        raise RecoveryError(f"{label}: {resolved} is not an existing directory.")
+    home = Path.home().resolve()
+    dangerous = {Path("/").resolve(), home}
+    data_dir = loc.get("data_dir")
+    if data_dir is not None:
+        try:
+            dangerous.add(Path(data_dir).resolve())
+        except Exception:
+            pass
+    if resolved in dangerous:
+        raise RecoveryError(
+            f"{label}: refusing to operate on {resolved} (a protected root: /, $HOME, "
+            f"or the OpenCode data dir).")
+    return resolved
+
+
+def reclaim_backups_dir(raw_path: str, loc: dict, *, dry_run: bool, assume_yes: bool,
+                        min_age_hours: float, verbosity: int) -> None:
+    """--backups-dir PATH: delete foreign backup files by age within a user-named dir (PR-006)."""
+    target = _resolve_user_dir_for_delete(raw_path, loc, label="--backups-dir")
+    import time as _t
+    now = _t.time()
+    cutoff = now - float(min_age_hours) * 3600.0
+    remove: list[PreviewItem] = []
+    keep: list[PreviewItem] = []
+    to_delete: list[Path] = []
+    try:
+        for entry in target.iterdir():
+            # Never follow a symlink out of the named directory.
+            if entry.is_symlink():
+                continue
+            try:
+                st = entry.stat()
+            except OSError:
+                continue
+            sz = st.st_size if entry.is_file() else (dir_usage(entry)[0] if entry.is_dir() else 0)
+            age_days = max(0.0, (now - st.st_mtime) / 86400.0)
+            item = PreviewItem(label=entry.name, size_bytes=sz,
+                               detail=datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M"),
+                               age_days=age_days)
+            if st.st_mtime < cutoff:
+                remove.append(item)
+                to_delete.append(entry)
+            else:
+                keep.append(item)
+    except OSError as e:
+        raise RecoveryError(f"--backups-dir: could not read {target}: {e}")
+    if not remove:
+        print(f"{info_prefix()} --backups-dir: nothing older than {min_age_hours:g}h in {target}.")
+        return
+    preview = DestructivePreview(
+        remove=remove, keep=keep, action_verb="delete", noun="files",
+        detail_header="Modified", irreversible=True, show_age=True, age_header="Days")
+    print(color_bold(f"Deleting files older than {min_age_hours:g}h in {target}:"))
+    if not confirm_destructive(preview, dry_run=dry_run, assume_yes=assume_yes,
+                               interactive=sys.stdout.isatty()):
+        return
+    for entry in to_delete:
+        try:
+            if entry.is_dir():
+                shutil.rmtree(entry)
+            else:
+                entry.unlink()
+            print(f"[-] Deleted {entry.name}")
+        except OSError as e:
+            print(color_yellow(f"Warning: could not delete {entry}: {e}"))
+
+
+def reclaim_snapshots(raw_path: str, loc: dict, *, dry_run: bool, verbosity: int) -> None:
+    """--force-snapshots PATH: delete a user-named snapshot dir behind a DISTINCT confirm.
+
+    The typed confirmation here is distinct from the normal one and is NOT bypassed by
+    -y/--yes (this can break revert/undo since the DB references live snapshot hashes).
+    """
+    target = _resolve_user_dir_for_delete(raw_path, loc, label="--force-snapshots")
+    total, count = dir_usage(target)
+    print(color_red(color_bold(
+        "DANGER: deleting git snapshots can permanently break OpenCode revert/undo.")))
+    print(color_red(color_bold(
+        "The DB references live snapshot hashes and ocman cannot compute reachability.")))
+    print(f"  Target:    {target}")
+    print(f"  Contents:  {fmt_int(count)} entries, {human_size_local(total)}")
+    if dry_run:
+        print(f"{info_prefix()} Dry run: would delete the snapshot dir above. No changes made.")
+        return
+    if not (hasattr(sys.stdout, "isatty") and sys.stdout.isatty()):
+        raise RecoveryError(
+            "--force-snapshots requires an interactive confirmation and cannot be run "
+            "non-interactively (-y/--yes does NOT bypass it).")
+    token = "delete snapshots"
+    try:
+        answer = input(f"Type exactly '{token}' to permanently delete this snapshot dir: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print("\nCancelled.")
+        return
+    if answer != token:
+        print("Cancelled.")
+        return
+    try:
+        shutil.rmtree(target)
+    except OSError as e:
+        raise RecoveryError(f"--force-snapshots: could not delete {target}: {e}")
+    print(f"[-] Deleted snapshot dir {target} ({human_size_local(total)}).")
+
+
+def cli_reclaim(args) -> None:
+    """`ocman reclaim`: guarded cleanup of the safe / opt-in storage categories (D-3)."""
+    verbosity = getattr(args, "verbose", 0) or 0
+    dry_run = bool(getattr(args, "dry_run", False))
+    assume_yes = bool(getattr(args, "yes", False))
+    while_running = bool(getattr(args, "while_running", False))
+    force = bool(getattr(args, "force", False))
+    do_parts = bool(getattr(args, "reclaim_parts", False))
+    do_temp = bool(getattr(args, "reclaim_temp", False))
+    backups_dir = getattr(args, "backups_dir", None)
+    force_snapshots = getattr(args, "force_snapshots", None)
+
+    try:
+        cfg = load_ocman_config()
+    except Exception:
+        cfg = dict(DEFAULT_CONFIG)
+    retention_days = float(cfg.get("reclaim_parts_retention_days",
+                                   DEFAULT_CONFIG["reclaim_parts_retention_days"]))
+    tmp_age_default = float(cfg.get("reclaim_tmp_min_age_hours",
+                                    DEFAULT_CONFIG["reclaim_tmp_min_age_hours"]))
+    min_age_hours = getattr(args, "tmp_min_age_hours", None)
+    if min_age_hours is None:
+        min_age_hours = tmp_age_default
+
+    loc = discover_storage_locations(OPENCODE_DB_PATH)
+
+    # 1. The primary safe DB win (bare reclaim does only this).
+    reclaim_checkpoint_vacuum(loc, dry_run=dry_run, while_running=while_running,
+                              assume_yes=assume_yes, verbosity=verbosity)
+
+    # 2. Opt-in compacted-part reclaim (verify-or-skip).
+    if do_parts:
+        print()
+        reclaim_parts(loc, dry_run=dry_run, while_running=while_running,
+                      assume_yes=assume_yes, retention_days=retention_days,
+                      verbosity=verbosity)
+
+    # 3. Opt-in guarded temp reap.
+    if do_temp:
+        print()
+        reclaim_temp(loc, dry_run=dry_run, force=force, min_age_hours=min_age_hours,
+                     assume_yes=assume_yes, verbosity=verbosity)
+
+    # 4. Foreign backups dir (explicit, path-safe).
+    if backups_dir:
+        print()
+        reclaim_backups_dir(backups_dir, loc, dry_run=dry_run, assume_yes=assume_yes,
+                            min_age_hours=min_age_hours, verbosity=verbosity)
+
+    # 5. Snapshots (explicit, distinct confirm, -y does NOT bypass).
+    if force_snapshots:
+        print()
+        reclaim_snapshots(force_snapshots, loc, dry_run=dry_run, verbosity=verbosity)
+
+
 def main() -> None:
     import sys
     """
@@ -12754,6 +14264,21 @@ def main() -> None:
                 historical=getattr(args, "spend_historical", False),
                 json_output=getattr(args, "json_output", False),
             )
+        except RecoveryError as e:
+            die(str(e))
+        return
+
+    # Handle doctor / reclaim.
+    if getattr(args, "run_doctor", False):
+        try:
+            cli_doctor(args)
+        except RecoveryError as e:
+            die(str(e))
+        return
+
+    if getattr(args, "run_reclaim", False):
+        try:
+            cli_reclaim(args)
         except RecoveryError as e:
             die(str(e))
         return

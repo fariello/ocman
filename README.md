@@ -407,6 +407,8 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in [project\|session] NAME` (auto-detects; disambiguate with `in project NAME` / `in session NAME`). `-n N`/`--limit N` sets the max matching lines shown per session (default: 10). |
 | `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. Short forms: `ocman lp` / `ocman ls [NAME]`. |
 | `ocman list running` | List running OpenCode instances (pid/user/uptime/kind/dir/project/session) and flag insecure control servers (unauthenticated or non-loopback listeners) in bold red. Observe-only; current user by default (`--all-users` opt-in). `--probe` confirms auth via a read-only `GET /app` on your own loopback listeners; `--json` for machine output. Fails loud if it cannot reliably enumerate (never a false "all clear"). Linux-focused. |
+| `ocman doctor` | Read-only health checkup of your OpenCode storage (safe to run any time, even while OpenCode is running). Reports DB/WAL size, integrity, event-log bloat, compacted-part output, orphaned rows/diff files, old sessions, ocman + foreign backup inventory, temp leftovers, and snapshots; each row names the `ocman` command that fixes it and links the upstream issue where the cause is an OpenCode bug. `--json` for machine output; `-v` for per-table/per-project detail. Never modifies anything. |
+| `ocman reclaim` | Guarded disk reclamation. A bare run does only the safe offline `wal_checkpoint(TRUNCATE)` + `VACUUM` (refused while any process holds the DB open, unless `--while-running`; a backup is taken first). Opt in to more: `--reclaim-temp` (delete leaked `opencode-wal-*.db` / `/tmp/*.so` not held by a live process), `--reclaim-parts` (empty compacted tool-part output; verify-or-skip, never touches the event log), `--backups-dir PATH` (prune a named backup dir), `--force-snapshots PATH` (dangerous; can break undo/revert). `--dry-run` previews; `-y` skips the ordinary confirm (not the snapshot confirm). |
 | `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |
 | `ocman export SPEC to FILE` | Auto-detects whether `SPEC` is a session or a project and exports it to a `.ocbox` bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session\|project SPEC`. `ocman session import FILE` auto-detects and restores either kind. |
 | `ocman info` | Alias of `ocman db info`. |
@@ -504,6 +506,43 @@ Detection matches any `opencode` process (not just `--continue`). On Linux, if o
 cannot determine whether OpenCode is running it errs on the safe side and refuses unless
 `--while-running` is given. Note that `-y`/`--yes` only skips the ordinary confirmation
 prompt, not this running-instance check; use `--while-running` for that.
+
+### Health checkup and reclaiming disk (`ocman doctor` / `ocman reclaim`)
+
+OpenCode can leave a lot of data behind (a multi-GB database, a runaway WAL, leaked
+temp files, unbounded snapshots). `ocman doctor` is a read-only checkup that measures
+each trouble spot and, for each, tells you the `ocman` command that fixes it (and links
+the upstream OpenCode issue when the cause is an OpenCode bug). It never modifies
+anything, so it is safe to run even while OpenCode is running. Findings fall into three
+buckets, which the summary keeps separate so a number is never misleading:
+
+*   **ocman can reclaim now** (via `ocman reclaim`): offline `wal_checkpoint(TRUNCATE)` +
+    `VACUUM` on the database (OpenCode never runs `VACUUM` and ships with `auto_vacuum`
+    off, so freed pages otherwise never return). Also orphaned rows/diff files
+    (`ocman db clean-orphans`), old sessions (`ocman db clean`), and stale ocman backups
+    (`ocman backup clean`).
+*   **Opt-in reclaim**: `ocman reclaim --reclaim-temp` deletes leaked
+    `opencode-wal-*.db` / `/tmp/*.so` files that no live process is using;
+    `ocman reclaim --reclaim-parts` empties the output of tool results OpenCode already
+    compacted out of context (safe by construction: once compacted, OpenCode substitutes
+    a placeholder and never reads that output again). Both are guarded, backed up, and
+    require OpenCode to be stopped.
+*   **Reported only, not ocman-reclaimable**: event-log bloat (deleting those rows would
+    break OpenCode's session replay, so ocman only reports it and links the upstream
+    issue), foreign backup directories (e.g. `~/backups/opencode`, which OpenCode does
+    not create, so ocman will not touch it), and snapshots (the database references live
+    snapshot hashes, so blind pruning can break undo/revert; deletable only via the
+    explicit, dangerous `--force-snapshots PATH`).
+
+Every `reclaim` action that writes to the database first refuses if any process still
+holds the database open (checked by open file descriptor, not just process name, so it
+catches a Desktop server too), takes a backup, previews what it will do, and asks for
+confirmation. `--dry-run` shows exactly what would happen without changing anything.
+
+Because OpenCode's internal schema evolves, the DB-internal checks (integrity, event/
+part analysis, orphans) fingerprint the schema first and report `UNKNOWN` (rather than
+guessing) if they do not recognize it; the mutating `--reclaim-parts` likewise fails
+closed on an unrecognized schema.
 
 ---
 

@@ -3543,3 +3543,565 @@ def test_no_local_shutil_imports():
     
     assert not local_shutil_imports, f"Found local 'shutil' imports in ocman/cli.py at lines: {local_shutil_imports}"
 
+
+
+# ===========================================================================
+# ocman doctor / ocman reclaim tests
+# ===========================================================================
+import json as _json
+import time as _time
+import types
+import argparse
+
+
+def _seed_doctor_db(db_path, *, migration_id=1, with_compacted=True,
+                    compacted_age_ms=None, with_orphans=False, event_rows=True):
+    """Seed a schema-faithful DB for doctor/reclaim tests.
+
+    event rows: type='message.updated.1', data={"sessionID":..,"info":{"id":..}} with
+    varying seq per (aggregate_id, info.id). part rows: data={"type":"tool",
+    "state":{"status":"completed","output":"...","time":{"compacted":<ms|absent>}}}.
+    A migration table row seeds the fingerprint gate.
+    """
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("""CREATE TABLE project (id TEXT PRIMARY KEY, worktree TEXT, name TEXT)""")
+    cur.execute("""CREATE TABLE session (
+        id TEXT PRIMARY KEY, project_id TEXT, title TEXT, time_created INTEGER,
+        time_updated INTEGER, directory TEXT, cost REAL, tokens_input INTEGER,
+        tokens_output INTEGER, tokens_cache_read INTEGER, parent_id TEXT)""")
+    cur.execute("""CREATE TABLE migration (id INTEGER PRIMARY KEY)""")
+    cur.execute("""CREATE TABLE event (
+        id INTEGER PRIMARY KEY, aggregate_id TEXT, type TEXT, seq INTEGER, data TEXT NOT NULL)""")
+    cur.execute("""CREATE TABLE part (
+        id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+        time_created INTEGER, time_updated INTEGER, data TEXT NOT NULL)""")
+    cur.execute("""CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT)""")
+
+    cur.execute("INSERT INTO migration (id) VALUES (?)", (migration_id,))
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1','/p','P1')")
+    now_ms = int(_time.time() * 1000)
+    cur.execute("""INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+                   VALUES ('sess1','proj1','S1',?,?,'/p',NULL)""", (now_ms, now_ms))
+
+    if event_rows:
+        # Two message.updated snapshots for the same (aggregate_id, info.id): seq 1
+        # is superseded by seq 2 (exercises the superseded-waste estimate).
+        for seq in (1, 2):
+            data = _json.dumps({"sessionID": "sess1", "info": {"id": "msg1"}})
+            cur.execute("INSERT INTO event (aggregate_id, type, seq, data) VALUES (?,?,?,?)",
+                        ("sess1", "message.updated.1", seq, data + " " * (500 * seq)))
+
+    if with_compacted:
+        marker = compacted_age_ms if compacted_age_ms is not None else now_ms
+        pdata = _json.dumps({
+            "type": "tool",
+            "state": {"status": "completed", "output": "X" * 2000,
+                      "time": {"compacted": marker}}})
+        cur.execute("""INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                       VALUES ('part_c','msg1','sess1',?,?,?)""", (now_ms, now_ms, pdata))
+    # A non-compacted completed tool part (must never be touched).
+    ndata = _json.dumps({"type": "tool", "state": {"status": "completed",
+                                                    "output": "KEEP" * 100, "time": {}}})
+    cur.execute("""INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                   VALUES ('part_n','msg1','sess1',?,?,?)""", (now_ms, now_ms, ndata))
+
+    if with_orphans:
+        # Orphaned part row (session_id absent from session).
+        odata = _json.dumps({"type": "tool", "state": {"status": "completed"}})
+        cur.execute("""INSERT INTO part (id, message_id, session_id, time_created, time_updated, data)
+                       VALUES ('part_o','msgX','ghost',?,?,?)""", (now_ms, now_ms, odata))
+        # A session with a dangling project_id.
+        cur.execute("""INSERT INTO session (id, project_id, title, time_created, time_updated, directory)
+                       VALUES ('sess_d','no_such_proj','D',?,?,'/p')""", (now_ms, now_ms))
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def doctor_db(tmp_path, monkeypatch):
+    """A schema-faithful seeded DB plus a tmp HOME, with OPENCODE_DB_PATH pointed at it."""
+    fake_home = tmp_path / "home"
+    fake_home.mkdir(exist_ok=True)
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: fake_home))
+    # Neutralize any XDG/OPENCODE_DB env that could redirect discovery.
+    for var in ("XDG_DATA_HOME", "XDG_CONFIG_HOME", "OPENCODE_DB",
+                "OPENCODE_CONFIG_DIR"):
+        monkeypatch.delenv(var, raising=False)
+    db_path = tmp_path / "opencode.db"
+    orig = ocman.OPENCODE_DB_PATH
+    ocman.OPENCODE_DB_PATH = db_path
+    yield tmp_path, db_path
+    ocman.OPENCODE_DB_PATH = orig
+
+
+# --- db_connect_readonly ----------------------------------------------------
+
+def test_db_connect_readonly_blocks_writes(doctor_db):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    conn = ocman.db_connect_readonly(db_path)
+    try:
+        with pytest.raises(Exception):
+            conn.execute("INSERT INTO migration (id) VALUES (999)")
+            conn.commit()
+    finally:
+        conn.close()
+    # Reads still work.
+    conn = ocman.db_connect_readonly(db_path)
+    try:
+        assert conn.execute("SELECT COUNT(*) FROM migration").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
+def test_db_connect_readonly_missing_degrades(tmp_path):
+    missing = tmp_path / "nope.db"
+    with pytest.raises(Exception):
+        ocman.db_connect_readonly(missing)
+    with pytest.raises(Exception):
+        ocman.db_connect_readonly(":memory:")
+
+
+# --- discovery --------------------------------------------------------------
+
+def test_discovery_honors_xdg_and_tmp(tmp_path, monkeypatch):
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "xdg"))
+    monkeypatch.delenv("OPENCODE_DB", raising=False)
+    loc = ocman.discover_storage_locations(None)
+    assert loc["data_dir"] == (tmp_path / "xdg" / "opencode")
+    assert loc["snapshot_dir"] == (tmp_path / "xdg" / "opencode" / "snapshot")
+    assert "temp_wal_glob" in loc and "temp_so_glob" in loc
+
+
+def test_discovery_memory_db(monkeypatch):
+    monkeypatch.setenv("OPENCODE_DB", ":memory:")
+    loc = ocman.discover_storage_locations(None)
+    assert loc["db_is_memory"] is True
+    assert loc["db_path"] is None
+
+
+def test_discovery_excludes_backup_prefixes(tmp_path, monkeypatch):
+    data = tmp_path / "data" / "opencode"
+    data.mkdir(parents=True)
+    (data / "opencode.db").write_text("x")
+    (data / "opencode-db-cleanup-xyz.db").write_text("x")
+    monkeypatch.setenv("XDG_DATA_HOME", str(tmp_path / "data"))
+    monkeypatch.delenv("OPENCODE_DB", raising=False)
+    detected = ocman._detect_db_in_data_dir(data)
+    assert detected.name == "opencode.db"
+
+
+# --- doctor render ----------------------------------------------------------
+
+def test_doctor_runs_without_db(doctor_db, capsys, monkeypatch):
+    _tmp, db_path = doctor_db
+    # No DB file created -> degrade to filesystem-only.
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    args = argparse.Namespace(verbose=0, json_output=False)
+    ocman.cli_doctor(args)
+    out = capsys.readouterr().out
+    assert "Check" in out and "Recommended fix" in out
+    assert "OK / " in out and "warnings" in out
+
+
+def test_doctor_healthy_db_ok(doctor_db, capsys, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, with_orphans=False)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    by_key = {r["key"]: r for r in records}
+    assert by_key["db_size"]["status"] in ("ok", "warn")
+    assert by_key["db_integrity"]["status"] == "ok"
+    assert by_key["orphan_rows"]["status"] == "ok"
+
+
+def test_doctor_json_envelope(doctor_db, capsys, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    args = argparse.Namespace(verbose=0, json_output=True)
+    ocman.cli_doctor(args)
+    out = capsys.readouterr().out
+    payload = _json.loads(out)
+    assert payload["command"] == "doctor"
+    assert isinstance(payload["doctor"], list)
+    keys = {r["key"] for r in payload["doctor"]}
+    assert {"db_size", "event_bloat", "compacted_parts", "orphan_rows"} <= keys
+
+
+# --- orphan / event / compacted checks --------------------------------------
+
+def test_doctor_orphan_checks_warn(doctor_db, tmp_path, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, with_orphans=True)
+    # Seed an orphaned session-diff file.
+    storage = tmp_path / "home" / ".local" / "share" / "opencode" / "storage" / "session_diff"
+    storage.mkdir(parents=True)
+    (storage / "ghost_session.json").write_text("{}")
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    by_key = {r["key"]: r for r in records}
+    assert by_key["orphan_rows"]["status"] == "warn"
+    assert by_key["orphan_rows"]["fix_cmd"] == "ocman db clean-orphans"
+    assert by_key["orphan_diff_files"]["status"] == "warn"
+    assert by_key["orphan_diff_files"]["fix_cmd"] == "ocman db clean-orphans"
+    # Read-only: the orphan rows/files are still present (nothing deleted).
+    conn = sqlite3.connect(str(db_path))
+    assert conn.execute("SELECT COUNT(*) FROM part WHERE session_id='ghost'").fetchone()[0] == 1
+    conn.close()
+    assert (storage / "ghost_session.json").exists()
+
+
+def test_doctor_event_bloat_reported(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    ev = next(r for r in records if r["key"] == "event_bloat")
+    assert ev["status"] == "notice"
+    assert "33356" in (ev["issue_url"] or "")
+    assert ev["bucket"] == "report"
+    assert ev["fix_cmd"] is None  # NEVER a reclaim command for events
+
+
+def test_doctor_compacted_parts_actionable(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, with_compacted=True)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    cp = next(r for r in records if r["key"] == "compacted_parts")
+    assert cp["status"] == "notice"
+    assert cp["bucket"] == "optin"
+    assert cp["fix_cmd"] == "ocman reclaim --reclaim-parts"
+
+
+def test_doctor_compacted_parts_unpopulated(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, with_compacted=False)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    cp = next(r for r in records if r["key"] == "compacted_parts")
+    assert cp["status"] == "notice"
+    assert "not currently actionable" in cp["detail"]
+
+
+def test_doctor_backup_check(doctor_db, tmp_path, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    backups = tmp_path / "home" / ".local" / "share" / "opencode" / "backups"
+    backups.mkdir(parents=True)
+    old = backups / "opencode-backup-20200101.zip"
+    old.write_text("x" * 100)
+    os.utime(old, (0, 0))  # very old mtime
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    bk = next(r for r in records if r["key"] == "ocman_backups")
+    assert bk["status"] == "notice"
+    assert "ocman backup clean --older-than" in (bk["fix_cmd"] or "")
+
+
+# --- migration gate + schema-defensive --------------------------------------
+
+def test_doctor_unrecognized_migration_marks_unknown(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, migration_id=999999)  # out of recognized range
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    by_key = {r["key"]: r for r in records}
+    assert by_key["compacted_parts"]["status"] == "unknown"
+    assert by_key["orphan_rows"]["status"] == "unknown"
+
+
+# --- no --compact-events, no event deletion ---------------------------------
+
+def test_no_compact_events_flag():
+    parser = ocman.build_parser()
+    # Parsing an unknown flag must fail.
+    with pytest.raises(SystemExit):
+        parser.parse_args(["reclaim", "--compact-events"])
+
+
+def test_no_event_deleting_code_path():
+    import inspect
+    src = inspect.getsource(ocman.cli_reclaim)
+    src += inspect.getsource(ocman.reclaim_parts)
+    src += inspect.getsource(ocman.reclaim_checkpoint_vacuum)
+    assert "DELETE FROM event" not in src
+    assert "delete from event" not in src.lower()
+
+
+# --- doctor-while-running writes nothing ------------------------------------
+
+@pytest.mark.real_process_detection
+def test_doctor_while_running_writes_nothing(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    # Force detection to "some" AND the fd check to positive.
+    monkeypatch.setattr(ocman, "detect_running_opencode_status",
+                        lambda *a, **k: ("some", [{"pid": 1, "tty": "?", "elapsed": "1m",
+                                                    "started": "now", "cwd": "", "project": "",
+                                                    "cmdline": "opencode"}]))
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: True)
+    before = db_path.stat().st_mtime_ns
+    args = argparse.Namespace(verbose=0, json_output=False)
+    ocman.cli_doctor(args)  # must not raise, must not write
+    after = db_path.stat().st_mtime_ns
+    assert before == after
+
+
+# --- reclaim: checkpoint + VACUUM -------------------------------------------
+
+@pytest.mark.real_process_detection
+def test_reclaim_refuses_on_live_fd(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: True)
+    args = argparse.Namespace(
+        verbose=0, dry_run=False, yes=True, while_running=False, force=False,
+        reclaim_parts=False, reclaim_temp=False, backups_dir=None,
+        force_snapshots=None, tmp_min_age_hours=None)
+    with pytest.raises(ocman.RecoveryError, match="live process holds"):
+        ocman.cli_reclaim(args)
+
+
+@pytest.mark.real_process_detection
+def test_reclaim_checkpoint_vacuum_while_running(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: True)
+    args = argparse.Namespace(
+        verbose=0, dry_run=False, yes=True, while_running=True, force=False,
+        reclaim_parts=False, reclaim_temp=False, backups_dir=None,
+        force_snapshots=None, tmp_min_age_hours=None)
+    ocman.cli_reclaim(args)
+    out = capsys.readouterr().out
+    assert "VACUUM" in out
+    # A backup family dir was created.
+    backups = _tmp / "home" / ".local" / "share" / "opencode" / "backups"
+    made = list(backups.glob("opencode-db-cleanup-*"))
+    assert made, "expected a pre-op backup dir"
+    assert (made[0] / "opencode.db").exists()
+
+
+def test_reclaim_dry_run_writes_nothing(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    before = db_path.stat().st_mtime_ns
+    args = argparse.Namespace(
+        verbose=0, dry_run=True, yes=True, while_running=False, force=False,
+        reclaim_parts=False, reclaim_temp=False, backups_dir=None,
+        force_snapshots=None, tmp_min_age_hours=None)
+    ocman.cli_reclaim(args)
+    after = db_path.stat().st_mtime_ns
+    assert before == after
+    backups = _tmp / "home" / ".local" / "share" / "opencode" / "backups"
+    assert not list(backups.glob("opencode-db-cleanup-*"))
+
+
+# --- reclaim: --reclaim-parts verify-or-skip --------------------------------
+
+def test_reclaim_parts_acts_past_retention(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    old_ms = int(_time.time() * 1000 - 60 * 86400000)  # 60 days ago
+    _seed_doctor_db(db_path, with_compacted=True, compacted_age_ms=old_ms)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_parts(loc, dry_run=False, while_running=False, assume_yes=True,
+                        retention_days=30, verbosity=0)
+    conn = sqlite3.connect(str(db_path))
+    data = conn.execute("SELECT data FROM part WHERE id='part_c'").fetchone()[0]
+    parsed = _json.loads(data)  # still valid JSON
+    assert parsed["state"]["output"] == ""  # emptied, not nulled
+    assert parsed["state"]["time"]["compacted"] == old_ms  # marker preserved
+    # Non-compacted part is untouched.
+    ndata = _json.loads(conn.execute("SELECT data FROM part WHERE id='part_n'").fetchone()[0])
+    assert ndata["state"]["output"] == "KEEP" * 100
+    conn.close()
+
+
+def test_reclaim_parts_skips_within_retention(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    now_ms = int(_time.time() * 1000)  # compacted just now, within retention
+    _seed_doctor_db(db_path, with_compacted=True, compacted_age_ms=now_ms)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_parts(loc, dry_run=False, while_running=False, assume_yes=True,
+                        retention_days=30, verbosity=0)
+    conn = sqlite3.connect(str(db_path))
+    data = _json.loads(conn.execute("SELECT data FROM part WHERE id='part_c'").fetchone()[0])
+    assert data["state"]["output"] == "X" * 2000  # untouched (within retention)
+    conn.close()
+
+
+def test_reclaim_parts_fail_closed_no_marker(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path, with_compacted=False)  # no part carries the marker
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_parts(loc, dry_run=False, while_running=False, assume_yes=True,
+                        retention_days=30, verbosity=0)
+    out = capsys.readouterr().out
+    assert "SKIPPED" in out
+    # Nothing written: no backup dir made.
+    backups = _tmp / "home" / ".local" / "share" / "opencode" / "backups"
+    assert not list(backups.glob("opencode-db-cleanup-*"))
+
+
+def test_reclaim_parts_migration_gate(doctor_db, monkeypatch, capsys):
+    _tmp, db_path = doctor_db
+    old_ms = int(_time.time() * 1000 - 60 * 86400000)
+    _seed_doctor_db(db_path, migration_id=999999, with_compacted=True, compacted_age_ms=old_ms)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_parts(loc, dry_run=False, while_running=False, assume_yes=True,
+                        retention_days=30, verbosity=0)
+    out = capsys.readouterr().out
+    assert "aborted" in out.lower()
+    conn = sqlite3.connect(str(db_path))
+    data = _json.loads(conn.execute("SELECT data FROM part WHERE id='part_c'").fetchone()[0])
+    assert data["state"]["output"] == "X" * 2000  # untouched (gate refused)
+    conn.close()
+
+
+# --- reclaim: temp reap -----------------------------------------------------
+
+def test_reclaim_temp_report_only_without_flag(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    tmpdir = tmp_path / "scratch"
+    tmpdir.mkdir()
+    wal = tmpdir / "opencode-wal-1.db"
+    wal.write_text("x")
+    os.utime(wal, (0, 0))
+    monkeypatch.setattr(ocman.tempfile, "gettempdir", lambda: str(tmpdir))
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    # Bare reclaim (no --reclaim-temp): must not delete temp files.
+    args = argparse.Namespace(
+        verbose=0, dry_run=False, yes=True, while_running=False, force=False,
+        reclaim_parts=False, reclaim_temp=False, backups_dir=None,
+        force_snapshots=None, tmp_min_age_hours=None)
+    ocman.cli_reclaim(args)
+    assert wal.exists()
+
+
+def test_reclaim_temp_deletes_old_unheld(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    tmpdir = tmp_path / "scratch"
+    tmpdir.mkdir()
+    # Two WAL files (newest kept), plus a .so.
+    old_wal = tmpdir / "opencode-wal-old.db"
+    new_wal = tmpdir / "opencode-wal-new.db"
+    lib = tmpdir / "held.so"
+    free_lib = tmpdir / "free.so"
+    for f in (old_wal, new_wal, lib, free_lib):
+        f.write_text("x")
+    os.utime(old_wal, (0, 0))
+    os.utime(lib, (0, 0))
+    os.utime(free_lib, (0, 0))
+    monkeypatch.setattr(ocman.tempfile, "gettempdir", lambda: str(tmpdir))
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    # Fake: `lib` is held/mapped by a live PID; the rest are free.
+    monkeypatch.setattr(ocman, "_proc_pids_mapping_or_holding",
+                        lambda paths: {str(lib)} & set(paths))
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_temp(loc, dry_run=False, force=True, min_age_hours=24,
+                       assume_yes=True, verbosity=0)
+    assert not old_wal.exists()   # old, unheld -> deleted
+    assert new_wal.exists()       # newest WAL kept as a precaution
+    assert lib.exists()           # held/mapped -> skipped
+    assert not free_lib.exists()  # old, unheld -> deleted
+
+
+def test_reclaim_temp_dry_run_noop(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    tmpdir = tmp_path / "scratch"
+    tmpdir.mkdir()
+    old_wal = tmpdir / "opencode-wal-a.db"
+    old_wal.write_text("x")
+    os.utime(old_wal, (0, 0))
+    monkeypatch.setattr(ocman.tempfile, "gettempdir", lambda: str(tmpdir))
+    monkeypatch.setattr(ocman, "_proc_pids_mapping_or_holding", lambda paths: set())
+    loc = ocman.discover_storage_locations(db_path)
+    ocman.reclaim_temp(loc, dry_run=True, force=True, min_age_hours=24,
+                       assume_yes=True, verbosity=0)
+    assert old_wal.exists()
+
+
+# --- snapshots require --force-snapshots + distinct confirm -----------------
+
+def test_snapshots_not_deleted_by_default(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    snap = tmp_path / "home" / ".local" / "share" / "opencode" / "snapshot" / "proj"
+    snap.mkdir(parents=True)
+    (snap / "obj").write_text("x")
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    args = argparse.Namespace(
+        verbose=0, dry_run=False, yes=True, while_running=False, force=False,
+        reclaim_parts=False, reclaim_temp=False, backups_dir=None,
+        force_snapshots=None, tmp_min_age_hours=None)
+    ocman.cli_reclaim(args)
+    assert (snap / "obj").exists()
+
+
+def test_snapshots_yes_does_not_bypass_confirm(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    snap = tmp_path / "snap"
+    snap.mkdir()
+    (snap / "obj").write_text("x")
+    loc = ocman.discover_storage_locations(db_path)
+    # Non-interactive stdout -> --force-snapshots must refuse (not bypass).
+    monkeypatch.setattr(ocman.sys.stdout, "isatty", lambda: False)
+    with pytest.raises(ocman.RecoveryError, match="interactive"):
+        ocman.reclaim_snapshots(str(snap), loc, dry_run=False, verbosity=0)
+    assert (snap / "obj").exists()
+
+
+def test_snapshots_distinct_confirm_typed(doctor_db, monkeypatch, tmp_path):
+    _tmp, db_path = doctor_db
+    snap = tmp_path / "snap2"
+    snap.mkdir()
+    (snap / "obj").write_text("x")
+    loc = ocman.discover_storage_locations(db_path)
+    monkeypatch.setattr(ocman.sys.stdout, "isatty", lambda: True)
+    # Wrong token cancels; the dir survives.
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "yes")
+    ocman.reclaim_snapshots(str(snap), loc, dry_run=False, verbosity=0)
+    assert snap.exists()
+    # Correct token deletes.
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "delete snapshots")
+    ocman.reclaim_snapshots(str(snap), loc, dry_run=False, verbosity=0)
+    assert not snap.exists()
+
+
+# --- user-dir path safety ---------------------------------------------------
+
+def test_backups_dir_refuses_dangerous_roots(doctor_db, monkeypatch):
+    _tmp, db_path = doctor_db
+    loc = ocman.discover_storage_locations(db_path)
+    with pytest.raises(ocman.RecoveryError, match="protected root"):
+        ocman._resolve_user_dir_for_delete(str(_tmp / "home"), loc,
+                                            label="--backups-dir")
+
+
+# --- db_family_open_by_live_pid ---------------------------------------------
+
+@pytest.mark.real_process_detection
+def test_db_family_open_by_live_pid_detects_self(tmp_path):
+    if not ocman.sys.platform.startswith("linux"):
+        pytest.skip("requires /proc")
+    db = tmp_path / "held.db"
+    db.write_text("x")
+    fh = open(db, "rb")  # hold a live fd on our own process
+    try:
+        assert ocman.db_family_open_by_live_pid(db) is True
+    finally:
+        fh.close()
+    # After closing, no live fd holds it.
+    assert ocman.db_family_open_by_live_pid(db) is False
