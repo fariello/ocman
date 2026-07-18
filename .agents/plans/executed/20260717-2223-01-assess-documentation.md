@@ -4,12 +4,35 @@
 - Concern: documentation
 - Scope: whole-project written docs (README.md, ARCHITECTURE.md, CHANGELOG.md,
   the generated config template); accuracy-first, verified against `ocman/cli.py`.
-- Status: to-review
+- Status: EXECUTED
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
 
 - 2026-07-17 /assess documentation (its_direct/pt3-claude-opus-4.8): assessed; proposed 14 changes.
+- 2026-07-18 executed. Notes / deltas since the audit:
+  - D-01/D-02/D-04 (README zero-dep + `ocman.py` standalone story; ARCHITECTURE `ocman.py`
+    and "standard library only"): fixed. README now lists the real deps
+    (textual/rich/vistab/pysqlite3-binary) and the `ocman = "ocman:main"` console script;
+    ARCHITECTURE points at `ocman/cli.py`.
+  - D-03: recovery-options table split into shared vs compaction-only (verified against
+    `session recover --help` / `session compact --help`).
+  - D-05/D-06: config template fixed (`default_out_dir = "opencode-recovery"`,
+    `filter_secret_scan = "conservative"`) and the 4 missing keys added; the README block
+    now parses as valid TOML and covers every `DEFAULT_CONFIG` key.
+  - D-07: added an "Environment variables" subsection (NO_COLOR, FORCE_COLOR,
+    OCMAN_CONFIG_PATH, OPENCODE_DB, XDG_DATA_HOME, OPENCODE_CONFIG_DIR). OCMAN_BENCHMARK is
+    a test-only var and intentionally omitted from the user README.
+  - D-08: added the missing flags (list `--json`/`--limit`, `session show -D`,
+    `session import --dry-run`, reclaim `--tmp-min-age-hours`/`--force`).
+  - D-09: ARCHITECTURE verb list now includes spend/running/doctor/reclaim.
+  - D-10: softened the `help all` claim (curated, not exhaustive). Note: since the audit,
+    commit 704180b already made `help`/`help all` list doctor/spend/running, so this is now
+    a wording fix only.
+  - D-11 (CHANGELOG): the reclaim/batch-delete CHANGELOG wording was already refined in
+    later commits; not re-edited here. Additionally documented two features that shipped
+    AFTER this IPD was written: extract-on-delete (`--extracts`/`--no-extracts`/`-o` on
+    session/project delete and db clean) and the bare-word `help` == `-h` behavior.
 
 ## Goal
 

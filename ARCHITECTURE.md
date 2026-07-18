@@ -13,12 +13,13 @@ export/import).
 
 ## Entry points
 
-- **CLI (`ocman.py`)** (console script `ocman`, defined in `pyproject.toml`). A single,
-  self-contained module. It uses a noun-based, git/kubectl-style subcommand grammar:
+- **CLI (`ocman/cli.py`)** (console script `ocman = "ocman:main"`, defined in
+  `pyproject.toml`). It uses a noun-based, git/kubectl-style subcommand grammar:
   `ocman <group> <action> [options]`, where the groups are `session`, `project`, `db`,
   `backup`, `history`, and `config` (e.g. `ocman session recover ID`, `ocman db clean`).
   A handful of top-level verbs are kept as aliases (`search`, `info`, `disk`, `logs`,
-  `models`, `compaction-prompt`, `filter`, `move`, `export`, `ui`/`gui`, `help`).
+  `spend`, `running`, `doctor`, `reclaim`, `models`, `compaction-prompt`, `filter`,
+  `move`, `export`, `ui`/`gui`, `help`).
   `build_parser()` builds the parser tree; `main()` parses arguments (`parse_args`) and
   `_normalize()` folds the parsed subcommand namespace back into a flat namespace that
   `main()` dispatches on. Global options (`--db`, `-v/--verbose`, `-V/--version`,
@@ -61,7 +62,7 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 
 - **SQLite database** (`~/.local/share/opencode/opencode.db` by default). The relevant
   tables and their session foreign-key columns are enumerated centrally in
-  `SESSION_RELATIONAL_TABLES` in `ocman.py`; all delete/export/import/cleanup logic iterates
+  `SESSION_RELATIONAL_TABLES` in `ocman/cli.py`; all delete/export/import/cleanup logic iterates
   that list, so table identifiers are never taken from untrusted input.
 - **`.ocbox` export bundle** (a ZIP): `meta.json`, one `db_data/<table>.jsonl` per relational
   table (streamed in batches to keep memory flat), and `session_diffs/<session_id>.json`
@@ -149,7 +150,7 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
 - **Connections are closed deterministically** via `try/finally` around each DB operation.
 - **Egress guards and safe secret redaction.** Outbound LLM payloads are scanned for secrets/PII. Users can view detections (`--show-secrets` context masked, or `--show-secrets=raw` requiring TTY confirmation). Detections can be redacted outbound via `--expunge-secrets` and optionally scrubbed from on-disk recovery outputs. Redaction runs on copies only; original transcripts, logs, and database records are never modified, and secret values are never logged.
 - **Destructive-confirmation seam.** Destructive commands present their outcome and confirm
-  through one shared seam in `ocman.py`: a `DestructivePreview`/`PreviewItem` data model, a
+  through one shared seam in `ocman/cli.py`: a `DestructivePreview`/`PreviewItem` data model, a
   pure `render_destructive_preview()` (a color-independent table with headers, a right-aligned
   Size column, and a `DELETE`/`KEEP` `Action` word per item (color is enhancement only), plus a
   forceful "this will ... ALL N ..." warning when nothing is kept), and a `confirm_destructive()`
@@ -247,8 +248,9 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   actions, and actionable output. Users should learn it as they go.
 - **Configurable over hardcoded.** Paths, retention, and model selection come from
   `ocman.toml` with CLI overrides; the DB table model is centralized, not special-cased.
-- **KISS.** The CLI is intentionally one dependency-light module (standard library only for
-  the CLI path; the TUI adds `textual`/`rich`). A monolith is a deliberate trade-off for a
+- **KISS.** The CLI is intentionally one large module (`ocman/cli.py`) with a small,
+  focused set of dependencies (`vistab` for tables, plus `pysqlite3-binary` on Linux; the
+  TUI adds `textual`/`rich`). A near-monolith is a deliberate trade-off for a
   single-maintainer personal tool over premature modularization.
 - **Honest documentation.** Docs describe current behavior; the changelog tracks each release.
 

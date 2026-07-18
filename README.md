@@ -122,9 +122,12 @@ ocman session compact SESSION_ID model:gpt-4 --chunk
 
 ## Installation
 
-### Prerequisite Dependencies
-*   **CLI tool (`ocman` / `ocman.py`)**: Zero external dependencies; requires only Python 3.10+ and the `opencode` CLI on your `PATH`.
-*   **TUI app (`ocman ui` / `ocman gui`)**: Requires the Python packages `textual` and `rich`.
+### Requirements
+*   Python 3.10 or newer.
+*   The `opencode` CLI on your `PATH` (used for `session compact`, which calls out to it).
+*   Python packages, installed automatically with `ocman`: `textual`, `rich`, `vistab`,
+    and (on Linux) `pysqlite3-binary`. These are core dependencies for both the CLI and
+    the TUI; ocman is not a standalone, dependency-free script.
 
 ### Installation Methods
 
@@ -142,12 +145,9 @@ cd ocman
 pip install .
 ```
 
-#### 3. Standalone Script (Zero-Dependency CLI Mode)
-If you only need the CLI recovery features without the interactive TUI dashboard, you can run the standalone python script directly:
-```bash
-chmod +x ocman.py
-./ocman.py help
-```
+Both methods install the `ocman` console script (defined in `pyproject.toml` as
+`ocman = "ocman:main"`). Run it as `ocman ...`; there is no separate script file to
+invoke directly.
 
 
 ---
@@ -171,8 +171,9 @@ The interactive terminal user interface organizes your workflow across several t
 `ocman` renders a compact, verb-first help screen (not the raw argparse dump):
 *   `ocman help` (or `ocman -h`, `ocman --help`) shows the overview grouped by task (Browse, Recover & compact, Maintain, Backup).
 *   `ocman help TOPIC` shows a focused section. Topics: `browse`, `recover`, `maintain`, `backup`, `move`, `config`.
-*   `ocman help all` prints the complete command reference (every group, action, and option).
+*   `ocman help all` prints a curated reference covering the main groups and actions. For the exhaustive, always-accurate options of any single command, use its own `-h` (below).
 *   `ocman <command> -h` prints that specific command's own options and usage, e.g. `ocman db clean -h`, `ocman session -h`, or `ocman session compact -h`. This per-command help is auto-generated, while `ocman help` / `ocman help TOPIC` stay the curated overview.
+*   A bare word `help` after a command also works like `-h`, e.g. `ocman session delete help` behaves like `ocman session delete -h`.
 
 ### Command structure
 `ocman` uses a noun-based, git/kubectl-style grammar: `ocman <group> <action> [options]`. The groups
@@ -327,21 +328,21 @@ Interactions value of `n/a` means that session lacks reliable role data.
 
 | Command | Description |
 |:---|:---|
-| `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Sessions are grouped by `Project:` and each is shown with a two-table header (Start / Last active / Duration / Tokens; and Messages / Interactions / DB Parts / Cost). Add `-A/--all-sessions` to include subagents; `-b/--brief` for the terse one-line-per-session form. Also `session list in NAME`. |
+| `ocman session list [NAME]` | List sessions, optionally scoped to project `NAME` (default: CWD project). Sessions are grouped by `Project:` and each is shown with a two-table header (Start / Last active / Duration / Tokens; and Messages / Interactions / DB Parts / Cost). Add `-A/--all-sessions` to include subagents; `-b/--brief` for the terse one-line-per-session form; `--json` for machine output; `--limit N` caps the count. Also `session list in NAME`. |
 | `ocman session search QUERY [NAME]` | Search session content and titles (case-insensitive), optionally scoped to project `NAME`. Each hit uses the same per-session two-table header as `session list`, followed by the matching-line snippets. `-n N`/`--limit N` caps results (default: 10); `-A/--all-sessions` includes subagents; `-b/--brief` for the terse form. Also `search QUERY in [project\|session] NAME`. |
-| `ocman session show [specs...]` | Show details for sessions (bare form shows details). Accepts multiple target specs. `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
+| `ocman session show [specs...]` | Show details for sessions (bare form shows details, same as `-D/--details`). Accepts multiple target specs. `-H N`/`--head N` and `-T N`/`--tail N` preview the first/last N exchanges; `-A/--all-sessions` aids resolution. |
 | `ocman session recover [specs...]` | Recover sessions to restart-ready Markdown (omit specs to pick interactively). Accepts multiple target specs. `--chunk` splits a large session into ordered `.part-NNofMM` files instead of truncating (nothing dropped); `-ml`/`-mi` set the per-part size. |
 | `ocman session compact [specs...]` | Recover and LLM-compact sessions in batch. Accepts multiple target specs (sessions, projects, and a model). `--chunk` compacts each part separately (one API call per part) and writes `...part-NNofMM.compacted.md`. |
-| `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. Multi-target and project-expanded deletes run as ONE consolidated batch: a single backup, one transaction, one `VACUUM`, and one grand-total report (not once per session). Deleting a whole project's sessions by naming the project also removes the now-empty project row. `--dry-run` previews; `--force` bypasses process-lock checks; `-A/--all-sessions` aids resolution. |
+| `ocman session delete [specs...]` | Recursively delete sessions. Supports multiple target specs. Multi-target and project-expanded deletes run as ONE consolidated batch: a single backup, one transaction, one `VACUUM`, and one grand-total report (not once per session). Deleting a whole project's sessions by naming the project also removes the now-empty project row. By default, ocman offers to write recovery extracts (`.prompt.md`/`.restart.md`/`.transcript.md`) for each session first; `--extracts` forces this (no prompt), `--no-extracts` skips it, `-o DIR` sets the output directory (default `opencode-recovery`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation; `-A/--all-sessions` aids resolution. |
 | `ocman session export ID --to FILE` | Export a session and its subagents to a portable `.ocbox` bundle. |
-| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only). Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
+| `ocman session import FILE` | Import a session from a `.ocbox` bundle. `--to-project ID` remaps to an existing project; `--new-project-path PATH` remaps to a new worktree; `--new-session-id` regenerates a fresh compliant session ID (single-session bundle only); `--dry-run` shows the import plan (remaps, target project) without writing. Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
 | `ocman session move ID --to DST` | Relocate a single session. `--metadata-only` updates DB paths only, bypassing the disk move. |
 
-**Recovery options** (for `session recover` and `session compact`):
+**Recovery options** (shared by `session recover` and `session compact`):
 
 | Option | Equivalent | Description |
 |:---|:---|:---|
-| `-o DIR` | `--out DIR` | Output directory for recovery files (default: `./opencode-recovery`) |
+| `-o DIR` | `--out DIR` | Output directory for recovery files (default: `opencode-recovery`) |
 | `-d DIR` | `--session-dir DIR` | Directory the session originally ran in |
 | `-mi N` | `--max-interactions N` | Keep at most N user+assistant turn pairs (per part when `--chunk`) |
 | `-ml N` | `--max-lines N` | Keep at most N transcript lines (truncates older turns; per part when `--chunk`) |
@@ -357,16 +358,24 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | `-k` | `--keep-temp` | Keep the raw exported JSON file for debugging |
 | `-cp` | `--clean-previous` | Remove prior recovery outputs generated for this session |
 | `-ct` | `--clean-tmp` | Prune old exported JSON temporary files from `/tmp` |
-| | `--show-secrets[=masked|raw]` | Display matched secrets context (default: masked) |
+
+**Compaction-only options** (for `session compact`, which sends content to an LLM):
+
+| Option | Equivalent | Description |
+|:---|:---|:---|
+| | `--no-project-prompt` | Do not copy the compacted file into the project's prompts |
+| | `--allow-secrets` | Bypass the pre-egress secret/PII scan |
+| | `--show-secrets[=masked\|raw]` | Display matched secrets context (default: masked) |
 | | `--expunge-secrets` | Redact secrets from the transmitted payload and rewrite saved files |
+| | `--force` | Override the input size cap |
 | `-y` | `--yes` | Skip confirmation prompt and batch cost confirm |
 
 ### `project` (work with projects)
 
 | Command | Description |
 |:---|:---|
-| `ocman project list` | List all projects in the database. |
-| `ocman project delete NAME` | Recursively delete a project (all its sessions, files, and DB rows). `--dry-run` previews; `--force` bypasses process-lock checks. |
+| `ocman project list` | List all projects in the database. `--json` for machine output; `--limit N` caps the count. |
+| `ocman project delete NAME` | Recursively delete a project (all its sessions, files, and DB rows). Offers recovery extracts first by default (`--extracts`/`--no-extracts`, `-o DIR`; see `session delete`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation. |
 | `ocman project move SRC --to DST` | Relocate a project (re-assign the worktree path in the DB and on disk). `--metadata-only` updates DB paths only. |
 
 ### `db` (database info and maintenance)
@@ -374,7 +383,7 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | Command | Description |
 |:---|:---|
 | `ocman db info` | Show database and storage usage (incl. backups disk usage). `--by-project` adds a per-project on-disk session-diff breakdown. Alias: `ocman info` / `ocman disk`. |
-| `ocman db clean [NAME] [AGE]` | Delete sessions older than the retention window, optionally scoped to project `NAME`. `--older-than AGE` sets the window; `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`), a spelled-out `"30 days"`, or a bare number (days). A positional duration also works (`ocman db clean 30 days`, `ocman db clean myproject 6mo`). `--days N` is a deprecated alias for `--older-than`. Default: 5 days. `--dry-run` previews; `--force` bypasses process-lock checks. |
+| `ocman db clean [NAME] [AGE]` | Delete sessions older than the retention window, optionally scoped to project `NAME`. `--older-than AGE` sets the window; `AGE` accepts compact forms (`2h`, `5d`, `6w`, `6mo`, `1y`), a spelled-out `"30 days"`, or a bare number (days). A positional duration also works (`ocman db clean 30 days`, `ocman db clean myproject 6mo`). `--days N` is a deprecated alias for `--older-than`. Default: 5 days. Offers recovery extracts for the matched sessions first by default (`--extracts`/`--no-extracts`, `-o DIR`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation. |
 | `ocman db clean-orphans` | Remove orphaned records and sidecar diffs. `--dry-run` previews; `--force` bypasses process-lock checks. |
 | `ocman db rebase --from A --to B` | Bulk rebase DB workspace path prefixes (both `--from` and `--to` are required). Refuses if OpenCode is running; `--while-running` (alias `--force`) proceeds anyway. |
 
@@ -408,7 +417,7 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. Short forms: `ocman lp` / `ocman ls [NAME]`. |
 | `ocman list running` | List running OpenCode instances (pid/user/uptime/kind/dir/project/session) and flag insecure control servers (unauthenticated or non-loopback listeners) in bold red. Observe-only; current user by default (`--all-users` opt-in). `--probe` confirms auth via a read-only `GET /app` on your own loopback listeners; `--json` for machine output. Fails loud if it cannot reliably enumerate (never a false "all clear"). Linux-focused. |
 | `ocman doctor` | Read-only health checkup of your OpenCode storage (safe to run any time, even while OpenCode is running). Reports DB/WAL size, integrity, event-log bloat, compacted-part output, orphaned rows/diff files, old sessions, ocman + foreign backup inventory, temp leftovers, and snapshots; each row names the `ocman` command that fixes it and links the upstream issue where the cause is an OpenCode bug. `--json` for machine output; `-v` for per-table/per-project detail. Never modifies anything. |
-| `ocman reclaim` | Guarded disk reclamation. A bare run does only the safe offline `wal_checkpoint(TRUNCATE)` + `VACUUM` (refused while any process holds the DB open, unless `--while-running`; a backup is taken first). Opt in to more: `--reclaim-temp` (delete leaked `opencode-wal-*.db` / `/tmp/*.so` not held by a live process), `--reclaim-parts` (empty compacted tool-part output; verify-or-skip, never touches the event log), `--backups-dir PATH` (prune a named backup dir), `--force-snapshots PATH` (dangerous; can break undo/revert). `--dry-run` previews; `-y` skips the ordinary confirm (not the snapshot confirm). |
+| `ocman reclaim` | Guarded disk reclamation. A bare run does only the safe offline `wal_checkpoint(TRUNCATE)` + `VACUUM` (refused while any process holds the DB open, unless `--while-running`; a backup is taken first). Opt in to more: `--reclaim-temp` (delete leaked `opencode-wal-*.db` / `/tmp/*.so` not held by a live process), `--reclaim-parts` (empty compacted tool-part output; verify-or-skip, never touches the event log), `--backups-dir PATH` (prune a named backup dir), `--force-snapshots PATH` (dangerous; can break undo/revert). `--tmp-min-age-hours N` sets how old a temp artifact must be to be reclaimed (default from config). `--dry-run` previews; `--force` bypasses the process-lock check; `-y` skips the ordinary confirm (not the snapshot confirm). |
 | `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |
 | `ocman export SPEC to FILE` | Auto-detects whether `SPEC` is a session or a project and exports it to a `.ocbox` bundle (`to` optional; `--to FILE` also works). Force the kind with `ocman export session\|project SPEC`. `ocman session import FILE` auto-detects and restores either kind. |
 | `ocman info` | Alias of `ocman db info`. |
@@ -435,7 +444,7 @@ db_path = "~/.local/share/opencode/opencode.db"
 history_path = "~/.local/share/opencode/ocman_history.json"
 
 # Output directory for recovery files
-default_out_dir = "./opencode-recovery"
+default_out_dir = "opencode-recovery"
 
 # Default backup destination directory
 default_backup_dir = "~/.local/share/opencode/backups"
@@ -460,14 +469,37 @@ keep_temp = false
 include_tools = false
 all_roles = false
 
+# Chunking thresholds for large sessions (recover/compact --chunk, and the
+# "too large" prompt). Per-part caps: interactions and transcript lines.
+chunk_max_interactions = 100
+chunk_max_lines = 2500
+
+# reclaim: minimum age (hours) before a temp artifact is eligible to be reclaimed.
+reclaim_tmp_min_age_hours = 24
+# reclaim: retention window (days) used when estimating reclaimable compacted parts.
+reclaim_parts_retention_days = 30
+
 # Egress guards for `filter` and `session compact` (content sent to the LLM API).
 # Max input bytes before refusing (override per-run with --force). Default: 5242880 (5 MB).
 filter_max_bytes = 5242880
 # Secret/PII pre-egress scan: "conservative" (high-signal patterns) or "aggressive"
 # (also bare keywords, for sensitive environments). A hit stops the send unless
 # --allow-secrets is passed. Default: conservative.
-filter_secret_scan = conservative
+filter_secret_scan = "conservative"
 ```
+
+### Environment variables
+
+| Variable | Effect |
+|:---|:---|
+| `NO_COLOR` | If set (any value), disables colored output. |
+| `FORCE_COLOR` | If set, forces colored output even when stdout is not a TTY. |
+| `OCMAN_CONFIG_PATH` | Overrides the location of `ocman.toml` (default `~/.config/opencode/ocman.toml`). |
+| `OPENCODE_DB` | Path to the OpenCode SQLite database; honored when discovering storage locations (`doctor`/`reclaim`). |
+| `XDG_DATA_HOME` | Base for OpenCode's data dir when discovering storage locations (default `~/.local/share`). |
+| `OPENCODE_CONFIG_DIR` | OpenCode config directory used during storage-location discovery. |
+
+The `--db` flag overrides the database path for a single run regardless of the above.
 
 ---
 
