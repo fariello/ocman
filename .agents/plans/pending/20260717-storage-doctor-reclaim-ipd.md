@@ -2,10 +2,13 @@
 
 - Date: 2026-07-17
 - Concern: usability / disk reclamation (OpenCode leaves large data behind)
-- Scope: add a read-only `ocman doctor` that DIAGNOSES known OpenCode storage
-  problems (with measured sizes and upstream issue links), and a guarded
-  `ocman reclaim` that CLEANS the safe categories (with previews + confirmation),
-  reusing ocman's existing sizing, delete/VACUUM, backup, and running-guard machinery.
+- Scope: add a read-only `ocman doctor` that runs a FULL environment checkup (known
+  OpenCode storage problems AND ocman's own housekeeping: orphaned tables/rows, orphaned
+  session-diff files, DB integrity, backup inventory + stale-backup suggestions, temp
+  leftovers), each with measured sizes/counts and a concrete recommended `ocman` fix
+  command (and upstream issue link where relevant); and a guarded `ocman reclaim` that
+  CLEANS the safe categories (with previews + confirmation), reusing ocman's existing
+  sizing, orphan-detection, delete/VACUUM, backup, and running-guard machinery.
 - Status: to-review
 - Author: its_direct/pt3-claude-opus-4.8
 
@@ -21,15 +24,42 @@
   INTERACTIVELY offers to search / ask where; (5) snapshots are report-only by default
   but deletable behind a scary `--force-snapshots` flag; (6) `doctor` uses a read-only
   DB connection.
+- 2026-07-17 scope expansion (maintainer): `doctor` is a FULL environment checkup, not
+  just an OpenCode-bug scanner. It also checks ocman's own housekeeping: orphaned
+  relational rows (reusing the `SESSION_RELATIONAL_TABLES` NOT-EXISTS predicate),
+  orphaned session-diff files, sessions with dangling `project_id`, DB integrity, a
+  backup inventory with a stale-backup deletion suggestion, and an old-session cleanup
+  opportunity. Each check recommends the concrete `ocman` fix command, making `doctor`
+  the guided front door to `db clean` / `db clean-orphans` / `backup clean` / `reclaim`.
+  Restructured D-2 as a testable list of read-only CHECKS.
 
 ## Goal
 
 Make ocman the tool that finds and safely reclaims the disk OpenCode leaves behind.
 
-- `ocman doctor`: READ-ONLY. Scans the known trouble spots, prints per-category size +
-  a one-line description + the upstream issue link, and a grand total of reclaimable
-  vs. report-only bytes. Never mutates anything (uses a read-only DB connection), so it
-  is safe to run even while OpenCode is running.
+- `ocman doctor`: READ-ONLY FULL CHECKUP. Runs a suite of health checks over the
+  OpenCode environment AND ocman's own footprint, printing for each: a status
+  (OK / NOTICE / WARN), a measured size/count, a one-line explanation, the recommended
+  `ocman` command to fix it, and an upstream issue link where the cause is an OpenCode
+  bug. Ends with a summary (counts of OK/NOTICE/WARN, total reclaimable bytes). Never
+  mutates anything (read-only DB connection), so it is safe even while OpenCode runs.
+  The checks include, at minimum:
+    - DB size + WAL/SHM family size (and runaway-WAL WARN); `event`-table bloat
+      (message.updated snapshots); compacted-part output bytes.
+    - Orphaned ROWS: for each session-scoped relational table, rows with no matching
+      session; sessions whose `project_id` has no project row; orphaned session-diff
+      FILES on disk with no session. (These map to `ocman db clean-orphans`.)
+    - DB integrity (`PRAGMA quick_check`/`integrity_check`), reported as a check.
+    - Backup inventory: count, total size, oldest/newest of ocman's OWN backups, with a
+      stale-backup suggestion (e.g. "12 backups older than 30d reclaim 4.2 GB: run
+      `ocman backup clean --older-than 30d`"); plus any large opencode-owned backup dir
+      found by discovery, report-only.
+    - Temp leftovers: `$TMPDIR/opencode-wal-*.db`, `/tmp/.*.so`.
+    - Snapshots: size, report-only.
+    - Age-based session cleanup opportunity: sessions older than the retention window
+      (maps to `ocman db clean --older-than ...`), report-only count/size estimate.
+  Each check names the ocman command that fixes it, so `doctor` is the guided front
+  door to the existing `db clean` / `db clean-orphans` / `backup clean` / `reclaim`.
 - `ocman reclaim`: performs the guarded cleanup of the SAFE categories (temp files, WAL
   checkpoint, stale backups), with `DestructivePreview` + typed confirmation, behind the
   running-OpenCode guard. The high-value-but-internal DB event-table compaction is
@@ -105,20 +135,59 @@ Add a `discover_storage_locations()` helper returning a structured set of paths:
   offer, scan only the derived/known set. No deletion happens outside the SAFE set
   regardless of what discovery finds (discovery widens REPORTING, not auto-clean).
 
-### D-2 `ocman doctor` (read-only diagnosis)
+### D-2 `ocman doctor` (read-only full checkup)
+
 - Add `db_connect_readonly(path)` using SQLite URI `file:<path>?mode=ro&immutable=1`
   (via `_get_sqlite`), so diagnosis provably cannot write and is safe even while
-  OpenCode runs. If the DB is missing/locked, degrade to file-size-only reporting.
-- For each category, compute size + a status line. DB-internal diagnostics
-  (event-table breakdown by `type`, `message.updated` supersession waste, compacted-part
-  output bytes) use the read-only connection and the exact queries the upstream issues
-  used (`SUM(length(data))` grouped by table and by `event.type`).
-- Output: a grouped report (reuse the vistab styling from the session-header work:
-  `round-header`, bold header, color-gated). Columns: Category, Location, Size,
-  Reclaimable? (safe / opt-in / report-only), Issue. Footer: total reclaimable now,
-  total behind opt-in flags, total report-only. Each row names the upstream issue
-  number + URL so the user can read it. `--json` envelope via `emit_json("doctor", ...)`.
-- `doctor` NEVER mutates and is NOT behind the running guard (read-only).
+  OpenCode runs. If the DB is missing/locked, degrade to file-size-only reporting for
+  the DB checks (still run the filesystem checks).
+
+- Structure as a list of CHECKS. Each check is a small function returning a result
+  record: `{key, title, status (ok|notice|warn), size_bytes, count, detail, fix_cmd,
+  issue_url|None}`. `cli_doctor` runs them all, renders the table, prints the summary.
+  This makes each check independently testable and easy to extend.
+
+- The check set (reusing existing detection; NO duplicated logic where a helper exists):
+  1. `db_size` - DB + WAL + SHM family (reuse `db_show_info` logic `cli.py:11637-11652`);
+     WARN if WAL is large relative to the DB (runaway-WAL, #37495).
+  2. `db_integrity` - read-only `PRAGMA quick_check` (WARN on any result != "ok").
+  3. `event_bloat` - `SUM(length(data))` on `event` grouped by `type`; surface
+     `message.updated.*` total + estimated superseded waste (kept-latest-per-message).
+     NOTICE with the `--compact-events` recommendation + issue #33356.
+  4. `compacted_parts` - bytes in `output`/`attachments` of `ToolStateCompleted` `part`
+     rows whose message is `time.compacted`; NOTICE + `reclaim --reclaim-parts` + #16101.
+  5. `orphan_rows` - for each `(table, col)` in `SESSION_RELATIONAL_TABLES`
+     (`cli.py:399`, excluding `session`), read-only `COUNT(*) ... WHERE NOT EXISTS
+     (SELECT 1 FROM session s WHERE s.id = {table}.{col})` (the exact predicate
+     `db_run_cleanup` deletes with, `cli.py:10744-10749`); also count sessions whose
+     `project_id` has no `project` row. WARN if any > 0; fix = `ocman db clean-orphans`.
+  6. `orphan_diff_files` - session-diff `*.json` under the storage dir with no matching
+     session row (reuse the orphan-diff logic from `db_run_cleanup` `cli.py:10650-10667`);
+     fix = `ocman db clean-orphans`.
+  7. `old_sessions` - COUNT + rough size of root sessions older than the retention
+     window (`default_retention_days`); NOTICE; fix = `ocman db clean --older-than ...`.
+  8. `ocman_backups` - inventory of ocman's OWN backups (reuse `dir_usage` + the
+     `db_show_info` backups block `cli.py:11862-11894`): count, total size,
+     oldest/newest; if backups older than a threshold exist, NOTICE with the reclaimable
+     size + `ocman backup clean --older-than Nd`.
+  9. `foreign_backups` - any large opencode-owned backup dir discovered in D-1 (e.g.
+     `~/backups/opencode`): report-only WARN with size; no ocman fix command (advise
+     manual review), since ocman does not own it.
+  10. `temp_wal` - `$TMPDIR/opencode-wal-*.db` count/size; NOTICE + `ocman reclaim` + #36831.
+  11. `temp_so` - `/tmp/.*.so` count/size (age-filtered); NOTICE + `ocman reclaim` + #28089.
+  12. `snapshots` - snapshot dir size; report-only NOTICE + #36093 (never a safe fix).
+
+- Output: a vistab table (reuse the session-header styling: `round-header`, `padding=0`,
+  bold header, color-gated). Columns: `Check`, `Status`, `Size/Count`, `Recommended fix`.
+  A `Status` of WARN is shown in bold red, NOTICE in yellow, OK plain (honoring
+  NO_COLOR). Beneath the table: a details block per non-OK check (the one-line
+  explanation + issue URL). Footer summary: `N OK / M notices / K warnings`, and totals
+  for reclaimable-now vs. opt-in vs. report-only bytes.
+- `--json` via `emit_json("doctor", {...})` emitting the list of check records
+  (stable, additive schema).
+- `doctor` NEVER mutates and is NOT behind the running guard (read-only, safe anytime).
+- Verbosity: `-v` adds per-project event/part breakdowns and lists the specific
+  orphaned tables/files; the default view stays a concise one-row-per-check summary.
 
 ### D-3 `ocman reclaim` (guarded cleanup)
 Default run cleans ONLY the SAFE categories, each with its own preview + confirm:
@@ -163,7 +232,8 @@ All destructive paths: `require_safe_to_mutate` first, `DestructivePreview` +
   be removed with sizes.
 
 ### D-5 CLI surface
-- `ocman doctor [--json]` (read-only; no guard).
+- `ocman doctor [-v] [--json]` (read-only; no guard). `-v` expands per-project /
+  per-table detail; `--json` emits the check records.
 - `ocman reclaim [--dry-run] [-y/--yes] [--while-running] [--compact-events]
   [--reclaim-parts] [--force-snapshots] [--backups-dir PATH]
   [--tmp-min-age-hours N]`.
@@ -181,10 +251,21 @@ Unit / offline (seed a temp DB + fake temp files under a tmp HOME, the establish
 - `db_connect_readonly`: a write attempt raises (proves read-only); missing DB degrades
   to size-only without crashing.
 - doctor: on a seeded DB with a bloated `event` table (fake `message.updated` rows) the
-  report shows the event-table category, the size, the correct issue number/URL, and a
+  report shows the event-table check, its size, the correct issue number/URL, and the
   reclaimable/opt-in/report-only split; `--json` envelope shape is stable.
+- doctor orphan checks: seed orphaned relational rows (a `part`/`message` with a
+  session_id absent from `session`), a session with a dangling `project_id`, and an
+  orphaned session-diff `*.json`; assert `doctor` flags each with a WARN and recommends
+  `ocman db clean-orphans` (and that it did NOT delete them - read-only).
+- doctor backup check: seed a few `opencode-backup-*.zip`/`opencode-db-cleanup-*` under
+  the sandbox backup dir with old mtimes; assert the backups check reports count/size,
+  oldest/newest, and suggests `ocman backup clean --older-than`.
+- doctor integrity + db_size checks render without a DB present (degrade gracefully to
+  filesystem-only) and with a healthy seeded DB (status OK).
 - doctor-while-running: with detection forced to "some", `doctor` still runs and writes
   nothing (guard-neutralizer opt-out marker as in the mutation-guard tests).
+- each check is unit-testable in isolation (call the check fn against a seeded
+  read-only DB / temp tree and assert its result record).
 - reclaim temp WAL: keeps the newest `opencode-wal-*.db`, deletes older; `--dry-run`
   deletes nothing.
 - reclaim `.so` PID-aware: a `.so` "mapped" by a fake live PID is skipped; an old
@@ -202,8 +283,12 @@ Unit / offline (seed a temp DB + fake temp files under a tmp HOME, the establish
 Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real output.
 
 ## Docs
-- README: new `doctor` / `reclaim` command reference rows + a "Reclaiming OpenCode
-  disk usage" section explaining the safe/opt-in/report-only split and the issue links.
+- README: new `doctor` / `reclaim` command reference rows + a "Health checkup and
+  reclaiming disk" section. Describe `doctor` as a full read-only checkup (DB size/WAL,
+  integrity, event/part bloat, orphaned rows/files, backup inventory + stale-backup
+  suggestion, old-session cleanup opportunity, temp leftovers, snapshots), each with the
+  recommended `ocman` fix command; then `reclaim` for the safe/opt-in cleanup, with the
+  safe/opt-in/report-only split and the issue links.
 - ARCHITECTURE: a subsection on the read-only diagnosis connection, discovery, the
   reuse of `db_run_cleanup`/backup/guard machinery, and the PID-aware temp reap.
 - CHANGELOG: Added entry.
