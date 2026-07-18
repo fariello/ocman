@@ -3698,11 +3698,12 @@ def test_doctor_runs_without_db(doctor_db, capsys, monkeypatch):
     _tmp, db_path = doctor_db
     # No DB file created -> degrade to filesystem-only.
     monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
-    args = argparse.Namespace(verbose=0, json_output=False)
+    args = argparse.Namespace(verbose=0, json_output=False,
+                              doctor_fast=False, doctor_deep=False)
     ocman.cli_doctor(args)
     out = capsys.readouterr().out
     assert "Check" in out and "Recommended fix" in out
-    assert "OK / " in out and "warnings" in out
+    assert "Summary:" in out and "warnings" in out
 
 
 def test_doctor_healthy_db_ok(doctor_db, capsys, monkeypatch):
@@ -3803,14 +3804,41 @@ def test_doctor_backup_check(doctor_db, tmp_path, monkeypatch):
 
 # --- migration gate + schema-defensive --------------------------------------
 
-def test_doctor_unrecognized_migration_marks_unknown(doctor_db, monkeypatch):
+def test_doctor_unrecognized_schema_warns(doctor_db, monkeypatch):
+    """Recognition is by table PRESENCE (OpenCode migration ids are timestamped
+    strings, not integers). A DB missing the core session tables is unrecognized ->
+    the DB-internal checks WARN (name the reason), never a blank UNKNOWN, never a crash."""
     _tmp, db_path = doctor_db
-    _seed_doctor_db(db_path, migration_id=999999)  # out of recognized range
+    # A DB with NO OpenCode core tables (only an unrelated table).
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("CREATE TABLE unrelated (x)")
+    conn.commit(); conn.close()
     monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
     records = ocman.run_doctor_checks(running=False)
     by_key = {r["key"]: r for r in records}
-    assert by_key["compacted_parts"]["status"] == "unknown"
-    assert by_key["orphan_rows"]["status"] == "unknown"
+    assert by_key["schema"]["status"] == "warn"
+    assert by_key["event_bloat"]["status"] == "warn"
+    assert by_key["orphan_rows"]["status"] == "warn"
+
+
+def test_doctor_recognizes_string_migration_id(doctor_db, monkeypatch):
+    """Regression for the fingerprint bug: a real OpenCode-style timestamped-STRING
+    migration id must be recognized (not rejected by int-parsing), so the DB checks run."""
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    # Replace the integer migration id with a real timestamped-string one.
+    conn = sqlite3.connect(str(db_path))
+    conn.execute("DROP TABLE migration")
+    conn.execute("CREATE TABLE migration (id TEXT PRIMARY KEY, time_completed INTEGER)")
+    conn.execute("INSERT INTO migration VALUES ('20260622202450_simplify_session_input', 1)")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    by_key = {r["key"]: r for r in records}
+    # Recognized -> the DB checks actually ran (not WARN "not measured").
+    assert by_key["schema"]["status"] in ("info", "notice")
+    assert by_key["event_bloat"]["status"] in ("ok", "notice")
+    assert by_key["orphan_rows"]["status"] in ("ok", "warn", "notice")
 
 
 # --- no --compact-events, no event deletion ---------------------------------
@@ -3951,20 +3979,26 @@ def test_reclaim_parts_fail_closed_no_marker(doctor_db, monkeypatch, capsys):
     assert not list(backups.glob("opencode-db-cleanup-*"))
 
 
-def test_reclaim_parts_migration_gate(doctor_db, monkeypatch, capsys):
+def test_reclaim_parts_schema_gate(doctor_db, monkeypatch, capsys):
+    """--reclaim-parts must FAIL CLOSED (abort, write nothing) when the schema is not
+    recognized. Recognition is by core-table presence, so a DB missing the session
+    tables triggers the gate."""
     _tmp, db_path = doctor_db
     old_ms = int(_time.time() * 1000 - 60 * 86400000)
-    _seed_doctor_db(db_path, migration_id=999999, with_compacted=True, compacted_age_ms=old_ms)
+    _seed_doctor_db(db_path, with_compacted=True, compacted_age_ms=old_ms)
+    # Remove ALL core session tables so the schema is unrecognized (the gate fires).
+    conn = sqlite3.connect(str(db_path))
+    for t in ("session", "message", "event", "part"):
+        conn.execute(f"DROP TABLE {t}")
+    conn.commit(); conn.close()
     monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
     loc = ocman.discover_storage_locations(db_path)
     ocman.reclaim_parts(loc, dry_run=False, while_running=False, assume_yes=True,
                         retention_days=30, verbosity=0)
     out = capsys.readouterr().out
-    assert "aborted" in out.lower()
-    conn = sqlite3.connect(str(db_path))
-    data = _json.loads(conn.execute("SELECT data FROM part WHERE id='part_c'").fetchone()[0])
-    assert data["state"]["output"] == "X" * 2000  # untouched (gate refused)
-    conn.close()
+    assert "aborted" in out.lower()  # failed closed on the unrecognized schema
+    # No backup should have been created (it aborted before any write step).
+    assert "backup created" not in out.lower()
 
 
 # --- reclaim: temp reap -----------------------------------------------------

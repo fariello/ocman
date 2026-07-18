@@ -83,11 +83,13 @@ import signal
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
 import zipfile
 import vistab
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -6388,6 +6390,12 @@ def build_parser() -> argparse.ArgumentParser:
     # ---- doctor / reclaim (storage checkup + guarded cleanup) --------------
     sp = new_sub("doctor", help="Read-only storage checkup (DB/WAL, orphans, temp, snapshots).")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    sp.add_argument("--fast", dest="doctor_fast", action="store_true",
+                    help="Skip the byte-size scans of the event/part tables (report row "
+                         "counts only). Much faster on a multi-GB database.")
+    sp.add_argument("--deep", dest="doctor_deep", action="store_true",
+                    help="Also compute the exact superseded-snapshot byte breakdown of the "
+                         "event log (an extra full pass; slower on a large database).")
 
     sp = new_sub("reclaim", help="Guarded cleanup of safe/opt-in storage categories.")
     sp.add_argument("--dry-run", action="store_true",
@@ -6798,6 +6806,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     elif group == "doctor":
         out["run_doctor"] = True
         out["json_output"] = bool(g("json", False))
+        out["doctor_fast"] = bool(g("doctor_fast", False))
+        out["doctor_deep"] = bool(g("doctor_deep", False))
 
     elif group == "reclaim":
         out["run_reclaim"] = True
@@ -12526,8 +12536,43 @@ _OC_ISSUE_URL = "https://github.com/anomalyco/opencode/issues/{n}"
 DOCTOR_OK = "ok"
 DOCTOR_NOTICE = "notice"
 DOCTOR_WARN = "warn"
-DOCTOR_UNKNOWN = "unknown"
-DOCTOR_SKIPPED = "skipped"
+DOCTOR_INFO = "info"
+DOCTOR_DEBUG = "debug"
+DOCTOR_ERROR = "error"
+DOCTOR_UNKNOWN = "unknown"    # truly indeterminate (rendered white, not bold)
+DOCTOR_SKIPPED = "skipped"    # not applicable in this environment
+
+# Fixed-width 5-char status tags + their color treatment. The tag text is padded to a
+# uniform width so columns line up; color is applied AFTER padding and is gated by
+# _color_enabled() (NO_COLOR / non-TTY -> plain). Scheme (per maintainer):
+#   INFO  -> green (not bold)     OK    -> bold green
+#   NOTIC -> yellow (not bold)    WARN  -> bold yellow
+#   DEBUG -> teal (not bold)      ERROR -> bold red
+#   UNKNW -> white (not bold)     SKIP  -> plain
+_DOCTOR_TAGS = {
+    DOCTOR_INFO:    ("INFO ", "32", False),   # green
+    DOCTOR_OK:      (" OK  ", "32", True),    # bold green (5 chars: space OK space space)
+    DOCTOR_NOTICE:  ("NOTIC", "33", False),   # yellow
+    DOCTOR_WARN:    ("WARN ", "33", True),    # bold yellow
+    DOCTOR_DEBUG:   ("DEBUG", "36", False),   # teal/cyan
+    DOCTOR_ERROR:   ("ERROR", "31", True),    # bold red
+    DOCTOR_UNKNOWN: ("UNKNW", "37", False),   # white, not bold
+    DOCTOR_SKIPPED: ("SKIP ", None, False),   # plain
+}
+
+
+def _doctor_tag(status: str) -> str:
+    """Return the fixed-width status tag ``[XXXXX]`` for a doctor status.
+
+    Only the 5-char LABEL is colorized (the brackets stay uncolored); color is applied
+    only when `_color_enabled()`. Bold combines with the fg color (e.g. bold green for
+    OK). Unknown/skip render plain.
+    """
+    label, code, bold = _DOCTOR_TAGS.get(status, (status.upper()[:5].ljust(5), None, False))
+    if code is None or not _color_enabled():
+        return f"[{label}]"
+    seq = (("1;" + code) if bold else code)
+    return f"[\033[{seq}m{label}\033[0m]"
 
 # Which buckets a check's reclaimable bytes count toward in the footer split.
 # "now"   -> ocman can reclaim now (bare reclaim / stale ocman backups).
@@ -12829,44 +12874,59 @@ def _table_columns(cur, table: str) -> set:
         return set()
 
 
-def db_schema_fingerprint(cur) -> dict:
-    """Fingerprint the OpenCode schema via the ``migration`` table (no user_version).
+# The core session-scoped tables every DB check needs to exist for the OpenCode schema
+# to be considered recognizable. Presence-based recognition is correct because
+# OpenCode's `migration` ids are timestamped STRING names (e.g.
+# "20260622202450_simplify_session_input"), NOT integers, so parsing them as a numeric
+# "level" is wrong; what actually matters is whether the tables/columns our queries
+# read are present.
+_OC_CORE_TABLES = ("session", "message", "part", "event")
 
-    Returns ``{"recognized": bool, "newest_id": int|None, "detail": str}``. The
-    ``migration`` table is the correct gate (there is no ``user_version``). We accept
-    a newest id we understand and REFUSE (recognized=False) an unknown/absent one, so
-    the DB-mutating paths fail closed on an unfamiliar schema.
+
+def db_schema_fingerprint(cur) -> dict:
+    """Fingerprint the OpenCode schema by TABLE PRESENCE (not a numeric migration level).
+
+    Returns ``{"recognized": bool, "newest_id": str|None, "detail": str,
+    "missing": list}``. The schema is RECOGNIZED when the core session-scoped tables
+    (:data:`_OC_CORE_TABLES`) exist; individual checks still schema-probe their own
+    columns/JSON shapes and self-report. The ``migration`` table (ids are timestamped
+    strings; there is no ``user_version``) is read only to REPORT the newest applied
+    migration name, never parsed as an integer. A legacy install may instead carry
+    ``__drizzle_migrations``; either counts as a present migration ledger.
     """
-    if not _table_exists(cur, "migration"):
-        return {"recognized": False, "newest_id": None,
-                "detail": "no migration table (unrecognized schema)"}
-    cols = _table_columns(cur, "migration")
-    id_col = "id" if "id" in cols else (next(iter(cols)) if cols else None)
-    if id_col is None:
-        return {"recognized": False, "newest_id": None,
-                "detail": "migration table has no columns"}
-    try:
-        cur.execute(f"SELECT MAX({id_col}) FROM migration")
-        newest = cur.fetchone()[0]
-    except Exception as e:
-        return {"recognized": False, "newest_id": None,
-                "detail": f"could not read migration table: {e}"}
-    if newest is None:
-        return {"recognized": False, "newest_id": None,
-                "detail": "migration table is empty"}
-    try:
-        newest_int = int(newest)
-    except (TypeError, ValueError):
-        return {"recognized": False, "newest_id": newest,
-                "detail": f"unrecognized migration id {newest!r}"}
-    # A migration id is recognized when it is a non-negative integer within a sane
-    # bound. OpenCode's migrations are small sequential integers; a wildly large or
-    # negative value is treated as unrecognized (fail closed).
-    if 0 <= newest_int <= 10000:
-        return {"recognized": True, "newest_id": newest_int,
-                "detail": f"migration level {newest_int}"}
-    return {"recognized": False, "newest_id": newest_int,
-            "detail": f"migration id {newest_int} out of recognized range"}
+    present = [t for t in _OC_CORE_TABLES if _table_exists(cur, t)]
+    missing = [t for t in _OC_CORE_TABLES if t not in present]
+    legacy = _table_exists(cur, "__drizzle_migrations")
+
+    # Newest applied migration name (informational only), from whichever ledger exists.
+    newest_id = None
+    for mtable, order_col in (("migration", "id"), ("__drizzle_migrations", "id")):
+        if not _table_exists(cur, mtable):
+            continue
+        cols = _table_columns(cur, mtable)
+        name_col = "name" if "name" in cols else ("id" if "id" in cols else None)
+        if name_col is None:
+            continue
+        try:
+            cur.execute(f"SELECT {name_col} FROM {mtable} ORDER BY {order_col} DESC LIMIT 1")
+            row = cur.fetchone()
+            if row and row[0] is not None:
+                newest_id = str(row[0])
+                break
+        except Exception:
+            continue
+
+    if not present:
+        return {"recognized": False, "newest_id": newest_id, "missing": missing,
+                "_legacy": legacy,
+                "detail": "no OpenCode session tables found (unrecognized schema)"}
+    if missing:
+        # Some but not all core tables: recognize (checks self-probe the rest) but note it.
+        return {"recognized": True, "newest_id": newest_id, "missing": missing,
+                "_legacy": legacy,
+                "detail": f"partial schema; missing {', '.join(missing)}"}
+    return {"recognized": True, "newest_id": newest_id, "missing": [], "_legacy": legacy,
+            "detail": "core tables present"}
 
 
 # --- individual doctor checks (each returns a result record) ----------------
@@ -12883,6 +12943,35 @@ def _check_record(key, title, status, *, size_bytes=0, count=0, detail="",
         "detail": detail, "fix_cmd": fix_cmd, "issue_url": issue_url,
         "bucket": bucket,
     }
+
+
+def check_schema(loc: dict, fp: dict | None) -> dict:
+    """Check 0: report the OpenCode schema fingerprint (informational).
+
+    Surfaces which schema this DB is on so a degradation is self-explaining: the newest
+    applied migration name, whether the core tables are present, and whether the legacy
+    `__drizzle_migrations` ledger is present (a "this DB predates the current migration
+    table" signal from older OpenCode versions). INFO when recognized, WARN when the
+    schema is not recognized (so the DB checks that depend on it are trustworthy).
+    """
+    if fp is None:
+        return _check_record("schema", "OpenCode schema", DOCTOR_SKIPPED,
+                             detail="no readable DB.")
+    newest = fp.get("newest_id")
+    legacy = " (legacy __drizzle_migrations ledger present)" if fp.get("_legacy") else ""
+    migr = f"migration {newest}" if newest else "no named migration"
+    if fp.get("recognized"):
+        missing = fp.get("missing") or []
+        if missing:
+            return _check_record(
+                "schema", "OpenCode schema", DOCTOR_NOTICE,
+                detail=f"{fp.get('detail')}; {migr}{legacy}.")
+        return _check_record(
+            "schema", "OpenCode schema", DOCTOR_INFO,
+            detail=f"recognized ({migr}){legacy}.")
+    return _check_record(
+        "schema", "OpenCode schema", DOCTOR_WARN,
+        detail=f"{fp.get('detail')}; {migr}{legacy}. DB-internal checks not measured.")
 
 
 def check_db_size(loc: dict, cur) -> dict:
@@ -12942,8 +13031,94 @@ def check_db_integrity(loc: dict, cur, *, running: bool) -> dict:
         detail=f"quick_check failed while OpenCode is stopped: {val}.")
 
 
-def check_event_bloat(loc: dict, cur) -> dict:
-    """Check 3: REPORT-ONLY event-table bloat (#33356). ocman NEVER deletes event rows."""
+class DoctorInterrupted(Exception):
+    """Raised when a long doctor scan is interrupted by the user (Ctrl-C)."""
+
+
+@contextmanager
+def _interruptible_scan(conn, *, heartbeat_label: str | None = None):
+    """Make a SQLite scan on ``conn`` promptly interruptible by Ctrl-C, with an optional
+    elapsed-time heartbeat.
+
+    SQLite's C-level query loop does not yield to Python's SIGINT handler, so a plain
+    Ctrl-C during a multi-minute scan appears to hang. We install a SIGINT handler that
+    calls ``conn.interrupt()`` and flips a flag, plus a progress handler that SQLite
+    invokes every N opcodes and which returns non-zero (aborting the query) when the
+    flag is set. On interrupt the query raises; we convert it to DoctorInterrupted.
+
+    If ``heartbeat_label`` is given AND stderr is a TTY, the same progress callback also
+    prints a single in-place ``[INFO ] <label> (M:SS elapsed)`` line, but ONLY after the
+    scan has already run > 2s (so fast scans stay silent) and throttled to ~4 Hz. SQLite
+    reports no true percentage, so this is an honest elapsed heartbeat, not a bar.
+    Restores the previous SIGINT handler on exit. No-op when no handler can be installed.
+    """
+    state = {"stop": False}
+    start = time.monotonic()
+    hb = {"last": 0.0, "shown": False}
+    show_hb = bool(heartbeat_label) and hasattr(sys.stderr, "isatty") and sys.stderr.isatty()
+
+    def _on_sigint(signum, frame):
+        state["stop"] = True
+        try:
+            conn.interrupt()
+        except Exception:
+            pass
+
+    def _progress_cb():
+        if state["stop"]:
+            return 1
+        if show_hb:
+            now = time.monotonic()
+            elapsed = now - start
+            if elapsed > 2.0 and (now - hb["last"]) > 0.25:
+                hb["last"] = now
+                hb["shown"] = True
+                mm, ss = divmod(int(elapsed), 60)
+                sys.stderr.write(f"\r  {_doctor_tag(DOCTOR_INFO)} {heartbeat_label} ({mm}:{ss:02d} elapsed) ")
+                sys.stderr.flush()
+        return 0
+
+    old_handler = None
+    installed = False
+    try:
+        try:
+            old_handler = signal.signal(signal.SIGINT, _on_sigint)
+            installed = True
+        except (ValueError, OSError):
+            installed = False
+        try:
+            conn.set_progress_handler(_progress_cb, 100000)
+        except Exception:
+            pass
+        try:
+            yield state
+        except Exception as e:
+            if state["stop"]:
+                raise DoctorInterrupted() from e
+            raise
+    finally:
+        try:
+            conn.set_progress_handler(None, 0)
+        except Exception:
+            pass
+        if show_hb and hb["shown"]:
+            # Clear the in-place heartbeat line so it does not linger before the report.
+            sys.stderr.write("\r" + " " * 72 + "\r")
+            sys.stderr.flush()
+        if installed and old_handler is not None:
+            try:
+                signal.signal(signal.SIGINT, old_handler)
+            except Exception:
+                pass
+
+
+def check_event_bloat(loc: dict, cur, *, fast: bool = False, deep: bool = False) -> dict:
+    """Check 3: REPORT-ONLY event-table bloat (#33356). ocman NEVER deletes event rows.
+
+    Default does the exact byte scan (SUM(length(data)) + superseded-snapshot estimate),
+    which is slow on a multi-GB DB but interruptible. ``fast=True`` reports row counts
+    only (index-backed, instant) and skips the byte scans.
+    """
     if not _table_exists(cur, "event"):
         return _check_record("event_bloat", "Event log bloat", DOCTOR_SKIPPED,
                              detail="no event table.")
@@ -12952,63 +13127,136 @@ def check_event_bloat(loc: dict, cur) -> dict:
         return _check_record("event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
                              detail="event table has no recognized 'data' column.")
     try:
-        cur.execute("SELECT COUNT(*), SUM(length(data)) FROM event")
-        row = cur.fetchone()
-        total_rows = int(row[0] or 0)
-        total_bytes = int(row[1] or 0)
+        cur.execute("SELECT COUNT(*) FROM event")
+        total_rows = int((cur.fetchone() or [0])[0] or 0)
+        cur.execute("SELECT COUNT(*) FROM event WHERE type LIKE 'message.updated%'")
+        updated_rows = int((cur.fetchone() or [0])[0] or 0)
     except Exception as e:
         return _check_record("event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
-                             detail=f"could not measure event data: {e}")
+                             detail=f"could not count event rows: {e}")
     if total_rows == 0:
         return _check_record("event_bloat", "Event log bloat", DOCTOR_OK,
                              detail="no event rows.")
-    # message.updated snapshot bytes (the dominant bloat category, #33356).
-    updated_bytes = 0
-    superseded_bytes = 0
+
+    if fast:
+        status = DOCTOR_NOTICE if updated_rows else DOCTOR_OK
+        return _check_record(
+            "event_bloat", "Event log bloat", status, count=total_rows,
+            detail=(f"{fmt_int(total_rows)} event rows, {fmt_int(updated_rows)} of them "
+                    f"message.updated snapshots (the usual disk hog, upstream #33356). "
+                    f"Byte sizes skipped (--fast); ocman never deletes event rows "
+                    f"(the log is replayed to rebuild state), so this is informational. "
+                    f"Re-run without --fast for exact bytes."),
+            fix_cmd=None, issue_url=_oc_issue(33356), bucket="report")
+
+    # Exact byte scan (default). Streamed in Python batches so we can show a live
+    # "rows done / total, bytes so far" heartbeat and stay instantly Ctrl-C-able (the
+    # abort is checked in the loop, between fetches). The superseded-snapshot estimate
+    # is a grouped query, so it runs as a final labeled phase.
+    total_bytes = updated_bytes = superseded_bytes = 0
     has_agg = "aggregate_id" in cols
+    interrupted = False
+    interrupted_supersede = False
     try:
-        cur.execute("SELECT SUM(length(data)) FROM event WHERE type LIKE 'message.updated%'")
-        r = cur.fetchone()
-        updated_bytes = int((r[0] if r else 0) or 0)
-    except Exception:
-        updated_bytes = 0
-    # Estimate superseded waste: for each (aggregate_id, info.id) group, all rows
-    # beyond the max seq are superseded snapshots (would-be reclaimable UPSTREAM).
-    if has_agg and "seq" in cols:
+        scur = cur.connection.cursor()
+        scur.execute("SELECT length(data), (type LIKE 'message.updated%') FROM event")
+        rows_done = 0
+        show_hb = (hasattr(sys.stderr, "isatty") and sys.stderr.isatty())
+        start = time.monotonic()
+        last_hb = 0.0
+        hb_shown = False
+        while True:
+            batch = scur.fetchmany(5000)
+            if not batch:
+                break
+            for length, is_updated in batch:
+                blen = int(length or 0)
+                total_bytes += blen
+                if is_updated:
+                    updated_bytes += blen
+            rows_done += len(batch)
+            if show_hb:
+                now = time.monotonic()
+                if now - start > 2.0 and now - last_hb > 0.25:
+                    last_hb = now
+                    hb_shown = True
+                    mm, ss = divmod(int(now - start), 60)
+                    sys.stderr.write(
+                        f"\r  {_doctor_tag(DOCTOR_INFO)} measuring event-log bloat: "
+                        f"{fmt_int(rows_done)} / {fmt_int(total_rows)} rows, "
+                        f"{human_size_local(total_bytes)} so far ({mm}:{ss:02d}) ")
+                    sys.stderr.flush()
+        if hb_shown:
+            sys.stderr.write("\r" + " " * 78 + "\r"); sys.stderr.flush()
+        scur.close()
+    except KeyboardInterrupt:
+        interrupted = True
+
+    # Superseded-snapshot estimate (grouped; elapsed-only heartbeat, interruptible).
+    superseded_computed = False
+    if deep and not interrupted and has_agg and "seq" in cols:
+        superseded_computed = True
         try:
-            cur.execute("""
-                SELECT SUM(length(data)) FROM event e
-                WHERE e.type LIKE 'message.updated%'
-                  AND e.seq < (
-                    SELECT MAX(e2.seq) FROM event e2
-                    WHERE e2.aggregate_id = e.aggregate_id
-                      AND json_extract(e2.data,'$.info.id') = json_extract(e.data,'$.info.id')
-                      AND e2.type LIKE 'message.updated%'
-                  )
-            """)
-            r = cur.fetchone()
-            superseded_bytes = int((r[0] if r else 0) or 0)
-        except Exception:
-            superseded_bytes = 0
-    detail = (f"event={human_size_local(total_bytes)} ({fmt_int(total_rows)} rows), "
-              f"message.updated={human_size_local(updated_bytes)}. "
-              f"Superseded (would-be reclaimable UPSTREAM): "
-              f"{human_size_local(superseded_bytes)}. ocman will NOT delete event rows "
-              f"(the log is replayed to rebuild state); the fix is upstream.")
+            with _interruptible_scan(cur.connection,
+                                     heartbeat_label="computing superseded-snapshot estimate"):
+                # superseded = (all message.updated bytes) - (newest snapshot per message).
+                # A grouped MAX(seq)-per-(aggregate,message) join is far cheaper than a
+                # per-row correlated subquery (seconds vs minutes on a big event table).
+                cur.execute("""
+                    WITH mu AS (
+                        SELECT aggregate_id AS agg,
+                               json_extract(data,'$.info.id') AS mid,
+                               seq, length(data) AS blen
+                        FROM event WHERE type LIKE 'message.updated%'
+                    ),
+                    newest AS (
+                        SELECT agg, mid, MAX(seq) AS mseq FROM mu GROUP BY agg, mid
+                    )
+                    SELECT
+                        (SELECT COALESCE(SUM(blen),0) FROM mu)
+                      - (SELECT COALESCE(SUM(mu.blen),0) FROM mu
+                         JOIN newest ON mu.agg=newest.agg AND mu.mid=newest.mid
+                                    AND mu.seq=newest.mseq)
+                """)
+                superseded_bytes = int(((cur.fetchone() or [0])[0]) or 0)
+        except DoctorInterrupted:
+            interrupted_supersede = True
+
+    if interrupted:
+        return _check_record(
+            "event_bloat", "Event log bloat", DOCTOR_NOTICE, count=total_rows,
+            detail=(f"{fmt_int(total_rows)} event rows ({fmt_int(updated_rows)} "
+                    f"message.updated). Byte measurement was interrupted; re-run with "
+                    f"--fast to skip it. Informational only (#33356)."),
+            issue_url=_oc_issue(33356), bucket="report")
+    if interrupted_supersede:
+        supersede_txt = "the superseded-duplicate breakdown was interrupted"
+    elif superseded_computed:
+        supersede_txt = (f"{human_size_local(superseded_bytes)} are superseded (older "
+                         f"duplicates that WOULD be reclaimable if OpenCode compacted its log)")
+    else:
+        supersede_txt = ("most are likely superseded older duplicates; run `ocman doctor "
+                         "--deep` for the exact superseded byte breakdown")
+    detail = (f"event data {human_size_local(total_bytes)} ({fmt_int(total_rows)} rows); "
+              f"message.updated snapshots {human_size_local(updated_bytes)}, of which "
+              f"{supersede_txt}. ocman will NOT delete event rows (the log is replayed to "
+              f"rebuild state); the fix is upstream.")
     status = DOCTOR_NOTICE if updated_bytes else DOCTOR_OK
     return _check_record("event_bloat", "Event log bloat", status,
-                         size_bytes=superseded_bytes, count=total_rows,
+                         size_bytes=(superseded_bytes if superseded_computed else 0),
+                         count=total_rows,
                          detail=detail, fix_cmd=None,
                          issue_url=_oc_issue(33356), bucket="report")
 
 
-def _part_compacted_stats(cur, retention_days: float | None = None):
+def _part_compacted_stats(cur, retention_days: float | None = None, *, fast: bool = False):
     """Return (candidate_count, candidate_bytes, any_compacted) for compacted tool parts.
 
     Schema-defensive. ``any_compacted`` is True iff at least one part has
     ``data.state.time.compacted`` populated (the empirical marker). When
     ``retention_days`` is given, candidate_* count only parts whose marker is older
-    than the window. Returns (None, None, None) when the schema is unrecognized.
+    than the window. ``fast`` skips the output-byte SUM (returns size 0). Returns
+    (None, None, None) when the schema is unrecognized.
     """
     if not _table_exists(cur, "part"):
         return (None, None, None)
@@ -13026,6 +13274,8 @@ def _part_compacted_stats(cur, retention_days: float | None = None):
         any_compacted = int(cur.fetchone()[0] or 0) > 0
     except Exception:
         return (None, None, None)
+    if fast:
+        return (0, 0, any_compacted)
     cutoff_clause = ""
     params: tuple = ()
     if retention_days is not None:
@@ -13050,9 +13300,14 @@ def _part_compacted_stats(cur, retention_days: float | None = None):
     return (count, size, any_compacted)
 
 
-def check_compacted_parts(loc: dict, cur) -> dict:
-    """Check 4: bytes in compacted tool-part outputs (#16101); opt-in reclaim."""
-    count, size, any_compacted = _part_compacted_stats(cur)
+def check_compacted_parts(loc: dict, cur, *, fast: bool = False) -> dict:
+    """Check 4: bytes in compacted tool-part outputs (#16101); opt-in reclaim.
+
+    The scan is gated on `data.state.time.compacted` being present, so on the common
+    (marker-unpopulated) DB it returns quickly; ``fast`` is accepted for symmetry with
+    the event check and to allow skipping the byte sum on very large part tables.
+    """
+    count, size, any_compacted = _part_compacted_stats(cur, fast=fast)
     if count is None:
         return _check_record("compacted_parts", "Compacted part output", DOCTOR_UNKNOWN,
                              detail="part table/JSON shape not recognized.")
@@ -13188,9 +13443,11 @@ def check_old_sessions(loc: dict, cur, retention_days: float) -> dict:
     return _check_record(
         "old_sessions", "Old sessions", DOCTOR_NOTICE,
         size_bytes=diff_bytes, count=len(old_ids),
-        detail=(f"{fmt_int(len(old_ids))} root session(s) older than {retention_days:g}d; "
-                f"diff files {human_size_local(diff_bytes)} (DB bytes reclaimed on VACUUM "
-                f"after delete)."),
+        detail=(f"{fmt_int(len(old_ids))} top-level session(s) are older than "
+                f"{retention_days:g} days. Their saved change-history files on disk total "
+                f"{human_size_local(diff_bytes)}. Deleting them also frees space inside the "
+                f"database (reclaimed when the database is compacted). Delete them with the "
+                f"command below if you no longer need them."),
         fix_cmd=f"ocman db clean --older-than {int(retention_days)}d", bucket="report")
 
 
@@ -13283,9 +13540,12 @@ def check_temp_so(loc: dict) -> dict:
     return _check_record(
         "temp_so", "Temp .so libs", DOCTOR_NOTICE,
         size_bytes=total, count=len(free_files),
-        detail=(f"{fmt_int(len(free_files))} /tmp/*.so not mmap'd by a live PID "
-                f"({human_size_local(total)}); Bun-extracted native libs. "
-                f"{fmt_int(len(files) - len(free_files))} still held/mapped."),
+        detail=(f"{fmt_int(len(free_files))} leftover `.so` library files in /tmp "
+                f"({human_size_local(total)}) that no running program is using are safe to "
+                f"delete. OpenCode's runtime unpacks these and does not clean them up "
+                f"(upstream bug). "
+                f"{fmt_int(len(files) - len(free_files))} more are still in use by a "
+                f"running process and will be left alone."),
         fix_cmd="ocman reclaim --reclaim-temp", issue_url=_oc_issue(28089),
         bucket="optin")
 
@@ -13303,20 +13563,25 @@ def check_snapshots(loc: dict) -> dict:
     return _check_record(
         "snapshots", "Git snapshots", DOCTOR_NOTICE,
         size_bytes=total,
-        detail=(f"snapshot store {human_size_local(total)}; DB references live snapshot "
-                f"hashes, so blind prune can break revert/undo. Never an auto-fix."),
+        detail=(f"OpenCode's file snapshots use {human_size_local(total)}. ocman will NOT "
+                f"delete these automatically: the database still points at snapshots it "
+                f"may need for undo/revert, and pruning the wrong ones can break that. "
+                f"Only remove them yourself, with the flag below, if you are sure."),
         fix_cmd="ocman reclaim --force-snapshots <PATH>", issue_url=_oc_issue(36093),
         bucket="report")
 
 
 def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None = None,
-                      running: bool | None = None) -> list[dict]:
+                      running: bool | None = None, progress=None,
+                      fast: bool = False, deep: bool = False) -> list[dict]:
     """Run every doctor check and return the list of result records (read-only).
 
     Never mutates. If the DB is missing/:memory:/unreadable, the DB checks degrade to
     filesystem-only reporting. ``running`` (a live fd on the DB family) softens the
-    integrity check to a NOTICE. This is the single testable entry point used by
-    ``cli_doctor``; individual checks are also callable in isolation.
+    integrity check to a NOTICE. ``progress``, if given, is called as
+    ``progress(label)`` immediately BEFORE each check runs, so a caller can show what is
+    in flight (and a hang is attributable to a named step). This is the single testable
+    entry point used by ``cli_doctor``; individual checks are also callable in isolation.
     """
     if loc is None:
         loc = discover_storage_locations(OPENCODE_DB_PATH)
@@ -13327,50 +13592,62 @@ def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None =
         default_retention = 5.0
     if retention_days is None:
         retention_days = default_retention
+
+    def _step(label: str, fn):
+        """Announce a step (so a hang names the culprit), then run it."""
+        if progress is not None:
+            try:
+                progress(label)
+            except Exception:
+                pass
+        return fn()
+
     if running is None:
-        try:
-            running = db_family_open_by_live_pid(loc.get("db_path"))
-        except Exception:
-            running = False
+        running = _step("checking whether OpenCode has the database open",
+                        lambda: _safe_running(loc))
 
     records: list[dict] = []
     conn = None
     cur = None
-    schema_unknown = False
+    fp = None
     if not loc.get("db_is_memory") and loc.get("db_path") and Path(loc["db_path"]).exists():
         try:
             conn = db_connect_readonly(loc["db_path"])
             cur = conn.cursor()
-            fp = db_schema_fingerprint(cur)
-            schema_unknown = not fp.get("recognized", False)
+            fp = _step("reading the database schema fingerprint",
+                       lambda: db_schema_fingerprint(cur))
         except Exception:
             conn = None
             cur = None
+            fp = None
 
     if cur is not None:
-        records.append(check_db_size(loc, cur))
-        if schema_unknown:
-            records.append(_check_record(
-                "db_integrity", "DB integrity", DOCTOR_UNKNOWN,
-                detail="schema migration level unrecognized; DB checks degraded."))
-            records.append(_check_record(
-                "event_bloat", "Event log bloat", DOCTOR_UNKNOWN,
-                detail="schema unrecognized; not measured."))
-            records.append(_check_record(
-                "compacted_parts", "Compacted part output", DOCTOR_UNKNOWN,
-                detail="schema unrecognized; reclaim would fail closed."))
-            records.append(_check_record(
-                "orphan_rows", "Orphaned DB rows", DOCTOR_UNKNOWN,
-                detail="schema unrecognized; not measured."))
+        records.append(_step("checking schema", lambda: check_schema(loc, fp)))
+        records.append(_step("measuring database + WAL size", lambda: check_db_size(loc, cur)))
+        recognized = bool(fp and fp.get("recognized"))
+        if not recognized:
+            why = (fp or {}).get("detail", "OpenCode schema not recognized")
+            for key, title in (("db_integrity", "DB integrity"),
+                               ("event_bloat", "Event log bloat"),
+                               ("compacted_parts", "Compacted part output"),
+                               ("orphan_rows", "Orphaned DB rows")):
+                records.append(_check_record(
+                    key, title, DOCTOR_WARN,
+                    detail=f"not measured: {why}. Run `ocman doctor -v` for the schema fingerprint."))
         else:
-            records.append(check_db_integrity(loc, cur, running=bool(running)))
-            records.append(check_event_bloat(loc, cur))
-            records.append(check_compacted_parts(loc, cur))
-            records.append(check_orphan_rows(loc, cur))
-        records.append(check_orphan_diff_files(loc, cur))
-        records.append(check_old_sessions(loc, cur, retention_days))
+            records.append(_step("running database integrity check",
+                                 lambda: check_db_integrity(loc, cur, running=bool(running))))
+            records.append(_step("measuring event-log bloat (scans the event table; can be slow on a large DB)",
+                                 lambda: check_event_bloat(loc, cur, fast=fast, deep=deep)))
+            records.append(_step("measuring compacted tool-output (scans the part table; can be slow on a large DB)",
+                                 lambda: check_compacted_parts(loc, cur, fast=fast)))
+            records.append(_step("looking for orphaned database rows",
+                                 lambda: check_orphan_rows(loc, cur)))
+        records.append(_step("looking for orphaned session-diff files",
+                             lambda: check_orphan_diff_files(loc, cur)))
+        records.append(_step("counting old sessions", lambda: check_old_sessions(loc, cur, retention_days)))
     else:
-        # No readable DB: degrade to filesystem-only reporting for DB checks.
+        records.append(check_schema(loc, None))
         records.append(check_db_size(loc, None))
         for key, title in (("db_integrity", "DB integrity"),
                            ("event_bloat", "Event log bloat"),
@@ -13380,7 +13657,7 @@ def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None =
                            ("old_sessions", "Old sessions")):
             records.append(_check_record(
                 key, title, DOCTOR_SKIPPED,
-                detail="no readable DB (missing/:memory:/unreadable)."))
+                detail="no readable DB (missing / :memory: / unreadable)."))
 
     if conn is not None:
         try:
@@ -13389,22 +13666,24 @@ def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None =
             pass
 
     # Filesystem checks (always run, never need a DB).
-    records.append(check_ocman_backups(loc))
-    records.append(check_temp_wal(loc))
-    records.append(check_temp_so(loc))
-    records.append(check_snapshots(loc))
+    records.append(_step("sizing ocman's own backups", lambda: check_ocman_backups(loc)))
+    records.append(_step("scanning for leftover temp WAL databases", lambda: check_temp_wal(loc)))
+    records.append(_step("scanning /tmp for leftover .so libraries", lambda: check_temp_so(loc)))
+    records.append(_step("sizing the snapshot store", lambda: check_snapshots(loc)))
     return records
 
 
+def _safe_running(loc: dict) -> bool:
+    try:
+        return bool(db_family_open_by_live_pid(loc.get("db_path")))
+    except Exception:
+        return False
+
+
 def _doctor_status_cell(status: str) -> str:
-    """Colorize a doctor status word (color-gated, bold red WARN / yellow NOTICE)."""
-    label = {DOCTOR_OK: "OK", DOCTOR_NOTICE: "NOTICE", DOCTOR_WARN: "WARN",
-             DOCTOR_UNKNOWN: "UNKNOWN", DOCTOR_SKIPPED: "SKIPPED"}.get(status, status.upper())
-    if status == DOCTOR_WARN:
-        return color_red(color_bold(label))
-    if status == DOCTOR_NOTICE:
-        return color_yellow(label)
-    return label
+    """The colorized fixed-width status tag for the table Status column (same scheme
+    as the per-check message lines)."""
+    return _doctor_tag(status)
 
 
 def _doctor_size_count_cell(rec: dict) -> str:
@@ -13426,9 +13705,17 @@ def cli_doctor(args) -> None:
         running = db_family_open_by_live_pid(loc.get("db_path"))
     except Exception:
         running = False
-    records = run_doctor_checks(loc, running=running)
+    json_mode = bool(getattr(args, "json_output", False))
+    # Announce each step to stderr as it starts, so a slow/hung check names itself
+    # (stderr keeps it off the --json stdout stream; silenced entirely in --json mode).
+    def _progress(label: str) -> None:
+        eprint(f"  {_doctor_tag(DOCTOR_INFO)} {label}.")
+    records = run_doctor_checks(loc, running=running,
+                               progress=None if json_mode else _progress,
+                               fast=bool(getattr(args, "doctor_fast", False)),
+                               deep=bool(getattr(args, "doctor_deep", False)))
 
-    if getattr(args, "json_output", False):
+    if json_mode:
         emit_json("doctor", records)
         return
 
@@ -13440,6 +13727,42 @@ def cli_doctor(args) -> None:
             tbl.set_header_style(bold=True)
         return tbl
 
+    # --- Per-check detail lines FIRST (everything that is not a plain OK/SKIP), so the
+    # table is the last thing on screen. Each line leads with the colorized status tag.
+    detail_rows = [r for r in records
+                   if r["status"] in (DOCTOR_INFO, DOCTOR_DEBUG, DOCTOR_NOTICE,
+                                       DOCTOR_WARN, DOCTOR_ERROR, DOCTOR_UNKNOWN)]
+    if detail_rows:
+        for r in detail_rows:
+            print(f"  {_doctor_tag(r['status'])} {r['title']}: {r['detail']}")
+            if r.get("issue_url"):
+                print(f"          upstream fix: {r['issue_url']}")
+        print()
+
+    # --- Reclaim-bytes summary, in three clearly-separate buckets so no number is
+    # misread as "ocman can free all of this".
+    n_ok = sum(1 for r in records if r["status"] == DOCTOR_OK)
+    n_notice = sum(1 for r in records if r["status"] == DOCTOR_NOTICE)
+    n_warn = sum(1 for r in records if r["status"] in (DOCTOR_WARN, DOCTOR_ERROR))
+    now_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "now")
+    optin_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "optin")
+    report_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "report")
+    print(f"Summary: {n_ok} ok / {n_notice} notices / {n_warn} warnings")
+    print(f"  Reclaimable now (ocman reclaim):           {human_size_local(now_bytes)}")
+    print(f"  Opt-in (--reclaim-parts / --reclaim-temp): {human_size_local(optin_bytes)}")
+    print(f"  Reported only (not ocman-reclaimable):     {human_size_local(report_bytes)}")
+
+    if verbosity >= 1:
+        print()
+        print("Locations:")
+        print(f"  DB:        {loc.get('db_path')}")
+        print(f"  Data dir:  {loc.get('data_dir')}")
+        print(f"  Backups:   {loc.get('backup_dir')}")
+        print(f"  Snapshots: {loc.get('snapshot_dir')}")
+        print(f"  Temp dir:  {loc.get('tmp_dir')}")
+
+    # --- The table LAST (so it stays on screen after the messages scroll past).
+    print()
     tbl = _styled(vistab.Vistab(style="round-header", padding=0,
                                 header=["Check", "Status", "Size/Count", "Recommended fix"]))
     for rec in records:
@@ -13451,38 +13774,6 @@ def cli_doctor(args) -> None:
         ])
     tbl.set_cols_align(["l", "l", "r", "l"])
     print(tbl.draw())
-
-    # Details block: one line per non-OK/non-skipped check.
-    detail_rows = [r for r in records if r["status"] in (DOCTOR_NOTICE, DOCTOR_WARN, DOCTOR_UNKNOWN)]
-    if detail_rows:
-        print()
-        for r in detail_rows:
-            head = f"  [{_doctor_status_cell(r['status'])}] {r['title']}: {r['detail']}"
-            print(head)
-            if r.get("issue_url"):
-                print(f"      upstream: {r['issue_url']}")
-
-    # Footer summary: OK/NOTICE/WARN counts + the THREE labeled reclaim buckets.
-    n_ok = sum(1 for r in records if r["status"] == DOCTOR_OK)
-    n_notice = sum(1 for r in records if r["status"] == DOCTOR_NOTICE)
-    n_warn = sum(1 for r in records if r["status"] == DOCTOR_WARN)
-    now_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "now")
-    optin_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "optin")
-    report_bytes = sum(r["size_bytes"] for r in records if r.get("bucket") == "report")
-    print()
-    print(f"{n_ok} OK / {n_notice} notices / {n_warn} warnings")
-    print(f"  ocman can reclaim now:              {human_size_local(now_bytes)}")
-    print(f"  opt-in (--reclaim-parts/--reclaim-temp): {human_size_local(optin_bytes)}")
-    print(f"  reported only, NOT ocman-reclaimable:    {human_size_local(report_bytes)}")
-
-    if verbosity >= 1:
-        print()
-        print("Locations:")
-        print(f"  DB:        {loc.get('db_path')}")
-        print(f"  Data dir:  {loc.get('data_dir')}")
-        print(f"  Backups:   {loc.get('backup_dir')}")
-        print(f"  Snapshots: {loc.get('snapshot_dir')}")
-        print(f"  Temp dir:  {loc.get('tmp_dir')}")
 
 
 # --- reclaim: guarded cleanup ------------------------------------------------
