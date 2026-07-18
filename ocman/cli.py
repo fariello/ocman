@@ -12561,18 +12561,25 @@ _DOCTOR_TAGS = {
 }
 
 
-def _doctor_tag(status: str) -> str:
-    """Return the fixed-width status tag ``[XXXXX]`` for a doctor status.
+def _doctor_label(status: str) -> str:
+    """Return the colorized fixed-width 5-char status LABEL (no brackets).
 
-    Only the 5-char LABEL is colorized (the brackets stay uncolored); color is applied
-    only when `_color_enabled()`. Bold combines with the fg color (e.g. bold green for
-    OK). Unknown/skip render plain.
+    Color is applied only when `_color_enabled()`; bold combines with the fg color
+    (e.g. bold green for OK). Unknown/skip render plain. Used for the table Status
+    column, where the column border already delimits the cell so brackets are noise.
     """
     label, code, bold = _DOCTOR_TAGS.get(status, (status.upper()[:5].ljust(5), None, False))
     if code is None or not _color_enabled():
-        return f"[{label}]"
+        return label
     seq = (("1;" + code) if bold else code)
-    return f"[\033[{seq}m{label}\033[0m]"
+    return f"\033[{seq}m{label}\033[0m"
+
+
+def _doctor_tag(status: str) -> str:
+    """The bracketed status tag ``[XXXXX]`` for the per-check message lines, where there
+    is no column border to delimit it. Brackets uncolored; label colored via
+    :func:`_doctor_label`."""
+    return f"[{_doctor_label(status)}]"
 
 # Which buckets a check's reclaimable bytes count toward in the footer split.
 # "now"   -> ocman can reclaim now (bare reclaim / stale ocman backups).
@@ -13681,19 +13688,19 @@ def _safe_running(loc: dict) -> bool:
 
 
 def _doctor_status_cell(status: str) -> str:
-    """The colorized fixed-width status tag for the table Status column (same scheme
-    as the per-check message lines)."""
-    return _doctor_tag(status)
+    """The colorized status LABEL for the table Status column (no brackets; the column
+    border delimits it)."""
+    return _doctor_label(status)
 
 
-def _doctor_size_count_cell(rec: dict) -> str:
-    """Render the Size/Count cell for a doctor row."""
-    parts = []
-    if rec.get("size_bytes"):
-        parts.append(human_size_local(rec["size_bytes"]))
-    if rec.get("count"):
-        parts.append(f"{fmt_int(rec['count'])}")
-    return " / ".join(parts) if parts else "-"
+def _doctor_size_cell(rec: dict) -> str:
+    """Render the Size cell for a doctor row (human bytes, or '-')."""
+    return human_size_local(rec["size_bytes"]) if rec.get("size_bytes") else "-"
+
+
+def _doctor_count_cell(rec: dict) -> str:
+    """Render the Count cell for a doctor row (grouped integer, or '-')."""
+    return fmt_int(rec["count"]) if rec.get("count") else "-"
 
 
 def cli_doctor(args) -> None:
@@ -13764,15 +13771,16 @@ def cli_doctor(args) -> None:
     # --- The table LAST (so it stays on screen after the messages scroll past).
     print()
     tbl = _styled(vistab.Vistab(style="round-header", padding=0,
-                                header=["Check", "Status", "Size/Count", "Recommended fix"]))
+                                header=["Check", "Status", "Size", "Count", "Recommended fix"]))
     for rec in records:
         tbl.add_row([
             rec["title"],
             _doctor_status_cell(rec["status"]),
-            _doctor_size_count_cell(rec),
+            _doctor_size_cell(rec),
+            _doctor_count_cell(rec),
             rec.get("fix_cmd") or "-",
         ])
-    tbl.set_cols_align(["l", "l", "r", "l"])
+    tbl.set_cols_align(["l", "l", "r", "r", "l"])
     print(tbl.draw())
 
 
