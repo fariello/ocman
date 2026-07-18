@@ -13714,6 +13714,44 @@ def _doctor_count_cell(rec: dict) -> str:
     return fmt_int(rec["count"]) if rec.get("count") else "-"
 
 
+def _doctor_suggested_order(records: list[dict]) -> list[str]:
+    """Build the recommended run-order for the actionable fixes found this run.
+
+    Ordering rationale (only steps that actually apply are included):
+      1. `backup clean` first: usually the biggest reclaim, zero risk, and it does NOT
+         need OpenCode stopped.
+      2. `reclaim --reclaim-temp`: independent of the DB, safe (skips in-use files).
+      3. `db clean` (deletes DB rows) must run with OpenCode stopped, and BEFORE any
+         standalone VACUUM so pages are not left behind and VACUUMed twice.
+      4. bare `ocman reclaim` (checkpoint + VACUUM) LAST, to compact freed pages -- and
+         only if `db clean` was not run (db clean VACUUMs itself).
+    Report-only / dangerous items (event bloat, snapshots) are intentionally excluded.
+    """
+    have = {r["key"]: r for r in records
+            if r["status"] in (DOCTOR_NOTICE, DOCTOR_WARN, DOCTOR_ERROR) and r.get("fix_cmd")}
+    steps: list[str] = []
+    if "ocman_backups" in have:
+        steps.append(f"{have['ocman_backups']['fix_cmd']}  "
+                     "(prune ocman's own backups; pick an age that matches yours)")
+    if "temp_wal" in have or "temp_so" in have:
+        steps.append("ocman reclaim --reclaim-temp  (delete leftover temp files no live "
+                     "process is using)")
+    db_deletes = "old_sessions" in have or "orphan_rows" in have or "orphan_diff_files" in have
+    if db_deletes:
+        fixes = []
+        if "old_sessions" in have:
+            fixes.append(have["old_sessions"]["fix_cmd"])
+        if "orphan_rows" in have or "orphan_diff_files" in have:
+            fixes.append("ocman db clean-orphans")
+        steps.append("stop OpenCode, then: " + "  ".join(dict.fromkeys(fixes))
+                     + "  (deletes rows and compacts the database)")
+    else:
+        # Nothing deleted rows, so a standalone checkpoint+VACUUM is the way to reclaim.
+        steps.append("stop OpenCode, then: ocman reclaim  (checkpoint + VACUUM to compact "
+                     "the database)")
+    return steps
+
+
 def cli_doctor(args) -> None:
     """`ocman doctor`: READ-ONLY full storage checkup (never mutates, safe anytime)."""
     verbosity = getattr(args, "verbose", 0) or 0
@@ -13769,6 +13807,13 @@ def cli_doctor(args) -> None:
     print(f"  Reclaimable now (ocman reclaim):           {human_size_local(now_bytes)}")
     print(f"  Opt-in (--reclaim-parts / --reclaim-temp): {human_size_local(optin_bytes)}")
     print(f"  Reported only (not ocman-reclaimable):     {human_size_local(report_bytes)}")
+
+    order = _doctor_suggested_order(records)
+    if order:
+        print()
+        print("Suggested order (each step previews and asks before changing anything):")
+        for i, step in enumerate(order, 1):
+            print(f"  {i}. {step}")
 
     if verbosity >= 1:
         print()
