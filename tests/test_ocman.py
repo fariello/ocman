@@ -4179,3 +4179,170 @@ def test_db_family_open_by_live_pid_detects_self(tmp_path):
         fh.close()
     # After closing, no live fd holds it.
     assert ocman.db_family_open_by_live_pid(db) is False
+
+
+# --- extract-on-delete -------------------------------------------------------
+
+def _seed_extract_db(db_path):
+    """Create real message/part tables and seed one session with a conversation."""
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS message")
+    cur.execute("""
+        CREATE TABLE message (
+            id TEXT PRIMARY KEY, session_id TEXT,
+            time_created INTEGER, time_updated INTEGER, data TEXT
+        )
+    """)
+    cur.execute("DROP TABLE IF EXISTS part")
+    cur.execute("""
+        CREATE TABLE part (
+            id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT,
+            time_created INTEGER, time_updated INTEGER, data TEXT
+        )
+    """)
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/p1', 'P1')")
+    cur.execute("""
+        INSERT INTO session (id, project_id, title, time_created, time_updated, directory, parent_id)
+        VALUES ('sess1', 'proj1', 'Do a thing', 1000, 2000, '/p1', '')
+    """)
+    cur.execute("INSERT INTO message VALUES ('m1','sess1',1000,1000,?)", ('{"role":"user"}',))
+    cur.execute("INSERT INTO message VALUES ('m2','sess1',1001,1001,?)", ('{"role":"assistant"}',))
+    cur.execute("INSERT INTO part VALUES ('p1','m1','sess1',1000,1000,?)",
+                ('{"type":"text","text":"Please add a login button to the page."}',))
+    cur.execute("INSERT INTO part VALUES ('p2','m2','sess1',1001,1001,?)",
+                ('{"type":"text","text":"I added the login button and wired up the handler."}',))
+    conn.commit()
+    conn.close()
+
+
+def test_db_export_session_data_shape(temp_db):
+    _seed_extract_db(temp_db)
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        data = ocman.db_export_session_data("sess1", conn)
+    finally:
+        conn.close()
+    assert data is not None
+    assert [m["info"]["role"] for m in data["messages"]] == ["user", "assistant"]
+    turns = ocman.find_turns(data, include_tools=False, verbosity=0)
+    assert [t.role for t in turns] == ["user", "assistant"]
+    assert "login button" in turns[0].text
+
+
+def test_db_export_session_data_no_messages_returns_none(temp_db):
+    _seed_extract_db(temp_db)
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        assert ocman.db_export_session_data("does-not-exist", conn) is None
+    finally:
+        conn.close()
+
+
+def test_extract_sessions_before_delete_writes_files(temp_db, tmp_path):
+    _seed_extract_db(temp_db)
+    out = tmp_path / "recovery"
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        written = ocman.extract_sessions_before_delete(["sess1"], out, conn, verbosity=0)
+    finally:
+        conn.close()
+    names = sorted(p.name for p in written)
+    assert any(n.endswith(".transcript.md") for n in names)
+    assert any(n.endswith(".restart.md") for n in names)
+    assert any(n.endswith(".prompt.md") for n in names)
+    for p in written:
+        assert p.exists() and p.stat().st_size > 0
+
+
+def test_extract_sessions_before_delete_empty_makes_no_dir(temp_db, tmp_path):
+    _seed_extract_db(temp_db)
+    out = tmp_path / "recovery"
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        written = ocman.extract_sessions_before_delete(["nope"], out, conn, verbosity=0)
+    finally:
+        conn.close()
+    assert written == []
+    assert not out.exists()
+
+
+def test_resolve_extract_choice_flags_win(monkeypatch):
+    # Explicit flags always win, never prompt.
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
+    assert ocman.resolve_extract_choice(True, False, 3) is True
+    assert ocman.resolve_extract_choice(False, False, 3) is False
+
+
+def test_resolve_extract_choice_assume_yes_no_prompt(monkeypatch):
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
+    # -y implies extract=yes with no prompt.
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(AssertionError("prompted")))
+    assert ocman.resolve_extract_choice(None, True, 2) is True
+
+
+def test_resolve_extract_choice_noninteractive_defaults_yes(monkeypatch):
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: False)
+    assert ocman.resolve_extract_choice(None, False, 5) is True
+
+
+def test_resolve_extract_choice_prompt_yes_and_no(monkeypatch):
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "")
+    assert ocman.resolve_extract_choice(None, False, 1) is True
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
+    assert ocman.resolve_extract_choice(None, False, 1) is False
+
+
+def test_session_delete_writes_extracts(temp_db, tmp_path, monkeypatch):
+    import sys
+    _seed_extract_db(temp_db)
+    monkeypatch.setattr(ocman, "confirm_destructive", lambda *a, **k: True)
+    out = tmp_path / "recovery"
+    orig_argv = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "delete", "sess1",
+                "--extracts", "-o", str(out)]
+    try:
+        ocman.main()
+    finally:
+        sys.argv = orig_argv
+    assert out.exists()
+    assert any(p.name.endswith(".restart.md") for p in out.iterdir())
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("SELECT id FROM session WHERE id='sess1'")
+    assert cur.fetchone() is None  # still deleted
+    conn.close()
+
+
+def test_session_delete_no_extracts_skips(temp_db, tmp_path, monkeypatch):
+    import sys
+    _seed_extract_db(temp_db)
+    monkeypatch.setattr(ocman, "confirm_destructive", lambda *a, **k: True)
+    out = tmp_path / "recovery"
+    orig_argv = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "session", "delete", "sess1",
+                "--no-extracts", "-o", str(out)]
+    try:
+        ocman.main()
+    finally:
+        sys.argv = orig_argv
+    assert not out.exists()
+
+
+# --- bare-word 'help' -> --help ----------------------------------------------
+
+def test_preprocess_argv_bare_help_rewrites():
+    # 'help' after a group/action becomes a trailing --help.
+    assert ocman.preprocess_argv(["ocman", "session", "delete", "help"]) == \
+        ["ocman", "session", "delete", "--help"]
+    assert ocman.preprocess_argv(["ocman", "db", "clean", "help"]) == \
+        ["ocman", "db", "clean", "--help"]
+    assert ocman.preprocess_argv(["ocman", "project", "delete", "help"]) == \
+        ["ocman", "project", "delete", "--help"]
+
+
+def test_preprocess_argv_leading_help_command_untouched():
+    # The top-level `help [topic]` command is NOT rewritten.
+    assert ocman.preprocess_argv(["ocman", "help"]) == ["ocman", "help"]
+    assert ocman.preprocess_argv(["ocman", "help", "all"]) == ["ocman", "help", "all"]

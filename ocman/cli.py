@@ -5783,6 +5783,15 @@ def preprocess_argv(argv: list[str]) -> list[str]:
         break
     rest = rest[i:]
 
+    # Bare-word 'help' as a synonym for --help. If 'help' appears anywhere except
+    # the leading command slot (where `ocman help [topic]` is its own command),
+    # drop those words and append --help so it shows the relevant help. This means
+    # `ocman session delete help`, `ocman db clean help`, etc. behave like --help.
+    # We accept the rare collision where a project/session is literally named
+    # "help" (there are other ways to target those).
+    if len(rest) >= 2 and any(t.lower() == "help" for t in rest[1:]):
+        rest = [rest[0]] + [t for t in rest[1:] if t.lower() != "help"] + ["--help"]
+
     # (0) short aliases: "ls [NAME]" -> "session list [NAME]"; "lp" -> "project list".
     if rest and rest[0].lower() == "ls":
         rest = ["session", "list", *rest[1:]]
@@ -6105,6 +6114,22 @@ def _add_while_running(p: argparse.ArgumentParser) -> None:
                    help="Proceed even if OpenCode instances are running (may corrupt their state).")
 
 
+def _add_extract_opts(p: argparse.ArgumentParser) -> None:
+    """Add --extracts/--no-extracts and -o/--output-dir for delete-time recovery extracts.
+
+    Before deleting, ocman can write prompt/restart/transcript Markdown for each
+    session (read straight from the DB). Extraction defaults ON and is offered in
+    the delete confirmation; these flags skip that question.
+    """
+    grp = p.add_mutually_exclusive_group()
+    grp.add_argument("--extracts", dest="extracts", action="store_true", default=None,
+                     help="Write recovery files before deleting (skips the extract prompt).")
+    grp.add_argument("--no-extracts", dest="extracts", action="store_false",
+                     help="Do not write recovery files before deleting (skips the extract prompt).")
+    p.add_argument("-o", "--output-dir", dest="extract_output_dir", default=None, metavar="DIR",
+                   help="Directory for delete-time recovery extracts (default: ./opencode-recovery).")
+
+
 def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
     """
     Options shared by 'db clean' and 'backup clean' (retention + duration).
@@ -6123,6 +6148,8 @@ def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
     p.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     p.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     p.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+    if with_name:
+        _add_extract_opts(p)
     p._ocman_clean_has_name = with_name  # type: ignore[attr-defined]
 
 
@@ -6213,13 +6240,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-y", "--yes", action="store_true",
                     help="Skip confirmation prompt.")
 
-    sp = new_action(p_session, s_sub, "delete", help="Delete sessions recursively.")
+    sp = new_action(p_session, s_sub, "delete",
+                    help="Delete sessions recursively (writes recovery extracts first by default).")
     sp.add_argument("specs", nargs="+", help="Sessions or projects to delete.")
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagents when resolving.")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt.")
+    _add_extract_opts(sp)
 
     sp = new_action(p_session, s_sub, "export", help="Export a session bundle (.ocbox).")
     sp.add_argument("session", help="Session to export.")
@@ -6265,6 +6294,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+    _add_extract_opts(sp)
 
     sp = new_action(p_project, pr_sub, "move", help="Relocate a project (local or remote DST).")
     sp.add_argument("src", help="Project ID or current path.")
@@ -6661,6 +6691,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
+            out["extracts"] = g("extracts", None)
+            out["extract_output_dir"] = g("extract_output_dir", None)
         elif action == "export":
             out["export_session"] = g("session")
             out["to"] = g("to")
@@ -6693,6 +6725,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
+            out["extracts"] = g("extracts", None)
+            out["extract_output_dir"] = g("extract_output_dir", None)
         elif action == "move":
             out["move_project"] = g("src")
             out["to"] = g("to")
@@ -6716,6 +6750,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
+            out["extracts"] = g("extracts", None)
+            out["extract_output_dir"] = g("extract_output_dir", None)
         elif action == "clean-orphans":
             out["clean_orphans"] = True
             out["dry_run"] = bool(g("dry_run", False))
@@ -8316,6 +8352,229 @@ def _resolve_session_diff_files(session_ids: list[str], storage_dir: Path) -> li
     return files
 
 
+def db_export_session_data(session_id: str, conn) -> dict | None:
+    """Reconstruct opencode-export-shaped JSON for a session directly from SQLite.
+
+    Produces the same structure `opencode export SESSION_ID` emits and that
+    `extract_opencode_turns` consumes, WITHOUT launching OpenCode:
+
+        {"info": {...}, "messages": [{"info": {"role": ...}, "parts": [...]}, ...]}
+
+    Messages are ordered by their creation time and each carries its parts,
+    also creation-ordered. Returns None if the session has no messages (nothing
+    to render). Uses the caller's already-open connection so it works inside a
+    stopped-OpenCode delete flow.
+    """
+    cursor = conn.cursor()
+    # Session-level info (best-effort; renderers only need role-bearing messages).
+    session_info: dict[str, Any] = {"id": session_id}
+    try:
+        cursor.execute(
+            "SELECT title, time_created, time_updated, directory FROM session WHERE id = ?",
+            (session_id,),
+        )
+        row = cursor.fetchone()
+        if row:
+            session_info.update({
+                "title": row[0],
+                "time": {"created": row[1], "updated": row[2]},
+                "directory": row[3],
+            })
+    except Exception:
+        pass
+
+    # Messages for this session, oldest first.
+    try:
+        cursor.execute(
+            "SELECT id, data FROM message WHERE session_id = ? ORDER BY time_created ASC, id ASC",
+            (session_id,),
+        )
+        msg_rows = cursor.fetchall()
+    except Exception:
+        return None
+    if not msg_rows:
+        return None
+
+    # Parts for this session, grouped by message_id, oldest first.
+    parts_by_msg: dict[str, list[dict]] = {}
+    try:
+        cursor.execute(
+            "SELECT message_id, data FROM part WHERE session_id = ? ORDER BY time_created ASC, id ASC",
+            (session_id,),
+        )
+        for mid, pdata in cursor.fetchall():
+            if not pdata:
+                continue
+            try:
+                part_obj = json.loads(pdata)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(part_obj, dict):
+                parts_by_msg.setdefault(mid, []).append(part_obj)
+    except Exception:
+        pass
+
+    messages: list[dict] = []
+    for mid, mdata in msg_rows:
+        info_obj: dict = {}
+        if mdata:
+            try:
+                loaded = json.loads(mdata)
+                if isinstance(loaded, dict):
+                    info_obj = loaded
+            except (ValueError, TypeError):
+                info_obj = {}
+        messages.append({"info": info_obj, "parts": parts_by_msg.get(mid, [])})
+
+    return {"info": session_info, "messages": messages}
+
+
+def extract_sessions_before_delete(
+    session_ids: list[str],
+    output_dir: Path,
+    conn,
+    verbosity: int,
+) -> list[Path]:
+    """Write prompt/restart/transcript recovery files for sessions about to be deleted.
+
+    Reads each session directly from the DB (no `opencode export`), then reuses
+    the standard `recover_from_export` renderers. Non-interactive: oversized
+    sessions are chunked rather than prompting. Best-effort per session; a
+    render failure warns and is skipped so the delete can still proceed.
+
+    Returns the list of files written.
+    """
+    written: list[Path] = []
+    dir_ready = False
+
+    for sid in session_ids:
+        data = db_export_session_data(sid, conn)
+        if not data:
+            continue
+        if not dir_ready:
+            try:
+                output_dir.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                print(color_yellow(f"Warning: could not create extract directory {output_dir}: {exc}"))
+                return written
+            dir_ready = True
+        info = data.get("info", {}) if isinstance(data, dict) else {}
+        title = info.get("title") or "(untitled)"
+        created = ""
+        updated = ""
+        t = info.get("time") if isinstance(info, dict) else None
+        if isinstance(t, dict):
+            created = str(t.get("created") or "")
+            updated = str(t.get("updated") or "")
+        session_obj = SessionInfo(
+            session_id=sid, title=title, created=created, updated=updated, raw=info,
+        )
+        tmp_path: Path | None = None
+        try:
+            fd, tmp_name = tempfile.mkstemp(prefix=f"ocman-extract-{sid}-", suffix=".json")
+            tmp_path = Path(tmp_name)
+            with os.fdopen(fd, "w", encoding="utf-8") as fh:
+                json.dump(data, fh)
+            generated = recover_from_export(
+                export_path=tmp_path,
+                output_dir=output_dir,
+                session=session_obj,
+                include_tools=False,
+                all_roles=False,
+                verbosity=verbosity,
+                quiet=True,
+                preview=False,
+                chunk=True,
+            )
+            written.extend(generated)
+        except RecoveryError as exc:
+            print(color_yellow(f"Warning: could not extract session {sid}: {exc}"))
+        except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
+            print(color_yellow(f"Warning: unexpected error extracting session {sid}: {exc}"))
+        finally:
+            if tmp_path is not None:
+                try:
+                    tmp_path.unlink()
+                except OSError:
+                    pass
+    return written
+
+
+def resolve_extract_choice(
+    extracts: bool | None,
+    assume_yes: bool,
+    session_count: int,
+) -> bool:
+    """Resolve whether to write recovery extracts before a delete.
+
+    Tri-state input: True (--extracts), False (--no-extracts), None (ask).
+    `assume_yes` (-y/--yes) implies extract=yes with no prompt. When None and
+    interactive, ask a single combined question; default is yes.
+    """
+    if extracts is not None:
+        return extracts
+    if assume_yes or not sys.stdin.isatty():
+        # Non-interactive (piped/CI) or -y: default ON without prompting.
+        return True
+    noun = "session" if session_count == 1 else "sessions"
+    try:
+        answer = input(
+            f"Extract recovery files for {session_count} {noun} before deleting? [Y/n]: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return True
+    return answer in ("", "y", "yes")
+
+
+def resolve_extract_output_dir(explicit: str | None) -> Path:
+    """Directory for delete-time recovery extracts: explicit -o, else config default."""
+    if explicit:
+        return Path(explicit)
+    try:
+        cfg = load_ocman_config()
+        return Path(cfg.get("default_out_dir", "opencode-recovery"))
+    except Exception:
+        return Path("opencode-recovery")
+
+
+def run_delete_extracts(
+    session_ids: list[str],
+    *,
+    extracts: bool | None,
+    assume_yes: bool,
+    output_dir: str | None,
+    verbosity: int,
+) -> None:
+    """Resolve the extract choice and, if chosen, write recovery files for session_ids.
+
+    Opens its own short-lived connection (the standard delete path VACUUMs and
+    re-opens anyway). Safe to call before the destructive delete begins.
+    """
+    if not session_ids:
+        return
+    if not resolve_extract_choice(extracts, assume_yes, len(session_ids)):
+        return
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return
+    out_dir = resolve_extract_output_dir(output_dir)
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        written = extract_sessions_before_delete(session_ids, out_dir, conn, verbosity)
+        if written:
+            print(f"{info_prefix()} Wrote {len(written)} recovery file(s) to {out_dir}")
+    except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
+        print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
+    finally:
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def db_delete_sessions_batch(
     session_ids: list[str],
     *,
@@ -8515,7 +8774,8 @@ def db_delete_sessions_batch(
                 pass
 
 
-def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
+def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True,
+                                extracts: bool | None = None, extract_output_dir: str | None = None) -> None:
     """Recursively delete a project, all its sessions, and all related database and disk data."""
     clean_pid = str(project_id).strip()
     if "/" in clean_pid or "\\" in clean_pid or ".." in clean_pid:
@@ -8631,10 +8891,23 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         # Shared destructive-confirm seam (op already printed its detailed preview; dry_run
         # handled above). assume_yes = the existing prompt-skip condition (confirm=False, TUI),
         # never `force`.
+        # Resolve extract choice as part of this confirmation moment.
+        do_extract = resolve_extract_choice(extracts, not confirm, len(session_ids)) if session_ids else False
+
         if not confirm_destructive(
             None, assume_yes=not confirm, render=False, action_verb="project deletion",
         ):
             return
+
+        # Write recovery extracts before the destructive delete begins.
+        if do_extract:
+            out_dir = resolve_extract_output_dir(extract_output_dir)
+            try:
+                written = extract_sessions_before_delete(session_ids, out_dir, conn, verbosity)
+                if written:
+                    print(f"{info_prefix()} Wrote {len(written)} recovery file(s) to {out_dir}")
+            except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
+                print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
         # Create backup directory and backup database file family
         from datetime import datetime
@@ -10550,6 +10823,8 @@ def db_run_cleanup(
     clean_orphans: bool,
     verbosity: int,
     assume_yes: bool = False,
+    extracts: bool | None = None,
+    extract_output_dir: str | None = None,
 ) -> None:
     """Run OpenCode SQLite database retention cleanup and orphan sweeping.
 
@@ -10782,11 +11057,28 @@ def db_run_cleanup(
         # 3. Confirmation via the shared destructive-confirm seam (op already printed its
         # detailed preview above; dry_run handled above; cleanup always prompts, so assume_yes
         # is never derived from `force`, which only bypasses the process-lock).
+        # Resolve extract choice as part of this confirmation moment (age-based
+        # targets only; an orphan-only sweep has no renderable session rows).
+        do_extract = (
+            resolve_extract_choice(extracts, assume_yes, len(target_session_ids))
+            if target_session_ids else False
+        )
+
         print()
         if not confirm_destructive(
             None, assume_yes=assume_yes, render=False, action_verb="database prune and vacuum",
         ):
             return
+
+        # Write recovery extracts before the destructive delete begins.
+        if do_extract:
+            out_dir = resolve_extract_output_dir(extract_output_dir)
+            try:
+                written = extract_sessions_before_delete(target_session_ids, out_dir, conn, verbosity)
+                if written:
+                    print(f"{info_prefix()} Wrote {len(written)} recovery file(s) to {out_dir}")
+            except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
+                print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
         # 4. Create database backup family
         from datetime import datetime
@@ -15125,6 +15417,8 @@ def main() -> None:
                 clean_orphans=args.clean_orphans,
                 verbosity=verbosity,
                 assume_yes=getattr(args, "yes", False),
+                extracts=getattr(args, "extracts", None),
+                extract_output_dir=getattr(args, "extract_output_dir", None),
             )
         except RecoveryError as e:
             die(str(e))
@@ -15156,6 +15450,8 @@ def main() -> None:
                 force=args.force,
                 verbosity=verbosity,
                 confirm=not getattr(args, "yes", False),
+                extracts=getattr(args, "extracts", None),
+                extract_output_dir=getattr(args, "extract_output_dir", None),
             )
         except Exception as e:
             die(str(e))
@@ -15199,6 +15495,15 @@ def main() -> None:
             warn_if_all_removed=False
         )
 
+        # Resolve the extract choice up front so it is part of the same confirmation
+        # moment as the delete (a single interaction when flags are given / -y is set).
+        extract_ids = [s["id"] for s in res.sessions]
+        do_extract = False
+        if not args.dry_run:
+            do_extract = resolve_extract_choice(
+                getattr(args, "extracts", None), args.yes, len(extract_ids)
+            )
+
         if not confirm_destructive(
             preview,
             dry_run=args.dry_run,
@@ -15207,6 +15512,16 @@ def main() -> None:
             action_verb="delete"
         ):
             return
+
+        # Write recovery extracts before the destructive delete begins.
+        if do_extract:
+            run_delete_extracts(
+                extract_ids,
+                extracts=True,
+                assume_yes=True,
+                output_dir=getattr(args, "extract_output_dir", None),
+                verbosity=verbosity,
+            )
 
         # Projects the user EXPLICITLY targeted (by name/number/project: spec) are
         # expanded to their sessions above. Pass their ids so the batch can remove

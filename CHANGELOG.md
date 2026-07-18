@@ -14,6 +14,20 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **Bare-word `help` works like `--help`.** After a command, a trailing (or
+  interspersed) `help` word is treated as `--help`, so `ocman session delete help`,
+  `ocman db clean help`, etc. print that command's usage. The top-level `ocman help
+  [topic]` overview is unchanged.
+- **Recovery extracts before deletion.** Before deleting sessions, ocman now offers to
+  write the readable recovery artifacts (`.prompt.md` / `.restart.md` / `.transcript.md`)
+  for each session so their content is not lost. This is default ON and folded into the
+  delete confirmation; `--extracts` forces it (skipping the extra question), `--no-extracts`
+  skips it, and `-y` / a non-interactive run assumes yes. Files go to the recovery output
+  directory (default `./opencode-recovery`, override with `-o`). Extraction reads each
+  session directly from the SQLite database (it does NOT launch OpenCode), so it works even
+  with OpenCode stopped and is fast in bulk. Available on `session delete`, `project delete`,
+  and `db clean` (age-based prunes). A session that cannot be rendered is skipped with a
+  warning and the delete still proceeds.
 - **`ocman doctor` and `ocman reclaim`: diagnose and reclaim OpenCode disk usage.**
   `doctor` is a read-only checkup (safe even while OpenCode is running) that reports DB/
   WAL size, integrity, event-log bloat, compacted-part output, orphaned rows/diff files,
