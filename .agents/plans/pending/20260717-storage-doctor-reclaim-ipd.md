@@ -9,7 +9,7 @@
   command (and upstream issue link where relevant); and a guarded `ocman reclaim` that
   CLEANS the safe categories (with previews + confirmation), reusing ocman's existing
   sizing, orphan-detection, delete/VACUUM, backup, and running-guard machinery.
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -70,6 +70,8 @@
   `/tmp/*.so` origin still inferred - keep report-default + do an empirical `lsof` check
   before shipping the delete path. V2 `session_message` reclaim remains out of scope. All
   claims carry file:line for the executing agent to re-verify.
+
+- 2026-07-17 /plan-review round 2 (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED (re-review of the re-scoped plan after the opencode.repo-agent verification rounds). Re-verified the ocman-side reuse refs against cli.py (db_show_info WAL/SHM 11640, SESSION_RELATIONAL_TABLES 399, orphan predicate 10748, backups block 11864, helpers dir_usage/human_size_local/emit_json/_get_sqlite/require_safe_to_mutate/_per_project_disk_usage all present). Findings: PR-007 (MEDIUM, FIXED) - the fd-on-DB-family "running" check does not exist yet (require_safe_to_mutate uses PROCESS enumeration); specified a new db_family_open_by_live_pid helper reusing the /proc own-UID scan, called alongside the guard. PR-008 (MEDIUM, FIXED) - tests need a schema-faithful event/part JSON fixture (real fixtures lack it); specified it. PR-009 (LOW, FIXED) - footer must split "ocman can reclaim now" vs opt-in vs report-only, never sum report-only into a headline reclaimable figure. PR-010 (LOW, FIXED) - RO helper must work on both sqlite backends + skip :memory:/missing. PR-011 (LOW, FIXED) - doctor reuses the global -v. opencode source citations (compaction.ts:281, message-v2.ts:293-296, global.ts, database.ts) are gated for the executing agent to re-verify (that repo is out of ocman's tree). Status -> reviewed.
 
 ## Goal
 
@@ -230,8 +232,10 @@ Resolution mirrors OpenCode's own (layout reply Q1, `core/src/global.ts`):
   use `immutable=1` (PR-001): `immutable` asserts the file will not change while open,
   which with a live OpenCode writer can return stale/garbage reads; verified that plain
   `mode=ro` both blocks writes and sees concurrent commits (`pysqlite3`, the active
-  backend). If the DB is missing/locked, degrade to file-size-only reporting for the DB
-  checks (still run the filesystem checks).
+  backend). Both `_get_sqlite()` backends (pysqlite3 and the stdlib `sqlite3` fallback)
+  support `uri=True`; the helper must work on either (PR-010). If the DB is missing, is
+  `:memory:` (no file), or the RO connect raises, degrade to file-size-only reporting for
+  the DB checks (still run the filesystem checks) - never crash.
 
 - Structure as a list of CHECKS. Each check is a small function returning a result
   record: `{key, title, status (ok|notice|warn), size_bytes, count, detail, fix_cmd,
@@ -301,12 +305,17 @@ Resolution mirrors OpenCode's own (layout reply Q1, `core/src/global.ts`):
   bold header, color-gated). Columns: `Check`, `Status`, `Size/Count`, `Recommended fix`.
   A `Status` of WARN is shown in bold red, NOTICE in yellow, OK plain (honoring
   NO_COLOR). Beneath the table: a details block per non-OK check (the one-line
-  explanation + issue URL). Footer summary: `N OK / M notices / K warnings`, and totals
-  for reclaimable-now vs. opt-in vs. report-only bytes.
+  explanation + issue URL). Footer summary: `N OK / M notices / K warnings`, and byte
+  totals in THREE clearly-labeled buckets so the number is never misleading (PR-009):
+  "ocman can reclaim now" (checkpoint+VACUUM + guarded temp + stale ocman backups),
+  "opt-in" (`--reclaim-parts`), and "reported only, NOT ocman-reclaimable" (event bloat =
+  upstream fix, foreign backups, snapshots). Never sum report-only bytes into a headline
+  "reclaimable" figure.
 - `--json` via `emit_json("doctor", {...})` emitting the list of check records
   (stable, additive schema).
 - `doctor` NEVER mutates and is NOT behind the running guard (read-only, safe anytime).
-- Verbosity: `-v` adds per-project event/part breakdowns and lists the specific
+- Verbosity: reuse the EXISTING global `-v/--verbose` (do not add a new flag, PR-011);
+  at `-v`, `doctor` adds per-project event/part breakdowns and lists the specific
   orphaned tables/files; the default view stays a concise one-row-per-check summary.
 
 ### D-3 `ocman reclaim` (guarded cleanup)
@@ -383,6 +392,15 @@ by age within that dir; it never recurses into unrelated trees.
   Short-lived CLIs open/close the DB in ms, so a live fd can be a benign TRANSIENT
   false-positive; treat ANY live fd as "do not mutate" (fail-safe) rather than trying to
   distinguish transient from real. Bypass only with explicit `--while-running`.
+  IMPLEMENTATION (PR-007): this fd-on-DB-family check does NOT exist today -
+  `require_safe_to_mutate` (`cli.py:7662`) detects via PROCESS enumeration
+  (`detect_running_opencode`), not open fds. Add a new helper
+  `db_family_open_by_live_pid(db_path) -> bool` that scans own-UID `/proc/<pid>/fd`
+  symlinks (reuse the own-UID + `/proc/<pid>` pattern from the `list running` enumerator,
+  `cli.py:7867`) for any fd resolving to the `.db`/`-wal`/`-shm` family; on non-Linux
+  (no `/proc`), fall back to `require_safe_to_mutate`'s process check alone and note the
+  reduced fidelity. `reclaim`'s DB-write path MUST call BOTH `require_safe_to_mutate`
+  AND this fd check (either one positive = refuse unless `--while-running`).
 - Event rows are NEVER deleted by ocman (report-only).
 - `--reclaim-parts` aborts if the `migration`-table schema level is unrecognized, or if
   `data.state.time.compacted` is not actually populated in the DB (fail closed).
@@ -410,7 +428,14 @@ by age within that dir; it never recurses into unrelated trees.
 ## Test plan
 
 Unit / offline (seed a temp DB + fake temp files under a tmp HOME, the established
-`Path.home()` monkeypatch pattern):
+`Path.home()` monkeypatch pattern). FIXTURE FIDELITY (PR-008): ocman's existing fixtures
+do NOT model OpenCode's real `event`/`part` `data` JSON, so add a minimal but
+schema-faithful fixture per the archived schema reply: `event` rows with
+`type='message.updated.1'` and `data` = `{"sessionID":..., "info":{"id":...}}` (varying
+`seq` per `(aggregate_id, info.id)` to exercise the superseded-waste estimate), and
+`part` rows with `data` = `{"type":"tool","state":{"status":"completed","output":"...",
+"time":{"compacted":<ms|absent>}}}`. Also seed a `migration` table row so the fingerprint
+gate has something to read. The tests below rely on this fixture:
 - discovery: derives data dir from `db_path`; honors `$XDG_DATA_HOME`/`$TMPDIR`;
   collects the DB family + temp globs; non-interactive skips the extra-scan offer.
 - `db_connect_readonly`: a write attempt raises (proves read-only); missing DB degrades
