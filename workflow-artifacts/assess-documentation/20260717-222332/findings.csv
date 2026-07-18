@@ -1,0 +1,12 @@
+id,severity,remediation_risk,axis,persona,area,finding,evidence,proposed_action,disposition
+D-01,High,Low,,novice,Install/accuracy,"README claims zero external dependencies; false, vistab hard-imported and 4 core deps",README.md~126;ocman/cli.py:90;pyproject.toml:15-19,"Remove zero-dep claim; state real deps + install",propose
+D-02,High,Low,,novice,Install/accuracy,"Standalone ocman.py mode references a nonexistent file",README.md~145-150;no ocman.py;pyproject.toml,"Remove/replace standalone-script section with console-script usage",propose
+D-03,High,Low,,engineer,Accuracy,"Recovery-options table lists compact-only flags as recover flags",README.md~340,360-362;cli.py:6019;cli.py:6186-6193,"Split compact-only vs shared recovery flags",propose
+D-04,High,Low,,engineer,Accuracy,"ARCHITECTURE says stdlib-only CLI + names ocman.py; both false",ARCHITECTURE.md~16,64,152,250-251;cli.py:90,"Fix ocman.py refs; drop stdlib-only claim",propose
+D-05,Medium,Low,,engineer,Config/accuracy,"Config template: unquoted filter_secret_scan (invalid TOML); wrong default_out_dir default",README.md~469,438;cli.py:394-395,310,"Quote string; fix default",propose
+D-06,Medium,Low,,engineer,Config coverage,"4 config keys missing from README config section",README.md~430-470;cli.py:321-324,292-304,"Document chunk_max_interactions/lines, reclaim_tmp_min_age_hours, reclaim_parts_retention_days",propose
+D-07,Medium,Low,,novice/engineer,Env coverage,"No env-vars section; OPENCODE_DB/XDG_DATA_HOME/OPENCODE_CONFIG_DIR undocumented",README(no env section);cli.py:12568,12580,12586,137,139,"Add Environment variables subsection",propose
+D-08,Medium,Low,,engineer,CLI coverage,"Several real flags missing from README command tables",README.md~330-337,368-369,411;cli.py:6150-6154,6161,6201,6216,6238-6240,6246,6407-6411,"Add missing flags to tables",propose
+D-09,Medium,Low,,engineer,Accuracy,"ARCHITECTURE verb list omits spend/running/doctor/reclaim",ARCHITECTURE.md~20-21;cli.py:6354,6382,6389,6392,"Update verb enumeration",propose
+D-10,Low,Low,,novice,Accuracy,"README overclaims help all as complete reference; omits new commands",README.md~174,420;live help all,"Soften wording; cross-ref self-documentation",propose
+D-11,Low,Low,,engineer,CHANGELOG,"reclaim entry omits two flags; batch-delete has no discrete entry",CHANGELOG.md~17-28,47,"Tidy CHANGELOG entries",propose
