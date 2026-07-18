@@ -5,7 +5,7 @@
 - Scope: the Textual TUI package `ocman_tui/` (app + widgets + modals), measured
   against the current CLI feature set in `ocman/cli.py`. The CLI itself is NOT in scope
   (it is the reference implementation).
-- Status: to-review
+- Status: approved (2026-07-18; full 5-phase parity is the release gate; execute phase by phase)
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -115,8 +115,9 @@ Questions). Order is safety-first, then high-value, then breadth.
 4. Add reclaim as guarded actions from that view: a bare "Checkpoint + VACUUM" button, and
    opt-in toggles/buttons for `--reclaim-temp` / `--reclaim-parts` / a backups-dir prune,
    each with a preview + confirm modal, mirroring the CLI's guards (refuse-while-open
-   unless override, backup-first). The snapshot force path stays behind an explicit,
-   loud confirm or is deferred (OQ-2).
+   unless override, backup-first). Per OQ-2, do NOT expose the snapshot-force path in the
+   TUI; instead show a short note directing the user to the CLI
+   (`ocman reclaim --force-snapshots ...` and/or `ocman doctor`) for that highest-risk mode.
 - Validation: doctor view matches `ocman doctor` output for the same DB; reclaim actions
   match the CLI's effects and refuse under the same conditions; suite green.
 
@@ -149,17 +150,18 @@ Questions). Order is safety-first, then high-value, then breadth.
     into the sidebar.
 - Validation: each maps to and matches its CLI counterpart; suite green.
 
-### Not proposed for the parity effort (guard against gold-plating)
-- filter (T-13) and db rebase advanced remote flows: genuinely advanced/rare; leave
-  CLI-only unless the stakeholder wants them (OQ-3, OQ-4). Proposing deferral on the
-  Complexity axis (UI cost high relative to how often a TUI user needs them).
+### Scope after the full-parity decision (OQ-5 = all phases gate release)
+- T-13 `filter`, and the advanced/remote parts of T-10 (move) and T-15 (db rebase) are
+  IN SCOPE for the release under full parity, pending the OQ-3/OQ-4 confirmations at
+  Phase 5 about how much of the remote/git-aware move counts as "parity".
 
 ## Deferred / out of scope (with named axis)
 
-- T-03 snapshot-force reclaim path: Remediation Risk Med-High on the Safety/Complexity
-  axis (it can break OpenCode undo/revert). Propose exposing the safe reclaim modes now
-  and deferring the snapshot-force path, or gating it behind an extra explicit confirm.
-- T-13 filter, advanced/remote parts of T-10/T-15: Complexity axis; low TUI demand.
+- T-03 snapshot-force reclaim path: EXCLUDED from the TUI by explicit maintainer decision
+  (OQ-2). Remediation Risk Med-High on the Safety axis (it can break OpenCode undo/revert).
+  The TUI exposes the safe reclaim modes and shows a note directing the user to the CLI
+  (`ocman reclaim --force-snapshots` / `ocman doctor`) for the snapshot-force mode. This is
+  the one hard exclusion; everything else is in-scope for full parity.
 
 ## Required tests / validation
 
@@ -178,18 +180,38 @@ entries per phase. The docs currently describe only the 6 existing tabs.
 
 ## Open questions
 
-- OQ-1 (T-14): implement `history clear` in the TUI, or just remove the stub button?
-  Leaning: implement (small, removes a dishonest control).
-- OQ-2 (T-03): expose the reclaim snapshot-force path in the TUI at all, or keep it
-  CLI-only? Leaning: keep CLI-only for now (highest-risk mode).
-- OQ-3 (T-10): does the TUI need remote / git-aware move, or is local metadata move
-  enough for the UI (remote stays a CLI runbook)?
-- OQ-4 (T-13): is `filter` wanted in the TUI, or CLI-only?
-- OQ-5 (scope/release): must ALL phases land before the next release, or is a subset the
-  release gate (e.g. Phases 1-3) with 4-5 following later? This decides the release cut.
+RESOLVED by the maintainer 2026-07-18:
+
+- OQ-1 (T-14): RESOLVED - implement `history clear` in the TUI (wire the button to the
+  real `history clear`: clear the ledger's detail runs, preserve cumulative totals, typed-
+  yes confirm). No dishonest stub remains.
+- OQ-2 (T-03): RESOLVED - keep the reclaim snapshot-force path CLI-only. The TUI reclaim
+  view MUST NOT offer snapshot-force; instead it MUST show a short note telling the user to
+  use the command line (`ocman reclaim --force-snapshots ...`) and/or run `ocman doctor` on
+  the CLI for that highest-risk mode. The safe reclaim modes (checkpoint+VACUUM,
+  --reclaim-temp, --reclaim-parts, backups-dir prune) are still exposed in the TUI.
+- OQ-5 (scope/release): RESOLVED - ALL FIVE PHASES gate the release (full CLI<->TUI
+  parity). Nothing ships until the TUI matches the CLI across the proposed features.
+
+Still open (non-blocking for starting; decide before the relevant phase):
+
+- OQ-3 (T-10, Phase 5): does the TUI need remote / git-aware move, or is local metadata
+  move enough (remote stays a CLI runbook)? Note: OQ-5 says full parity, so if remote move
+  is considered in-parity it must be included; confirm at Phase 5 whether "parity" includes
+  the remote runbook or only the local move.
+- OQ-4 (T-13, Phase 5): is `filter` wanted in the TUI? Under full-parity (OQ-5) this
+  likely moves from "deferred" to "included"; confirm at Phase 5.
 - OQ-6 (structure): new top-level tabs per area (Storage/Spend/Running) vs. folding into
   the existing Database Admin tab. Leaning: a small number of new tabs to avoid crowding
-  one widget.
+  one widget. Non-blocking; settle during Phase 2.
+
+## Impact of full-parity decision (OQ-5) on the "Not proposed" list
+
+Because the maintainer chose FULL parity, the two items previously deferred as
+gold-plating (T-13 `filter`, and the advanced/remote parts of T-10 move and T-15 rebase)
+are RECLASSIFIED as in-scope for the release, pending the OQ-3/OQ-4 confirmations at
+Phase 5. The only hard exclusion that stands is the reclaim snapshot-force mode (OQ-2),
+which stays CLI-only by explicit decision, with an in-TUI pointer to the CLI.
 
 ## Approval and execution gate
 
