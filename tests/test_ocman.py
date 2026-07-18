@@ -680,15 +680,20 @@ def test_gather_and_save_deletion_metrics(temp_db, mock_history_path):
     cursor = conn.cursor()
     cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Proj 1')")
     cursor.execute("""
-        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, model)
-        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.05, 1000, 500, '{"id": "gpt-4"}')
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, tokens_cache_read, model)
+        VALUES ('sess1', 'proj1', 'Session 1', 1000, 2000, 0.05, 1000, 500, 30, '{"id": "gpt-4"}')
     """)
     cursor.execute("""
-        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, model, parent_id)
-        VALUES ('sess2', 'proj1', 'Session 2', 1100, 2100, 0.02, 400, 200, '{"id": "gpt-4"}', 'sess1')
+        INSERT INTO session (id, project_id, title, time_created, time_updated, cost, tokens_input, tokens_output, tokens_cache_read, model, parent_id)
+        VALUES ('sess2', 'proj1', 'Session 2', 1100, 2100, 0.02, 400, 200, 12, '{"id": "gpt-4"}', 'sess1')
     """)
-    cursor.execute("INSERT INTO message (id, session_id) VALUES ('msg1', 'sess1')")
-    cursor.execute("INSERT INTO message (id, session_id) VALUES ('msg2', 'sess2')")
+    # message needs a 'data' column for the interactions (user-role) count.
+    cursor.execute("DROP TABLE message")
+    cursor.execute("CREATE TABLE message (id TEXT, session_id TEXT, data TEXT)")
+    cursor.execute("INSERT INTO message VALUES ('msg1', 'sess1', '{\"role\":\"user\"}')")
+    cursor.execute("INSERT INTO message VALUES ('msg2', 'sess2', '{\"role\":\"assistant\"}')")
+    # part rows (DB parts) for the deleted sessions.
+    cursor.execute("INSERT INTO part (id, session_id) VALUES ('p1','sess1'),('p2','sess1'),('p3','sess2')")
     conn.commit()
 
     # Gather metrics
@@ -697,9 +702,12 @@ def test_gather_and_save_deletion_metrics(temp_db, mock_history_path):
     assert stats["sessions_count"] == 2
     assert stats["subagents_count"] == 1
     assert stats["messages_count"] == 2
+    assert stats["interactions_count"] == 1      # one user-role message
+    assert stats["parts_count"] == 3
     assert stats["cost"] == pytest.approx(0.07)
     assert stats["tokens_input"] == 1400
     assert stats["tokens_output"] == 700
+    assert stats["tokens_cache_read"] == 42
 
     # Save metrics
     ocman.save_deletion_metrics("delete", stats)
@@ -710,9 +718,12 @@ def test_gather_and_save_deletion_metrics(temp_db, mock_history_path):
     assert c["sessions_deleted"] == 2
     assert c["subagents_deleted"] == 1
     assert c["messages_deleted"] == 2
+    assert c["interactions_deleted"] == 1
+    assert c["parts_deleted"] == 3
     assert c["cost_deleted"] == pytest.approx(0.07)
     assert c["tokens_input_deleted"] == 1400
     assert c["tokens_output_deleted"] == 700
+    assert c["tokens_cache_read_deleted"] == 42
 
     conn.close()
 
@@ -1503,6 +1514,33 @@ def test_spend_json(temp_db, capsys, monkeypatch, mock_history_path):
     assert d["command"] == "spend" and d["spend"]["scope"] == "projects"
     assert d["spend"]["live_total"] == 12.5
     assert d["spend"]["projects"][0]["cost"] == 12.5
+
+
+def test_spend_historical_sums_tokens(temp_db, capsys, monkeypatch, mock_history_path):
+    """--historical now sums deleted TOKENS (in/out/cache), not just cost."""
+    import ocman, sys, json
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/projA', 'A')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'A1', 1, 2, '/projA', 10.0, 1000, 500, 100, '')")
+    conn.commit(); conn.close()
+    # Seed a cumulative deletion ledger with historical tokens.
+    hist = ocman._load_history()
+    hist["cumulative"].update({"cost_deleted": 5.0, "tokens_input_deleted": 300,
+                               "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
+    ocman._save_history(hist)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend",
+                                      "--historical", "--json"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    d = json.loads(capsys.readouterr().out)["spend"]
+    assert d["historical_tokens"] == {"input": 300, "output": 200, "cache_read": 50}
+    assert d["grand_total"] == pytest.approx(15.0)
+    assert d["grand_tokens"] == {"input": 1300, "output": 700, "cache_read": 150}
 
 
 def test_spend_per_session(temp_db, capsys, monkeypatch):

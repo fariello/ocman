@@ -11176,9 +11176,12 @@ def _load_history() -> dict:
             "sessions_deleted": 0,
             "subagents_deleted": 0,
             "messages_deleted": 0,
+            "interactions_deleted": 0,
+            "parts_deleted": 0,
             "cost_deleted": 0.0,
             "tokens_input_deleted": 0,
             "tokens_output_deleted": 0,
+            "tokens_cache_read_deleted": 0,
             "space_saved_deleted": 0
         },
         "runs": []
@@ -11244,23 +11247,28 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
         cost_sum = 0.0
         tokens_in_sum = 0
         tokens_out_sum = 0
+        tokens_cache_sum = 0
         sessions_cnt = 0
         subagents_cnt = 0
         messages_cnt = 0
+        parts_cnt = 0
+        interactions_cnt = 0
         sessions_info = []
 
         for chunk in chunks:
             placeholders = ",".join("?" for _ in chunk)
 
             cursor.execute(f"""
-                SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output), COUNT(*)
+                SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output),
+                       SUM(tokens_cache_read), COUNT(*)
                 FROM session
                 WHERE id IN ({placeholders})
             """, chunk)
-            c_sum, t_in, t_out, s_cnt = cursor.fetchone()
+            c_sum, t_in, t_out, t_cache, s_cnt = cursor.fetchone()
             cost_sum += c_sum or 0.0
             tokens_in_sum += t_in or 0
             tokens_out_sum += t_out or 0
+            tokens_cache_sum += t_cache or 0
             sessions_cnt += s_cnt or 0
 
             cursor.execute(f"""
@@ -11275,6 +11283,35 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
                 WHERE session_id IN ({placeholders})
             """, chunk)
             messages_cnt += cursor.fetchone()[0] or 0
+
+            # DB parts for the deleted sessions (best-effort; table may be absent).
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM part WHERE session_id IN ({placeholders})
+                """, chunk)
+                parts_cnt += cursor.fetchone()[0] or 0
+            except Exception:
+                pass
+
+            # Interactions = user-role messages (same cascade db_get_session_stats uses:
+            # json_extract -> LIKE fallback). Best-effort; skip if the shape is unknown.
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM message
+                    WHERE session_id IN ({placeholders})
+                      AND json_extract(data, '$.role') = 'user'
+                """, chunk)
+                interactions_cnt += cursor.fetchone()[0] or 0
+            except Exception:
+                try:
+                    cursor.execute(f"""
+                        SELECT COUNT(*) FROM message
+                        WHERE session_id IN ({placeholders})
+                          AND data LIKE '%"role":"user"%'
+                    """, chunk)
+                    interactions_cnt += cursor.fetchone()[0] or 0
+                except Exception:
+                    pass
 
             # Query individual session details (name, id, start and end dates)
             cursor.execute(f"""
@@ -11293,9 +11330,12 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
             "sessions_count": sessions_cnt,
             "subagents_count": subagents_cnt,
             "messages_count": messages_cnt,
+            "interactions_count": interactions_cnt,
+            "parts_count": parts_cnt,
             "cost": cost_sum,
             "tokens_input": tokens_in_sum,
             "tokens_output": tokens_out_sum,
+            "tokens_cache_read": tokens_cache_sum,
             "sessions": sessions_info
         }
     except Exception as e:
@@ -11315,9 +11355,12 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         c["sessions_deleted"] = c.get("sessions_deleted", 0) + stats["sessions_count"]
         c["subagents_deleted"] = c.get("subagents_deleted", 0) + stats["subagents_count"]
         c["messages_deleted"] = c.get("messages_deleted", 0) + stats["messages_count"]
+        c["interactions_deleted"] = c.get("interactions_deleted", 0) + stats.get("interactions_count", 0)
+        c["parts_deleted"] = c.get("parts_deleted", 0) + stats.get("parts_count", 0)
         c["cost_deleted"] = c.get("cost_deleted", 0.0) + stats["cost"]
         c["tokens_input_deleted"] = c.get("tokens_input_deleted", 0) + stats["tokens_input"]
         c["tokens_output_deleted"] = c.get("tokens_output_deleted", 0) + stats["tokens_output"]
+        c["tokens_cache_read_deleted"] = c.get("tokens_cache_read_deleted", 0) + stats.get("tokens_cache_read", 0)
         c["space_saved_deleted"] = c.get("space_saved_deleted", 0) + stats.get("space_saved", 0)
 
         run_record = {
@@ -11590,17 +11633,28 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
     } for p in projects]
     proj_rows.sort(key=lambda r: r["cost"], reverse=True)
     live_total = sum(r["cost"] for r in proj_rows)
+    live_in = sum(r["tokens_input"] for r in proj_rows)
+    live_out = sum(r["tokens_output"] for r in proj_rows)
+    live_cache = sum(r["tokens_cache_read"] for r in proj_rows)
 
     hist = _load_history().get("cumulative", {}) if historical else {}
     hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
+    hist_in = hist.get("tokens_input_deleted", 0) if historical else 0
+    hist_out = hist.get("tokens_output_deleted", 0) if historical else 0
+    hist_cache = hist.get("tokens_cache_read_deleted", 0) if historical else 0
 
     if json_output:
         emit_json("spend", {
             "scope": "projects",
             "projects": proj_rows,
             "live_total": live_total,
+            "live_tokens": {"input": live_in, "output": live_out, "cache_read": live_cache},
             "historical_total": hist_cost if historical else None,
+            "historical_tokens": ({"input": hist_in, "output": hist_out,
+                                    "cache_read": hist_cache} if historical else None),
             "grand_total": (live_total + hist_cost) if historical else live_total,
+            "grand_tokens": ({"input": live_in + hist_in, "output": live_out + hist_out,
+                              "cache_read": live_cache + hist_cache} if historical else None),
         })
         return
 
@@ -11611,13 +11665,17 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
                        fmt_int(r["tokens_output"]), fmt_int(r["tokens_cache_read"])])
     table.set_cols_align(["l", "r", "r", "r", "r"])
     print(table.draw())
-    print(f"Live total (active sessions):     {fmt_cost(live_total)}")
+    print(f"Live total (active sessions):     {fmt_cost(live_total)}  "
+          f"[{fmt_int(live_in)} in / {fmt_int(live_out)} out / {fmt_int(live_cache)} cache]")
     if historical:
         print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
+              f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache]  "
               + color_dim("(global; not attributable per project)"))
-        print(f"Grand total (live + historical):  {fmt_cost(live_total + hist_cost)}")
+        print(f"Grand total (live + historical):  {fmt_cost(live_total + hist_cost)}  "
+              f"[{fmt_int(live_in + hist_in)} in / {fmt_int(live_out + hist_out)} out / "
+              f"{fmt_int(live_cache + hist_cache)} cache]")
     else:
-        print(color_dim("(add --historical to include spend on since-deleted sessions)"))
+        print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
 
 
 def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[dict]:
