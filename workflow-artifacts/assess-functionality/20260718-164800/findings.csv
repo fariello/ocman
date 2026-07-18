@@ -1,0 +1,16 @@
+id,severity,remediation_risk,risk_axis,persona,area,finding,evidence,proposed_action,disposition
+T-01,High,Medium,Complexity,PU/QA,delete-safety,extract-on-delete not wired into TUI; TUI deletes with force=True/confirm=False and writes no recovery files,ocman_tui/app.py:1453-1459;1567-1573,Wire extract_sessions_before_delete into both TUI delete paths with a default-on toggle,Propose (Phase 1)
+T-02,High,Medium,Complexity,STK/PU,doctor,storage checkup absent from TUI,no ref in ocman_tui/; cli_doctor/run_doctor_checks,Add read-only doctor view (worker thread),Propose (Phase 2)
+T-03,High,Med-High,Safety/Complexity,STK/PU,reclaim,disk reclamation absent from TUI,no ref in ocman_tui/; cli_reclaim,Add guarded reclaim actions with preview/confirm; defer or extra-gate snapshot-force,Propose (Phase 2; snapshot path deferred)
+T-04,Medium,Medium,Complexity,PU,spend,spend/--historical absent,app.py:1081,1007;database.py:322;cli_spend,Add per-project spend view with historical toggle,Propose (Phase 3)
+T-05,Medium,Medium,Complexity,PU/STK,running,list running + insecure servers absent,no ref;cli_list_running,Add read-only running view flagging insecure servers,Propose (Phase 3)
+T-06,Medium,Medium,Complexity,PU,batch,multi-session actions absent (single-select sidebar),app.py:1027;session delete SPECS...,Add multi-select batch delete/export via consolidated batch path,Propose (Phase 4)
+T-07,Medium,Low,Complexity,PU,db-clean,db clean integer-days only; no --older-than/scope/extracts,database.py:236,358;_add_clean_opts,Accept duration + scope + extract option,Propose (Phase 4)
+T-08,Medium,Low,Complexity,PU,chunk,--chunk not offered in TUI recover/compact,app.py:1157;chunk_turns,Offer chunk (split into parts) alongside truncation,Propose (Phase 4)
+T-09,Medium,Medium,Complexity,PU/STK,bundles,project export & project import absent,app.py:1075;bundle_project_data/extract_and_import_project,Enable project export; extend import modal to auto-detect kind,Propose (Phase 5)
+T-10,Low,Low,Complexity,PU,move,session move absent; project move local-only; move/rebase imports unused,app.py:396,1521;core.py:50-51,Expose local metadata move; remote/git-aware may stay CLI-only,Propose local (Phase 5); remote deferred
+T-11,Low,Low,Complexity,PU,backup,backup clean absent,no ref;backup clean,Add prune-old-backups button,Propose (Phase 5)
+T-12,Low,Med,Complexity,PU,search,content search absent,models.py:76;db_search_sessions,Add search box listing hits into the sidebar,Propose (Phase 5)
+T-13,Low,Med,Complexity,PU,filter,filter (LLM re-scope) absent,no ref;top-level filter,Keep CLI-only pending demand,Defer (gold-plating guard)
+T-14,Low,Low,Honesty,NOV,history,history clear is a stub Planned button,app.py:875,1220;history clear,Implement against history clear or remove the stub,Propose (Phase 1)
+T-15,Low,Low,Complexity,PU,rebase,db rebase absent; db_rebase_paths imported but unwired,core.py:51;db rebase,Advanced/rare; keep CLI-only pending demand,Defer (gold-plating guard)
