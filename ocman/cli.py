@@ -13319,11 +13319,14 @@ def check_compacted_parts(loc: dict, cur, *, fast: bool = False) -> dict:
         return _check_record("compacted_parts", "Compacted part output", DOCTOR_UNKNOWN,
                              detail="part table/JSON shape not recognized.")
     if not any_compacted:
+        # Nothing to reclaim here: OpenCode has not compacted any tool output (its
+        # compaction.prune is OFF by default, so it never sets the marker). Not a
+        # problem and nothing for ocman to do -> OK, no fix command.
         return _check_record(
-            "compacted_parts", "Compacted part output", DOCTOR_NOTICE,
-            detail=("no part carries data.state.time.compacted; reclaim is not currently "
-                    "actionable (marker unpopulated)."),
-            issue_url=_oc_issue(16101), bucket="optin")
+            "compacted_parts", "Compacted part output", DOCTOR_OK,
+            detail=("no compacted tool output to reclaim (OpenCode has not pruned any "
+                    "tool results; its compaction.prune is off by default)."),
+            issue_url=_oc_issue(16101), bucket="report")
     return _check_record(
         "compacted_parts", "Compacted part output", DOCTOR_NOTICE,
         size_bytes=size, count=count,
@@ -14083,8 +14086,10 @@ def reclaim_temp(loc: dict, *, dry_run: bool, force: bool, min_age_hours: float,
             f.unlink()
             deleted += 1
             reclaimed += sz
+            # Tell the user each file as it goes (matches db clean's per-item output).
+            print(f"  [-] deleted {f} ({human_size_local(sz)})")
         except OSError as e:
-            print(color_yellow(f"Warning: could not delete {f}: {e}"))
+            print(color_yellow(f"  Warning: could not delete {f}: {e}"))
     print(f"[-] Deleted {fmt_int(deleted)} temp file(s), "
           f"reclaimed {human_size_local(reclaimed)}.")
 

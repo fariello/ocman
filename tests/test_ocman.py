@@ -3783,8 +3783,10 @@ def test_doctor_compacted_parts_unpopulated(doctor_db, monkeypatch):
     monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
     records = ocman.run_doctor_checks(running=False)
     cp = next(r for r in records if r["key"] == "compacted_parts")
-    assert cp["status"] == "notice"
-    assert "not currently actionable" in cp["detail"]
+    # No marker present => nothing to reclaim => OK (not a yellow NOTICE), no fix.
+    assert cp["status"] == "ok"
+    assert cp.get("fix_cmd") in (None, "")
+    assert "nothing" in cp["detail"].lower() or "not pruned" in cp["detail"].lower()
 
 
 def test_doctor_backup_check(doctor_db, tmp_path, monkeypatch):
