@@ -6386,6 +6386,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Include all users' instances (auth shown as 'unknown' without root).")
     sp.add_argument("--probe", action="store_true",
                     help="Confirm auth via a read-only GET /app on your OWN loopback listeners.")
+    sp.add_argument("--long", dest="running_long", action="store_true",
+                    help="Show the extra (best-guess, possibly stale) Session column.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     # ---- doctor / reclaim (storage checkup + guarded cleanup) --------------
     sp = new_sub("doctor", help="Read-only storage checkup (DB/WAL, orphans, temp, snapshots).")
@@ -6802,6 +6804,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["all_users"] = bool(g("all_users", False))
         out["probe"] = bool(g("probe", False))
         out["json_output"] = bool(g("json", False))
+        out["running_long"] = bool(g("running_long", False))
 
     elif group == "doctor":
         out["run_doctor"] = True
@@ -11419,7 +11422,8 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
 
 
 def cli_list_running(*, all_users: bool = False, probe: bool = False,
-                     json_output: bool = False, verbosity: int = 0) -> None:
+                     json_output: bool = False, long_output: bool = False,
+                     verbosity: int = 0) -> None:
     """`ocman list running`: list running OpenCode instances and flag insecure servers.
 
     Observe-only. FAILS LOUD if detection is unreliable (never implies "all clear").
@@ -11436,6 +11440,21 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
             print(color_yellow(
                 "NOT an all-clear: detection was incomplete. Re-run on Linux with 'ss' available."))
         die("running-instance detection unavailable")
+
+    def _auth_cell(auth: str) -> str:
+        """Map the raw auth enum to a colored YES/NO/???/n/a cell for the 'Auth?' column
+        ('is this control server password-protected?'). Color-gated; --json keeps the
+        raw enum. secured->YES (bold green), unsecured->NO (bold red), unknown->???
+        (bold white 'could not tell'), n/a (no listener)->n/a (plain)."""
+        label, code, bold = {
+            "secured":   ("YES", "32", True),
+            "unsecured": ("NO ", "31", True),
+            "unknown":   ("???", "37", True),
+        }.get(auth, ("n/a", None, False))
+        if code is None or not _color_enabled():
+            return label
+        seq = ("1;" + code) if bold else code
+        return f"\033[{seq}m{label}\033[0m"
 
     def _sess_str(s: dict) -> str:
         if s.get("id"):
@@ -11456,21 +11475,35 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
         return
 
     print(color_bold(f"Running OpenCode instances ({len(instances)}, {scope}):"))
-    table = vistab.Vistab(header=[
-        "PID", "User", "Uptime", "Kind", "Listener", "Auth", "Project", "Session"])
+    # The Session column is speculative (a TUI's -s ses_... argv can be stale), and it
+    # makes the row very wide, so it is shown only with --long.
+    header = ["PID", "User", "Uptime", "Kind", "Listener", "Auth?", "Project"]
+    align = ["r", "l", "r", "l", "l", "l", "l"]
+    if long_output:
+        header.append("Session")
+        align.append("l")
+    # Same table look as `ocman doctor`: round-header, tight padding, bold header
+    # (color-gated so NO_COLOR / non-TTY stays plain).
+    table = vistab.Vistab(style="round-header", padding=0, header=header)
+    table.set_color(_color_enabled())
+    if _color_enabled():
+        table.set_header_style(bold=True)
     for it in instances:
         listener = ", ".join(it["listeners"]) if it["listeners"] else "none"
         if it["exposed"]:
             listener = f"{listener} (NON-LOOPBACK)"
-        auth = it["auth"]
         # Prefer the actual working directory (recognizable) over the project id-hash.
         proj = it.get("cwd") or it.get("project") or "?"
-        table.add_row([
-            str(it["pid"]), it.get("user", "?"), it["elapsed"], it["kind"],
-            listener, auth, proj, _sess_str(it["session"]),
-        ])
-    table.set_cols_align(["r", "l", "r", "l", "l", "l", "l", "l"])
+        row = [str(it["pid"]), it.get("user", "?"), it["elapsed"], it["kind"],
+               listener, _auth_cell(it["auth"]), proj]
+        if long_output:
+            row.append(_sess_str(it["session"]))
+        table.add_row(row)
+    table.set_cols_align(align)
     print(table.draw())
+    if not long_output:
+        print(color_dim("  (Session column hidden; re-run with --long to show best-guess "
+                        "session ids.)"))
 
     # Loud banner for vulnerable / exposed listeners.
     vulns = [it for it in instances if it["vulnerable"]]
@@ -14609,6 +14642,7 @@ def main() -> None:
             all_users=getattr(args, "all_users", False),
             probe=getattr(args, "probe", False),
             json_output=getattr(args, "json_output", False),
+            long_output=getattr(args, "running_long", False),
             verbosity=verbosity,
         )
         return
