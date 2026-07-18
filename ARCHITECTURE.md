@@ -172,10 +172,10 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   the legacy one-line form (also single-source). `render_session_list` groups rows by
   project (`Project:` header per distinct project, first-appearance order) and shows a
   continuous global 1..N index that matches `resolve_session_spec` fetch-order indexing,
-  so `recover <N>` stays correct. Tables use vistab `style="none"` with a bold
-  bright-white-on-blue header, gated by `table.set_color(_color_enabled())` (vistab's
-  library API does not auto-honor `NO_COLOR`, so ocman gates it explicitly; never
-  faint/dim per the accessibility rule). Duration is derived via `_fmt_duration`
+  so `recover <N>` stays correct. Tables use vistab `style="round-header"` with
+  `padding=0` and a bold header (no background), gated by
+  `table.set_color(_color_enabled())` (vistab's library API does not auto-honor
+  `NO_COLOR`, so ocman gates it explicitly; never faint/dim per the accessibility rule). Duration is derived via `_fmt_duration`
   (`updated - created`, ASCII `-` when unknown); "Last active" is the last-updated time
   (no true finish marker). The picker adapts `SessionInfo` to a row dict but looks up
   real tokens/cost/stats from `db_list_sessions`/`db_get_session_stats` so its tables are

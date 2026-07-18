@@ -319,8 +319,8 @@ two aligned tables, all grouped under a `Project:` line:
 - Table 2: Messages, Interactions, DB Parts, Cost.
 
 "Duration" is derived from the timestamps and "Last active" is the last-updated time
-(there is no separate "finished" marker). Headers are shown bold on a blue background
-when color is enabled (honoring `NO_COLOR`/`FORCE_COLOR`; never low-contrast). Pass
+(there is no separate "finished" marker). Table headers are shown bold when color is
+enabled (honoring `NO_COLOR`/`FORCE_COLOR`; never low-contrast). Pass
 `-b`/`--brief` for a terse one-line-per-session form instead of the tables. Session
 counts (Messages / Interactions / DB Parts) are cheap DB-derived approximations; an
 Interactions value of `n/a` means that session lacks reliable role data.

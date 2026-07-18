@@ -4727,10 +4727,10 @@ def render_session_header(row: dict, stats: dict | None = None, *,
     def _styled(tbl):
         tbl.set_color(color_on)
         if color_on:
-            tbl.set_header_style(fg="bright_white", bg="blue", bold=True)
+            tbl.set_header_style(bold=True)  # bold header, no background
         return tbl
 
-    t1 = _styled(vistab.Vistab(style="none",
+    t1 = _styled(vistab.Vistab(style="round-header", padding=0,
                                header=["Start", "Last active", "Duration",
                                        "Tokens In", "Tok Out", "Tok Cache"]))
     t1.add_row([
@@ -4741,7 +4741,7 @@ def render_session_header(row: dict, stats: dict | None = None, *,
     ])
     t1.set_cols_align(["l", "l", "r", "r", "r", "r"])
 
-    t2 = _styled(vistab.Vistab(style="none",
+    t2 = _styled(vistab.Vistab(style="round-header", padding=0,
                                header=["Messages", "Interactions", "DB Parts", "Cost"]))
     t2.add_row([
         fmt_int(st.get("msgs", 0)), inter_str,
