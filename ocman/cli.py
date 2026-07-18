@@ -13511,11 +13511,19 @@ def check_ocman_backups(loc: dict) -> dict:
         return _check_record(
             "ocman_backups", "ocman backups", DOCTOR_NOTICE,
             size_bytes=stale_bytes, count=count,
-            detail=base + (f" {fmt_int(stale_count)} older than {stale_threshold_days}d "
-                           f"reclaim {human_size_local(stale_bytes)}."),
+            detail=base + (f" {fmt_int(stale_count)} are older than {stale_threshold_days}d "
+                           f"and would free {human_size_local(stale_bytes)}."),
             fix_cmd=f"ocman backup clean --older-than {stale_threshold_days}d", bucket="now")
-    return _check_record("ocman_backups", "ocman backups", DOCTOR_OK,
-                         size_bytes=total, count=count, detail=base, bucket="report")
+    # No stale backups, but backups still take space and CAN be pruned. Always offer the
+    # prune command; NOTICE (not silent OK) when the total is large enough to matter.
+    large = total >= 1024 * 1024 * 1024  # >= 1 GB of backups is worth flagging
+    return _check_record(
+        "ocman_backups", "ocman backups",
+        DOCTOR_NOTICE if large else DOCTOR_OK,
+        size_bytes=total, count=count,
+        detail=base + (" These are ocman's own backups; prune ones you no longer need "
+                       "with the command below (choose an age with --older-than)."),
+        fix_cmd="ocman backup clean --older-than 30d", bucket="now")
 
 
 def check_temp_wal(loc: dict) -> dict:
