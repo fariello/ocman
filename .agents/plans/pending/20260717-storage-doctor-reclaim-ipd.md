@@ -55,6 +55,22 @@
   the `.db`/`-wal`/`-shm` family (Desktop can add a second server process). Next: send
   the revised plan back to opencode.repo-agent to sanity-check, then /plan-review.
 
+- 2026-07-17 revised-plan sanity-check (opencode.repo-agent, source-cited @ 08fb47373;
+  reply archived `.agents/comms/shared/archive/20260717-2103-01`): VERDICT "looks right,
+  conservative and safe." Upgraded `--reclaim-parts` from plausible to SAFE-by-construction:
+  OpenCode sets `time.compacted` via the optional default-off `compaction.prune`
+  (`session/compaction.ts:281`) and its request builder replaces a compacted part's output
+  with a placeholder + drops attachments WITHOUT reading `state.output`/`attachments`
+  (`session/message-v2.ts:293-296`) - so emptying `output` on disk changes nothing sent.
+  Folded 5 non-blocking refinements: (1) event_bloat estimate labeled "would-be
+  reclaimable upstream" (already); (2) `quick_check` non-ok while running = NOTICE/recheck,
+  authoritative only when stopped; (3) resolve DB path vs data-dir subtrees INDEPENDENTLY
+  (`OPENCODE_DB` may be absolute/outside data dir; `:memory:` -> no DB checks); (4) scope
+  the `opencode*.db` glob to data-dir top level + exclude ocman backup prefixes; (5)
+  `/tmp/*.so` origin still inferred - keep report-default + do an empirical `lsof` check
+  before shipping the delete path. V2 `session_message` reclaim remains out of scope. All
+  claims carry file:line for the executing agent to re-verify.
+
 ## Goal
 
 Make ocman the tool that finds and safely reclaims the disk OpenCode leaves behind.
@@ -179,13 +195,20 @@ REPORT-ONLY (unsafe to auto-clean):
 ### D-1 Storage-location discovery
 Add a `discover_storage_locations()` helper returning a structured set of paths.
 Resolution mirrors OpenCode's own (layout reply Q1, `core/src/global.ts`):
-- Data dir: `$OPENCODE_DB`'s parent if that env is set (absolute path used verbatim by
-  OpenCode); else the configured `db_path`'s parent (honors ocman's `--db`/config);
-  else `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`. Honor `OPENCODE_CONFIG_DIR` for
-  the config dir. (No `$OPENCODE_DATA` env exists; do not invent one.)
+- Resolve the DB path and the data-dir subtrees INDEPENDENTLY (verify reply Q5 note 3):
+  an absolute `$OPENCODE_DB` may point OUTSIDE the data dir, and `$OPENCODE_DB=:memory:`
+  has no file at all (skip the DB-file checks entirely in that case). Do NOT assume the
+  DB and the snapshot/log/repos subtrees share a parent.
+  - DB path: `$OPENCODE_DB` if set (absolute used verbatim; `:memory:` -> no DB checks);
+    else the configured `db_path` (honors ocman's `--db`/config); else
+    `<data>/opencode.db`.
+  - Data dir (for subtrees + backups): `${XDG_DATA_HOME:-$HOME/.local/share}/opencode`.
+    Honor `OPENCODE_CONFIG_DIR` for the config dir. (No `$OPENCODE_DATA` env exists.)
 - DB family: the DB file (name may be `opencode.db` OR `opencode-<channel>.db`; detect
-  by globbing `opencode*.db` in the data dir), plus `<db>-wal`, `<db>-shm`. There is NO
-  `<db>.bak.*` family (OpenCode writes none - layout Q2).
+  by globbing `opencode*.db` at the DATA-DIR TOP LEVEL ONLY, and EXCLUDE ocman's own
+  backup name prefixes like `opencode-db-cleanup-*` / `opencode-backup-*` so a backup is
+  never misreported as the live DB - verify reply Q5 note 4), plus `<db>-wal`,
+  `<db>-shm`. There is NO `<db>.bak.*` family (OpenCode writes none - layout Q2).
 - Other OpenCode data-dir subtrees for reporting: `<data>/snapshot/**`, `<data>/log/**`,
   `<data>/repos/**`, `<data>/storage/**` (legacy session_diff), `<cache>/**`.
 - ocman's OWN backup dir (`default_backup_dir`) - the only backups ocman owns/prunes.
@@ -228,7 +251,11 @@ Resolution mirrors OpenCode's own (layout reply Q1, `core/src/global.ts`):
 - The check set (reusing existing detection; NO duplicated logic where a helper exists):
   1. `db_size` - DB + WAL + SHM family (reuse `db_show_info` logic `cli.py:11637-11652`);
      WARN if WAL is large relative to the DB (runaway-WAL, #37495).
-  2. `db_integrity` - read-only `PRAGMA quick_check` (WARN on any result != "ok").
+   2. `db_integrity` - read-only `PRAGMA quick_check`. If OpenCode is RUNNING (live fd),
+      a single non-"ok" can be a transient mid-write artifact of reading a live WAL DB
+      (verify reply Q5 note 2) -> report it as NOTICE ("recheck when OpenCode is
+      stopped"), NOT a corruption WARN. When stopped, `quick_check` is authoritative -> a
+      non-"ok" is a WARN.
    3. `event_bloat` - REPORT-ONLY. `SUM(length(data))` on `event` grouped by base
       `type` (split on the last `.`, or `LIKE 'message.updated.%'`); surface the
       `message.updated` total and estimated superseded waste (rows beyond the max-`seq`
@@ -314,6 +341,18 @@ Opt-in DB mutation (VERIFY-OR-SKIP, guarded + backed up + typed-confirm):
   populated on some part; if not, SKIP with a clear notice (fail closed) rather than
   guess a different signal. Pre-op db+wal+shm backup mandatory. (Event-row GC is
   intentionally NOT here.)
+  SAFETY BASIS (verify reply, source-cited): OpenCode sets `time.compacted` only when the
+  optional default-OFF `compaction.prune` runs (`session/compaction.ts:281`), and once
+  set, its request builder REPLACES a compacted part's output with a literal
+  "[Old tool result content cleared]" placeholder and drops attachments WITHOUT reading
+  `state.output`/`state.attachments` (`session/message-v2.ts:293-296`). So emptying
+  `output` on disk changes nothing OpenCode would send -> safe by construction when the
+  marker is set. `time.compacted` itself MUST be preserved (it is the flag OpenCode keys
+  on). `attachments` are ALSO unused post-compaction and could be cleared in the same
+  `json_set` transaction (set `$.state.attachments` to `[]`, do not delete the key); but
+  START with `output` only (biggest win, simplest) and add `attachments` later only if
+  measured bytes justify it. V2 `session_message` data is a separate engine and OUT of
+  scope for this pass.
 
 Report-only unless forced:
 - Snapshots (`<data>/snapshot/**`): never touched by default. `--force-snapshots PATH`
@@ -339,9 +378,11 @@ by age within that dir; it never recurses into unrelated trees.
 - No temp file that is open/mmap'd by a live OpenCode process is ever deleted.
 - No DB write (checkpoint/VACUUM/reclaim-parts) happens while ANY process holds the
   `.db`/`-wal`/`-shm` family open. "Running" is detected by a live fd on the DB family
-  (layout Q6) - the authoritative check - in addition to the existing process guard;
-  Desktop can add a second server process, so process-name alone is insufficient. Bypass
-  only with explicit `--while-running`.
+  (layout Q6; verify reply Q3) - the authoritative check - across ALL same-UID processes
+  (Desktop server, TUI-embedded server, `serve`, `web`), not just a terminal `opencode`.
+  Short-lived CLIs open/close the DB in ms, so a live fd can be a benign TRANSIENT
+  false-positive; treat ANY live fd as "do not mutate" (fail-safe) rather than trying to
+  distinguish transient from real. Bypass only with explicit `--while-running`.
 - Event rows are NEVER deleted by ocman (report-only).
 - `--reclaim-parts` aborts if the `migration`-table schema level is unrecognized, or if
   `data.state.time.compacted` is not actually populated in the DB (fail closed).
