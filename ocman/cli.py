@@ -12774,11 +12774,28 @@ def discover_storage_locations(db_path: Path | None = None) -> dict:
 
     tmp_dir = Path(tempfile.gettempdir())
 
-    def _glob(base: Path, pattern: str) -> list[Path]:
+    def _glob(base: Path, pattern: str, *, own_only: bool = False) -> list[Path]:
         try:
-            return sorted(base.glob(pattern))
+            found = sorted(base.glob(pattern))
         except OSError:
             return []
+        if not own_only:
+            return found
+        # Shared dirs like /tmp hold OTHER users' files; only ever report/delete files
+        # owned by the executing user (never touch someone else's temp artifacts).
+        my_uid = None
+        try:
+            my_uid = os.getuid()
+        except AttributeError:
+            return found  # non-POSIX (e.g. Windows): no uid concept; leave unfiltered
+        mine = []
+        for f in found:
+            try:
+                if f.stat(follow_symlinks=False).st_uid == my_uid:
+                    mine.append(f)
+            except OSError:
+                continue
+        return mine
 
     return {
         "db_path": resolved_db,
@@ -12791,8 +12808,9 @@ def discover_storage_locations(db_path: Path | None = None) -> dict:
         "storage_dir": data_dir / "storage" / "session_diff",
         "backup_dir": backup_dir,
         "tmp_dir": tmp_dir,
-        "temp_wal_glob": _glob(tmp_dir, "opencode-wal-*.db"),
-        "temp_so_glob": _glob(tmp_dir, "*.so"),
+        # Temp artifacts live in a SHARED dir; restrict to the current user's own files.
+        "temp_wal_glob": _glob(tmp_dir, "opencode-wal-*.db", own_only=True),
+        "temp_so_glob": _glob(tmp_dir, "*.so", own_only=True),
     }
 
 
