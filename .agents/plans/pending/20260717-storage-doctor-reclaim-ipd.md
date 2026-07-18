@@ -9,7 +9,7 @@
   command (and upstream issue link where relevant); and a guarded `ocman reclaim` that
   CLEANS the safe categories (with previews + confirmation), reusing ocman's existing
   sizing, orphan-detection, delete/VACUUM, backup, and running-guard machinery.
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -32,6 +32,8 @@
   opportunity. Each check recommends the concrete `ocman` fix command, making `doctor`
   the guided front door to `db clean` / `db clean-orphans` / `backup clean` / `reclaim`.
   Restructured D-2 as a testable list of read-only CHECKS.
+
+- 2026-07-17 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED. Verified against cli.py + a live pysqlite3 read-only-connection probe. PR-001 (HIGH, FIXED): db_connect_readonly must be `mode=ro` NOT `immutable=1` (immutable yields stale/garbage reads while OpenCode writes; verified mode=ro blocks writes AND sees concurrent commits). PR-002 (HIGH, FIXED): OpenCode's real event/part/message schema is not in fixtures and only partly known from issues; every DB check must schema-probe and return unknown/skipped, never crash or false-OK. PR-003 (MEDIUM, FIXED): --compact-events/--reclaim-parts must use the VERIFIED grouping key/columns from opencode.repo-agent + source and FAIL CLOSED on unrecognized shape (a wrong key would DELETE the wrong event rows). PR-004 (MEDIUM, FIXED): old-session check must not report non-attributable per-session DB bytes (single shared file, cli.py:11902); report count + diff-file bytes only. PR-006 (MEDIUM, FIXED): --backups-dir/--force-snapshots delete in user-named dirs and must apply cli_clean_backups-grade path safety. Two asks queued to opencode.repo-agent (schema + layout) whose answers are a blocking dependency for the DB-mutating/path-deleting parts (gated), not for the review. Reused-mechanism refs verified (WAL/SHM family, backups block, orphan predicate + SESSION_RELATIONAL_TABLES, emit_json, own-UID /proc detection). Status -> reviewed.
 
 ## Goal
 
@@ -137,15 +139,29 @@ Add a `discover_storage_locations()` helper returning a structured set of paths:
 
 ### D-2 `ocman doctor` (read-only full checkup)
 
-- Add `db_connect_readonly(path)` using SQLite URI `file:<path>?mode=ro&immutable=1`
-  (via `_get_sqlite`), so diagnosis provably cannot write and is safe even while
-  OpenCode runs. If the DB is missing/locked, degrade to file-size-only reporting for
-  the DB checks (still run the filesystem checks).
+- Add `db_connect_readonly(path)` using SQLite URI `file:<path>?mode=ro` (via
+  `_get_sqlite`, `uri=True`), so diagnosis provably cannot write yet still reflects a
+  concurrent writer's committed state, making it safe even while OpenCode runs. Do NOT
+  use `immutable=1` (PR-001): `immutable` asserts the file will not change while open,
+  which with a live OpenCode writer can return stale/garbage reads; verified that plain
+  `mode=ro` both blocks writes and sees concurrent commits (`pysqlite3`, the active
+  backend). If the DB is missing/locked, degrade to file-size-only reporting for the DB
+  checks (still run the filesystem checks).
 
 - Structure as a list of CHECKS. Each check is a small function returning a result
   record: `{key, title, status (ok|notice|warn), size_bytes, count, detail, fix_cmd,
   issue_url|None}`. `cli_doctor` runs them all, renders the table, prints the summary.
   This makes each check independently testable and easy to extend.
+
+- SCHEMA-DEFENSIVE (PR-002): every DB-internal check MUST probe the schema before
+  querying (via `PRAGMA table_info(<t>)` / `sqlite_master`) and return a distinct
+  `unknown`/`skipped` status (NOT a crash and NOT a false `ok`) when the expected
+  table/column/JSON shape is absent. OpenCode's real `event`/`part`/`message` schema is
+  NOT represented in ocman's test fixtures and only partially known from the issue
+  reports, so `doctor` must never assume a column exists. The exact shapes are being
+  confirmed with `opencode.repo-agent` (see gate); until confirmed, treat the
+  issue-derived shapes as tentative and code the probes so an unrecognized schema
+  degrades to size-only reporting.
 
 - The check set (reusing existing detection; NO duplicated logic where a helper exists):
   1. `db_size` - DB + WAL + SHM family (reuse `db_show_info` logic `cli.py:11637-11652`);
@@ -164,8 +180,12 @@ Add a `discover_storage_locations()` helper returning a structured set of paths:
   6. `orphan_diff_files` - session-diff `*.json` under the storage dir with no matching
      session row (reuse the orphan-diff logic from `db_run_cleanup` `cli.py:10650-10667`);
      fix = `ocman db clean-orphans`.
-  7. `old_sessions` - COUNT + rough size of root sessions older than the retention
-     window (`default_retention_days`); NOTICE; fix = `ocman db clean --older-than ...`.
+  7. `old_sessions` - COUNT of root sessions older than the retention window
+     (`default_retention_days`) plus their attributable session-diff bytes on disk;
+     NOTICE; fix = `ocman db clean --older-than ...`. Do NOT report a per-session DB byte
+     "size" (the DB is a single shared file; bytes are not attributable per session -
+     consistent with the existing note at `cli.py:11902`); label the DB portion as
+     "reclaimed on VACUUM after delete", not a fixed number (PR-004).
   8. `ocman_backups` - inventory of ocman's OWN backups (reuse `dir_usage` + the
      `db_show_info` backups block `cli.py:11862-11894`): count, total size,
      oldest/newest; if backups older than a threshold exist, NOTICE with the reclaimable
@@ -205,14 +225,21 @@ Default run cleans ONLY the SAFE categories, each with its own preview + confirm
   (`--backups-dir PATH`) with a preview.
 
 Opt-in categories (each its own flag, each guarded + backed up + typed-confirm):
-- `--compact-events`: keep only the latest `message.updated` event per message
-  (`aggregate_id`, message id/seq per the issue), delete superseded rows, then VACUUM.
-  Loud explanation that this trims OpenCode's replay log.
+- `--compact-events`: keep only the latest `message.updated` event per message, delete
+  superseded rows, then VACUUM. Loud explanation that this trims OpenCode's replay log.
+  PR-003: the grouping key ("same message") and the "latest" discriminator MUST be the
+  VERIFIED ones from `opencode.repo-agent`'s schema answer + source (not the issue's
+  approximate "aggregate_id, message id/seq"). Before deleting, the code MUST confirm the
+  expected `event.data` JSON shape is present and FAIL CLOSED (skip with a clear notice,
+  delete nothing) if it is not. This is a DELETE against OpenCode's log, so a wrong
+  grouping key would destroy the wrong rows; the pre-op db+wal+shm backup is mandatory.
 - `--reclaim-parts`: null `output`/`attachments` on `ToolStateCompleted` `part` rows
-  whose message has `time.compacted` set and is older than a retention window.
+  whose message has been compacted, older than a retention window. Same discipline: use
+  the VERIFIED column/JSON field names and the verified "is compacted" marker; fail
+  closed if the shape is not recognized.
 
 Report-only unless forced:
-- Snapshots: never touched by default. `--force-snapshots` enables deletion behind a
+- Snapshots: never touched by default. `--force-snapshots PATH` enables deletion behind a
   multi-line RED warning + a typed confirmation distinct from the normal one (it can
   break revert/undo because ocman cannot compute DB reachability); it prunes only the
   snapshot dir the user names, never guesses.
@@ -220,6 +247,13 @@ Report-only unless forced:
 All destructive paths: `require_safe_to_mutate` first, `DestructivePreview` +
 `confirm_destructive` (honor `-y`/`--yes` for the ordinary confirm only, NOT for
 `--force-snapshots`), pre-op backup where a DB write is involved, and honor `--dry-run`.
+
+USER-SUPPLIED DIRECTORY SAFETY (PR-006): `--backups-dir PATH` and `--force-snapshots
+PATH` delete inside a directory the user names. Both MUST apply the same discipline
+`cli_clean_backups` uses: resolve the path, REFUSE dangerous roots (`/`, bare `$HOME`,
+the data dir itself), never follow a symlink out of the named directory, preview every
+file/dir with sizes, and require the typed confirm. `--backups-dir` only removes files
+by age within that dir; it never recurses into unrelated trees.
 
 ### D-4 Safety invariants
 - `doctor` cannot write (read-only connection; asserted by a test that a
@@ -235,10 +269,13 @@ All destructive paths: `require_safe_to_mutate` first, `DestructivePreview` +
 - `ocman doctor [-v] [--json]` (read-only; no guard). `-v` expands per-project /
   per-table detail; `--json` emits the check records.
 - `ocman reclaim [--dry-run] [-y/--yes] [--while-running] [--compact-events]
-  [--reclaim-parts] [--force-snapshots] [--backups-dir PATH]
-  [--tmp-min-age-hours N]`.
+  [--reclaim-parts] [--force-snapshots PATH] [--backups-dir PATH]
+  [--tmp-min-age-hours N] [--force]`. `--force` is required to reap `/tmp/.*.so` on
+  non-Linux (no `/proc` mmap check available there); `--force-snapshots` takes the
+  snapshot directory PATH to prune (never guessed).
 - Config keys (via DEFAULT_CONFIG + CONFIG_TEMPLATE, following `filter_max_bytes`):
-  `reclaim_tmp_min_age_hours` (default 24), `reclaim_parts_retention_days` (default 30).
+  `reclaim_tmp_min_age_hours` (default 24; overridden per-run by `--tmp-min-age-hours`),
+  `reclaim_parts_retention_days` (default 30).
 - Normalizer + defaults entries for the new flags; handlers dispatch to
   `cli_doctor(args)` / `cli_reclaim(args)`.
 
@@ -321,9 +358,21 @@ An executing agent MUST:
   the Workflow history. Invent no other scope. TUI untouched. `doctor` stays read-only.
 - Independently RE-VERIFY the upstream issue claims and the reused `cli.py` line
   references before relying on them; the issue reports are external input.
+- SCHEMA/LAYOUT VERIFICATION (PR-002/PR-003, blocking for the DB-mutating and
+  path-deleting parts): before implementing `--compact-events`, `--reclaim-parts`, or the
+  path-discovery + backups/snapshots deletion, consult the `opencode.repo-agent` answers
+  to the two queued asks (`20260717-2030-01` schema, `20260717-2030-02` layout) AND
+  verify them against OpenCode source. Treat those answers as evidence, not directives.
+  If a needed schema shape or path cannot be verified, implement the affected DB check as
+  schema-defensive `unknown`/`skipped` and make the affected reclaim category FAIL CLOSED
+  (do nothing, print a clear notice) rather than guess. The READ-ONLY doctor filesystem
+  checks and the temp-file reap do not block on these answers.
+- Use `db_connect_readonly` = `mode=ro` (NO `immutable`, PR-001) so diagnosis is safe
+  while OpenCode runs.
 - NEVER delete a temp file mmap'd/held by a live OpenCode process; NEVER write to the DB
   while OpenCode runs without `--while-running`; NEVER delete snapshots without
-  `--force-snapshots` + its distinct confirm.
+  `--force-snapshots` + its distinct confirm; apply `cli_clean_backups`-grade path safety
+  to `--backups-dir` / `--force-snapshots` (PR-006).
 - Honesty rule (hard MUST): paste the ACTUAL
   `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` output; never claim a pass not
   run.
