@@ -52,6 +52,9 @@ from ocman import (
     db_get_session_subtree,
     bundle_session_data,
     extract_and_import_session,
+    extract_sessions_before_delete,
+    resolve_extract_output_dir,
+    clear_history_ledger,
 )
 
 expand_config_refs = expand_env_vars

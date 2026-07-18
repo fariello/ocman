@@ -58,6 +58,9 @@ from .core import (
     db_move_project_metadata,
     bundle_session_data,
     extract_and_import_session,
+    extract_sessions_before_delete,
+    resolve_extract_output_dir,
+    clear_history_ledger,
 )
 from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
@@ -115,26 +118,45 @@ class RestoreBackupModal(ModalScreen[Optional[str]]):
             self.dismiss(None)
 
 
-class FutureTodoModal(ModalScreen[None]):
-    """A simple stub modal for future functionality."""
+class ClearHistoryModal(ModalScreen[bool]):
+    """Typed-yes confirmation for wiping the activity ledger (runs + all-time totals)."""
     def compose(self) -> ComposeResult:
         yield Container(
-            Label("FEATURE PLANNED", id="dialog-title"),
+            Label("CLEAR ACTIVITY HISTORY", id="dialog-title"),
             Label(
-                "Historical cleanup is planned for a future release.\n\n"
-                "No files or database entries were modified by this action.",
+                "This erases the entire activity ledger (all run records) and resets ALL "
+                "all-time totals. This cannot be undone.",
                 classes="info-value"
             ),
-            Button("Dismiss", id="btn-dismiss-todo", variant="primary"),
+            Label("Type 'yes' below to confirm:", classes="info-label"),
+            Input(placeholder="Type 'yes' to confirm", id="input-clear-history-yes"),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-clear-history"),
+                Button("CLEAR HISTORY", id="btn-confirm-clear-history", variant="error", disabled=True),
+                classes="horizontal-buttons"
+            ),
             id="dialog-container"
         )
 
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "input-clear-history-yes":
+            self.query_one("#btn-confirm-clear-history", Button).disabled = (
+                event.value.strip().lower() != "yes"
+            )
+
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss()
+        if event.button.id == "btn-cancel-clear-history":
+            self.dismiss(False)
+        elif event.button.id == "btn-confirm-clear-history":
+            self.dismiss(True)
 
 
-class DeletionSafetyModal(ModalScreen[bool]):
-    """Safety modal confirming recursive deletion of sessions and related data."""
+class DeletionSafetyModal(ModalScreen[Optional[dict]]):
+    """Safety modal confirming recursive deletion of sessions and related data.
+
+    Dismisses with None on cancel, or a dict ``{"extracts": bool}`` on confirm, so the
+    caller learns whether to write recovery extracts (prompt/restart/transcript) first.
+    """
     def __init__(self, session_id: str, title: str) -> None:
         super().__init__()
         self.session_id = session_id
@@ -155,6 +177,8 @@ class DeletionSafetyModal(ModalScreen[bool]):
                 Static(id="lbl-del-files", classes="margin-vertical"),
                 id="del-safety-scroll"
             ),
+            Checkbox("Write recovery extracts first (.prompt/.restart/.transcript)",
+                     value=True, id="check-del-extracts"),
             Label("This action is irreversible. Please type 'yes' below to confirm:", classes="info-label"),
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
@@ -169,7 +193,7 @@ class DeletionSafetyModal(ModalScreen[bool]):
         sqlite3 = _get_sqlite()
         db_path = get_db_path()
         if not sqlite3 or not db_path.exists():
-            self.dismiss(False)
+            self.dismiss(None)
             return
 
         conn = None
@@ -204,7 +228,7 @@ class DeletionSafetyModal(ModalScreen[bool]):
                 })
         except Exception as e:
             self.app.notify(f"Failed to gather deletion details: {e}", severity="error")
-            self.dismiss(False)
+            self.dismiss(None)
             return
         finally:
             if conn:
@@ -249,12 +273,15 @@ class DeletionSafetyModal(ModalScreen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel-del":
-            self.dismiss(False)
+            self.dismiss(None)
         elif event.button.id == "btn-confirm-del":
-            self.dismiss(True)
+            extracts = True
+            with contextlib.suppress(Exception):
+                extracts = self.query_one("#check-del-extracts", Checkbox).value
+            self.dismiss({"extracts": bool(extracts)})
 
 
-class ProjectDeletionSafetyModal(ModalScreen[bool]):
+class ProjectDeletionSafetyModal(ModalScreen[Optional[dict]]):
     """Safety modal confirming deletion of projects and related data."""
     def __init__(self, project_id: str, name: str) -> None:
         super().__init__()
@@ -278,6 +305,8 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
                 Static(id="lbl-del-files", classes="margin-vertical"),
                 id="del-safety-scroll"
             ),
+            Checkbox("Write recovery extracts first (.prompt/.restart/.transcript)",
+                     value=True, id="check-del-extracts"),
             Label("This action is irreversible. Please type 'yes' below to confirm:", classes="info-label"),
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
@@ -292,7 +321,7 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
         sqlite3 = _get_sqlite()
         db_path = get_db_path()
         if not sqlite3 or not db_path.exists():
-            self.dismiss(False)
+            self.dismiss(None)
             return
 
         conn = None
@@ -340,7 +369,7 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
             
         except Exception as e:
             self.app.notify(f"Failed to gather project deletion details: {e}", severity="error")
-            self.dismiss(False)
+            self.dismiss(None)
             return
         finally:
             if conn:
@@ -388,9 +417,12 @@ class ProjectDeletionSafetyModal(ModalScreen[bool]):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn-cancel-del":
-            self.dismiss(False)
+            self.dismiss(None)
         elif event.button.id == "btn-confirm-del":
-            self.dismiss(True)
+            extracts = True
+            with contextlib.suppress(Exception):
+                extracts = self.query_one("#check-del-extracts", Checkbox).value
+            self.dismiss({"extracts": bool(extracts)})
 
 
 class MoveProjectModal(ModalScreen[bool]):
@@ -872,7 +904,7 @@ class OrsessionApp(App):
                         with Vertical(classes="panel-card"):
                             yield Label("AUDIT TRAIL / ACTIVITY LOG", classes="panel-card-title")
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
-                            yield Button("Clear Historical Activity Log (Planned)", id="btn-clear-history-log", variant="error")
+                            yield Button("Clear Historical Activity Log", id="btn-clear-history-log", variant="error")
 
                     # Tab 6: Configuration Settings
                     with TabPane("Configuration Settings", id="tab-config"):
@@ -1216,9 +1248,21 @@ class OrsessionApp(App):
         elif event.button.id == "btn-export-session":
             self.confirm_and_export_session()
 
-        # Audit history log stub
+        # Clear the activity ledger (runs + all-time totals), with typed-yes confirm.
         elif event.button.id == "btn-clear-history-log":
-            self.app.push_screen(FutureTodoModal())
+            def handle_clear(confirmed: bool) -> None:
+                if not confirmed:
+                    return
+                try:
+                    clear_history_ledger()
+                    self.app.notify("Activity history cleared.", severity="information")
+                except Exception as e:  # noqa: BLE001
+                    self.app.notify(f"Failed to clear history: {e}", severity="error")
+                    return
+                with contextlib.suppress(Exception):
+                    self.query_one("#activity-audit-log", RichLog).clear()
+                self.action_refresh_data()
+            self.app.push_screen(ClearHistoryModal(), handle_clear)
 
         # Config tab handlers
         elif event.button.id == "btn-save-config":
@@ -1399,13 +1443,14 @@ class OrsessionApp(App):
             self.app.notify("Please select a session in the sidebar tree first.", severity="warning")
             return
 
-        def handle_confirmation(confirmed: bool) -> None:
-            if not confirmed:
+        def handle_confirmation(result: Optional[dict]) -> None:
+            if not result:
                 return
-
+            extracts = bool(result.get("extracts", True))
+            sid = self.selected_session_id
             self.app.notify("Deleting session in background...", severity="information")
             self.run_worker(
-                lambda: self._do_delete_session_worker(self.selected_session_id),
+                lambda: self._do_delete_session_worker(sid, extracts),
                 thread=True
             )
 
@@ -1414,7 +1459,56 @@ class OrsessionApp(App):
             handle_confirmation
         )
 
-    def _do_delete_session_worker(self, session_id: str) -> None:
+    def _write_delete_extracts(self, session_ids: list, *, expand_descendants: bool) -> None:
+        """Write recovery extracts for session_ids before a delete (best-effort).
+
+        Reads the sessions directly from the DB (never launches OpenCode) and writes
+        prompt/restart/transcript files to the configured recovery out-dir. Runs in the
+        delete worker thread; any failure is reported but never blocks the delete.
+        """
+        sqlite3 = _get_sqlite()
+        db_path = get_db_path()
+        if not sqlite3 or not db_path.exists() or not session_ids:
+            return
+        conn = None
+        try:
+            conn = sqlite3.connect(str(db_path))
+            ids = list(session_ids)
+            if expand_descendants:
+                cursor = conn.cursor()
+                expanded: list = []
+                for sid in ids:
+                    cursor.execute(
+                        """
+                        WITH RECURSIVE session_tree(id) AS (
+                            SELECT id FROM session WHERE id = ?
+                            UNION
+                            SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                        )
+                        SELECT id FROM session_tree;
+                        """,
+                        (sid,),
+                    )
+                    expanded.extend(row[0] for row in cursor.fetchall())
+                ids = list(dict.fromkeys(expanded)) or ids
+            out_dir = resolve_extract_output_dir(None)
+            written = extract_sessions_before_delete(ids, out_dir, conn, 0)
+            if written:
+                self._safe_call_from_thread(
+                    self.app.notify,
+                    f"Wrote {len(written)} recovery file(s) to {out_dir}",
+                    severity="information",
+                )
+        except Exception as e:  # noqa: BLE001 - extraction must never block a delete
+            self._safe_call_from_thread(
+                self.app.notify, f"Recovery extraction failed: {e}", severity="warning"
+            )
+        finally:
+            if conn:
+                with contextlib.suppress(Exception):
+                    conn.close()
+
+    def _do_delete_session_worker(self, session_id: str, extracts: bool = True) -> None:
         db_path = get_db_path()
 
         # Initialize summary fields to safe defaults so the post-deletion summary
@@ -1449,6 +1543,11 @@ class OrsessionApp(App):
         try:
             # Pre-size of DB
             size_before = get_file_size_local(db_path)
+
+            # Write recovery extracts BEFORE the destructive delete (best-effort;
+            # never blocks the delete). Reads the DB directly, does not launch OpenCode.
+            if extracts:
+                self._write_delete_extracts([session_id], expand_descendants=True)
 
             db_delete_session_recursive(
                 session_id=session_id,
@@ -1503,13 +1602,15 @@ class OrsessionApp(App):
             self.app.notify("Please select a project in the sidebar tree first.", severity="warning")
             return
 
-        def handle_confirmation(confirmed: bool) -> None:
-            if not confirmed:
+        def handle_confirmation(result: Optional[dict]) -> None:
+            if not result:
                 return
-
+            extracts = bool(result.get("extracts", True))
+            pid = self.selected_project_id
+            pname = self.selected_project_name
             self.app.notify("Deleting project in background...", severity="information")
             self.run_worker(
-                lambda: self._do_delete_project_worker(self.selected_project_id, self.selected_project_name),
+                lambda: self._do_delete_project_worker(pid, pname, extracts),
                 thread=True
             )
 
@@ -1557,19 +1658,23 @@ class OrsessionApp(App):
             handle_export_completion
         )
 
-    def _do_delete_project_worker(self, project_id: str, project_name: str) -> None:
+    def _do_delete_project_worker(self, project_id: str, project_name: str, extracts: bool = True) -> None:
         db_path = get_db_path()
         
         try:
             # Pre-size of DB
             size_before = get_file_size_local(db_path)
 
+            # extracts is an explicit bool here (the user chose in the modal), so the CLI
+            # function writes/skips extracts without prompting. It reads the DB directly
+            # and never launches OpenCode.
             db_delete_project_recursive(
                 project_id=project_id,
                 dry_run=False,
                 force=True, # bypass locks because user confirmed in TUI
                 verbosity=0,
-                confirm=False
+                confirm=False,
+                extracts=extracts,
             )
 
             # Post-size of DB after VACUUM

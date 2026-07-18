@@ -14,6 +14,14 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **TUI parity, Phase 1 (delete safety).** The interactive TUI no longer deletes more
+  destructively than the CLI: the session and project delete confirmations now include a
+  "Write recovery extracts first" option (default ON) that writes the
+  `.prompt`/`.restart`/`.transcript` files for each affected session before deleting,
+  reading straight from the database (never launching OpenCode). The previously dead
+  "Clear Historical Activity Log (Planned)" button is now a working control that wipes the
+  activity ledger (run records and all-time totals) behind a typed-yes confirmation,
+  sharing the same `clear_history_ledger()` logic as `ocman history clear`.
 - **Bare-word `help` works like `--help`.** After a command, a trailing (or
   interspersed) `help` word is treated as `--help`, so `ocman session delete help`,
   `ocman db clean help`, etc. print that command's usage. The top-level `ocman help

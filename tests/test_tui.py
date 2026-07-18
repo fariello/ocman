@@ -124,6 +124,121 @@ def tui_db(tmp_path, monkeypatch):
     ocman.OPENCODE_HISTORY_PATH = orig_history_path
 
 
+def _seed_tui_conversation(db_path):
+    """Upgrade the stub message/part tables to the real schema and seed a conversation
+    for 'sess1' so extract-on-delete has something to render."""
+    conn = sqlite3.connect(str(db_path))
+    cur = conn.cursor()
+    cur.execute("DROP TABLE IF EXISTS message")
+    cur.execute("CREATE TABLE message (id TEXT PRIMARY KEY, session_id TEXT, "
+                "time_created INTEGER, time_updated INTEGER, data TEXT)")
+    cur.execute("DROP TABLE IF EXISTS part")
+    cur.execute("CREATE TABLE part (id TEXT PRIMARY KEY, message_id TEXT, session_id TEXT, "
+                "time_created INTEGER, time_updated INTEGER, data TEXT)")
+    cur.execute("INSERT INTO message VALUES ('m1','sess1',1000,1000,?)", ('{"role":"user"}',))
+    cur.execute("INSERT INTO message VALUES ('m2','sess1',1001,1001,?)", ('{"role":"assistant"}',))
+    cur.execute("INSERT INTO part VALUES ('p1','m1','sess1',1000,1000,?)",
+                ('{"type":"text","text":"Please add a login button."}',))
+    cur.execute("INSERT INTO part VALUES ('p2','m2','sess1',1001,1001,?)",
+                ('{"type":"text","text":"Added the login button and handler."}',))
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.anyio
+async def test_tui_delete_writes_extracts_when_checked(tui_db, tmp_path, monkeypatch):
+    """Phase 1: TUI session delete writes recovery extracts by default (checkbox on)."""
+    _seed_tui_conversation(tui_db)
+    out = tmp_path / "tui-recovery"
+    # Point the recovery out-dir at a temp location via config.
+    cfg = ocman.load_ocman_config()
+    cfg["default_out_dir"] = str(out)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "Session 1"
+        app.confirm_and_delete_session()
+        await pilot.pause()
+        assert isinstance(app.screen, DeletionSafetyModal)
+        # Checkbox defaults to ON.
+        assert app.screen.query_one("#check-del-extracts", Checkbox).value is True
+        await pilot.click("#input-confirm-yes")
+        await pilot.press(*"yes")
+        await pilot.pause()
+        await pilot.click("#btn-confirm-del")
+        for _ in range(50):
+            if isinstance(app.screen, PostExecutionSummaryModal):
+                break
+            await pilot.pause(0.1)
+        assert isinstance(app.screen, PostExecutionSummaryModal)
+
+    assert out.exists()
+    names = [p.name for p in out.iterdir()]
+    assert any(n.endswith(".restart.md") for n in names)
+    assert any(n.endswith(".transcript.md") for n in names)
+    assert any(n.endswith(".prompt.md") for n in names)
+
+
+@pytest.mark.anyio
+async def test_tui_delete_skips_extracts_when_unchecked(tui_db, tmp_path, monkeypatch):
+    """Phase 1: unchecking the extracts box skips recovery-file writing."""
+    _seed_tui_conversation(tui_db)
+    out = tmp_path / "tui-recovery-off"
+    cfg = ocman.load_ocman_config()
+    cfg["default_out_dir"] = str(out)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "Session 1"
+        app.confirm_and_delete_session()
+        await pilot.pause()
+        assert isinstance(app.screen, DeletionSafetyModal)
+        await pilot.click("#check-del-extracts")  # toggle OFF
+        await pilot.pause()
+        assert app.screen.query_one("#check-del-extracts", Checkbox).value is False
+        await pilot.click("#input-confirm-yes")
+        await pilot.press(*"yes")
+        await pilot.pause()
+        await pilot.click("#btn-confirm-del")
+        for _ in range(50):
+            if isinstance(app.screen, PostExecutionSummaryModal):
+                break
+            await pilot.pause(0.1)
+        assert isinstance(app.screen, PostExecutionSummaryModal)
+
+    assert not out.exists()
+
+
+@pytest.mark.anyio
+async def test_tui_clear_history(tui_db):
+    """Phase 1: the clear-history button wipes the ledger (runs + cumulative totals)."""
+    from ocman_tui.app import ClearHistoryModal
+    # Seed a non-empty ledger.
+    ocman._save_history({
+        "cumulative": {"sessions_deleted": 3, "cost_deleted": 1.5},
+        "runs": [{"action": "delete"}],
+    })
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        app.query_one("#btn-clear-history-log", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, ClearHistoryModal)
+        await pilot.click("#input-clear-history-yes")
+        await pilot.press(*"yes")
+        await pilot.pause()
+        await pilot.click("#btn-confirm-clear-history")
+        await pilot.pause()
+
+    hist = ocman._load_history()
+    assert hist["runs"] == []
+    assert hist["cumulative"]["sessions_deleted"] == 0
+    assert hist["cumulative"]["cost_deleted"] == 0.0
+
+
 def test_safe_call_from_thread_swallows_stopped_app():
     """Regression (20260703-134213-S2-B2): background workers that outlive the app
     must not crash when marshalling a callback into a stopped event loop."""

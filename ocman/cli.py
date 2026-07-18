@@ -11543,6 +11543,27 @@ def _save_history(data: dict) -> None:
         print(color_yellow(f"Warning: failed to save historical metrics: {e}"))
 
 
+def clear_history_ledger() -> None:
+    """Reset the activity ledger: erase all run records AND all-time cumulative totals.
+
+    Shared by `ocman history clear` and the TUI's clear-history action so both wipe the
+    ledger identically. Callers own any confirmation prompt.
+    """
+    _save_history({
+        "cumulative": {
+            "projects_deleted": 0,
+            "sessions_deleted": 0,
+            "subagents_deleted": 0,
+            "messages_deleted": 0,
+            "cost_deleted": 0.0,
+            "tokens_input_deleted": 0,
+            "tokens_output_deleted": 0,
+            "space_saved_deleted": 0,
+        },
+        "runs": [],
+    })
+
+
 def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
     """Gather metrics of sessions about to be deleted from SQLite database."""
     if not session_ids:
@@ -15063,19 +15084,6 @@ def main() -> None:
 
     # Handle --clear-history early.
     if getattr(args, "clear_history", False):
-        default_history = {
-            "cumulative": {
-                "projects_deleted": 0,
-                "sessions_deleted": 0,
-                "subagents_deleted": 0,
-                "messages_deleted": 0,
-                "cost_deleted": 0.0,
-                "tokens_input_deleted": 0,
-                "tokens_output_deleted": 0,
-                "space_saved_deleted": 0
-            },
-            "runs": []
-        }
         # Confirm before wiping the ledger + all-time totals. -y/--yes skips the prompt
         # (scriptable); --force is a back-compat alias for -y here (no process lock exists
         # for this op, so --force cannot mean "bypass process-lock" as it does elsewhere).
@@ -15092,7 +15100,7 @@ def main() -> None:
             action_verb="clearing the activity history",
         ):
             return
-        _save_history(default_history)
+        clear_history_ledger()
         print(color_green("Historical metrics and activity log successfully cleared."))
         return
 
