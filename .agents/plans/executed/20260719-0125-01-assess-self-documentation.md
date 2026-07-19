@@ -6,7 +6,8 @@
   system, error messages, flag/command naming, first-run) and the TUI (`ocman_tui/`:
   labels, hints). Repo docs (README/ARCHITECTURE) are out of scope (that is the
   `documentation` lens, already assessed separately).
-- Status: reviewed
+- Status: executed
+- Approval: approved by maintainer 2026-07-19
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -20,6 +21,13 @@
   manual checks), PR-004 (SD-05: range OR token-set, do not fabricate a range). OQ-1 (reclaim
   in help maintain + overview pointer) and OQ-2 (clean message default, traceback under -v)
   resolved by the maintainer. GO - PENDING HUMAN APPROVAL.
+- 2026-07-19 executed (its_direct/pt3-claude-opus-4.8): all 7 steps done. SD-02 implemented
+  as a `main()` wrapper around `_run_main()` (the prior tail-only `try` at cli.py:15779 would
+  have left most commands, e.g. list/spend/doctor, unguarded); the wrapper catches any
+  non-SystemExit/RecoveryError/KeyboardInterrupt exception, prints a clean message + `-v`
+  hint, and re-raises under -v. SD-04 routed all seven "Database not found" sites through a
+  shared `_db_not_found_error()`. 4 new CLI tests + the maintain test asserts `reclaim`.
+  Full suite: 407 passed, 2 skipped.
 
 ## Goal
 

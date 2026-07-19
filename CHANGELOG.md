@@ -94,6 +94,18 @@
   and sums all parts in the pre-run cost table. Export (.ocbox) is not chunked.
 
 ### Fixed
+- **Self-documentation: errors that teach, and no leaked tracebacks.** Two error messages
+  advertised removed flags (`--show-models` / `--list-projects`); they now name the real
+  commands (`ocman models` / `ocman list projects`). An unexpected (non-RecoveryError)
+  exception no longer prints a raw Python traceback: the CLI shows a clean one-line
+  `Error: Unexpected error: ...` with a "re-run with -v" hint, and `-v`/`--verbose` still
+  shows the full traceback for debugging. The `--older-than` parse error now shows the
+  accepted formats (`2h/5d/6w/6mo/1y/'30 days'`) at the point of failure; "Database/Session/
+  Project not found" errors now include a recovery hint; "Invalid selection/choice" prompts
+  now show the accepted range or option set. `reclaim` is now discoverable via
+  `ocman help maintain` and the overview (not only `help all`/`doctor`). TUI Storage reclaim
+  buttons are relabeled to be self-explaining ("Compact database (checkpoint + VACUUM)",
+  "Reclaim compacted tool output (parts)").
 - **Saving config no longer resets keys the caller did not pass.** `save_ocman_config`
   now merges the passed keys over the EXISTING config (falling back to defaults only for
   keys never set), instead of over `DEFAULT_CONFIG`. Previously a partial save (notably

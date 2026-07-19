@@ -825,7 +825,7 @@ def resolve_model(models: list[ModelInfo], model_spec: str) -> ModelInfo:
     if res is None:
         raise RecoveryError(
             f"Model not found: {model_spec!r}\n"
-            "Use --show-models to see available models."
+            "Run 'ocman models' to see available models."
         )
 
     if res == "ambiguous":
@@ -1209,6 +1209,18 @@ def die(message: str, exit_code: int = 1) -> None:
 
     eprint(color_red(f"Error: {message}"))
     raise SystemExit(exit_code)
+
+
+def _db_not_found_error() -> "RecoveryError":
+    """The single 'database not found' error, with a recovery hint (self-documentation).
+
+    Used everywhere a DB operation needs the OpenCode database to exist, so the wording and
+    the recovery guidance live in one place.
+    """
+    return RecoveryError(
+        f"Database not found at {OPENCODE_DB_PATH}. "
+        "Point at a database with --db PATH, or run OpenCode first to create one."
+    )
 
 
 def require_opencode() -> None:
@@ -5317,7 +5329,7 @@ def resolve_and_expand_targets(
                             chosen_kind, chosen_obj = candidates[idx]
                             break
                         else:
-                            print(f"Invalid selection: {choice}")
+                            print(f"Invalid selection: {choice} (enter a number 1-{len(candidates)})")
                             continue
 
                     new_res = resolve_targets([choice], kinds=kinds, filter_subagents=filter_subagents)
@@ -5550,6 +5562,8 @@ def build_help(topic: str | None = None) -> str:
 
     maintain = [
         (f"{prog} doctor", "Read-only storage checkup; suggests what to reclaim"),
+        (f"{prog} reclaim", "Reclaim DB space (checkpoint + VACUUM); guarded"),
+        (f"{prog} reclaim --reclaim-temp --reclaim-parts", "Also reap temp files / compacted parts (opt-in)"),
         (f"{prog} db clean 30 days", "Delete sessions older than a duration"),
         (f"{prog} db clean --older-than 6mo", "Same, compact form (2h/5d/6w/6mo/1y)"),
         (f"{prog} db clean-orphans", "Remove orphaned DB records and sidecar diffs"),
@@ -6555,7 +6569,8 @@ def _resolve_clean_args(ns, g, with_name: bool, default_days: float):
         try:
             days = parse_duration_to_days(older)
         except DurationError as e:
-            _die_cli(f"invalid --older-than value: {e}")
+            _die_cli(f"invalid --older-than value: {e} "
+                     "(accepted: 2h, 5d, 6w, 6mo, 1y, or '30 days')")
     elif days_flag is not None:
         days = float(days_flag)
     elif pos_days is not None:
@@ -7403,7 +7418,7 @@ def check_egress_guards(
             print("Operation aborted.")
             raise SystemExit(1)
         else:
-            print("Invalid choice.")
+            print("Invalid choice. Enter one of: s (show), r (reveal), e (expunge), a (abort).")
 
 
 def resolve_recovery_collision(
@@ -7522,7 +7537,7 @@ def cli_filter(
         proj = resolve_project(project)
         if proj is None:
             raise RecoveryError(
-                f"Project not found: {project!r}\nUse --list-projects to see available projects."
+                f"Project not found: {project!r}\nRun 'ocman list projects' to see available projects."
             )
         pname = proj.get("name") or proj.get("directory") or project
         scope_parts.append(f"the project '{pname}' (directory: {proj.get('directory', '')})")
@@ -8061,7 +8076,7 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         raise RecoveryError("sqlite3 module not available.")
 
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     # Check for running opencode (fail-open; --force bypasses only this lock).
     check_opencode_process_lock(force, verbosity)
@@ -8084,7 +8099,9 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         session_ids = [row[0] for row in cursor.fetchall()]
         
         if not session_ids:
-            raise RecoveryError(f"Session {session_id} not found in database.")
+            raise RecoveryError(
+                f"Session {session_id} not found in database. "
+                "Run 'ocman list sessions' to see available sessions.")
 
         # 2. Get counts of rows to be deleted
         counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
@@ -8609,7 +8626,7 @@ def db_delete_sessions_batch(
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     # One process-lock check for the whole batch (fail-open; --force bypasses).
     check_opencode_process_lock(force, verbosity)
@@ -8790,7 +8807,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         raise RecoveryError("sqlite3 module not available.")
 
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     # Check for running opencode (fail-open; --force bypasses only this lock).
     check_opencode_process_lock(force, verbosity)
@@ -8805,7 +8822,9 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         cursor.execute("SELECT name, worktree FROM project WHERE id = ?", (project_id,))
         proj_row = cursor.fetchone()
         if not proj_row:
-            raise RecoveryError(f"Project with ID {project_id} not found in database.")
+            raise RecoveryError(
+                f"Project with ID {project_id} not found in database. "
+                "Run 'ocman list projects' to see available projects.")
         proj_name = proj_row[0] or "(unnamed)"
         proj_dir = proj_row[1] or "(no worktree)"
 
@@ -9280,7 +9299,7 @@ def _menu(prompt: str, options: list[str], *, default: int = 1, max_tries: int =
             return default
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw)
-        print(f"Invalid selection: {raw}")
+        print(f"Invalid selection: {raw} (enter a number 1-{len(options)})")
     die("Too many invalid selections; aborting.")
 
 
@@ -9760,7 +9779,7 @@ def db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: s
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     try:
         old_worktree_abs = str(Path(old_worktree).expanduser().resolve())
@@ -9807,7 +9826,7 @@ def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> Non
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     try:
         old_dir_abs = str(Path(old_dir).expanduser().resolve())
@@ -9856,7 +9875,7 @@ def db_rebase_paths(old_prefix: str, new_prefix: str, *, while_running: bool = F
     if sqlite3 is None:
         raise RecoveryError("sqlite3 module not available.")
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
     require_safe_to_mutate("rebase database paths", while_running=while_running)
 
     try:
@@ -10845,7 +10864,7 @@ def db_run_cleanup(
         raise RecoveryError("sqlite3 module not available.")
 
     if not OPENCODE_DB_PATH.exists():
-        raise RecoveryError(f"Database not found at {OPENCODE_DB_PATH}")
+        raise _db_not_found_error()
 
     # Check for running opencode (fail-open; --force bypasses only this lock).
     check_opencode_process_lock(force, verbosity)
@@ -14788,6 +14807,35 @@ def cli_reclaim(args) -> None:
 
 
 def main() -> None:
+    """Entry point wrapper: run the CLI, and never leak a raw traceback to the user.
+
+    On an UNEXPECTED (non-RecoveryError) exception, print a clean one-line error and exit,
+    UNLESS the user asked for verbose output (-v/-vv/--verbose), in which case re-raise so a
+    developer sees the full traceback. RecoveryError and KeyboardInterrupt keep their own
+    handling inside `_run_main`. This guards every command path uniformly (not just the
+    recover/compact tail).
+    """
+    import sys
+    verbose = any(
+        a in ("-v", "-vv", "-vvv", "--verbose") or (a.startswith("-v") and set(a[1:]) == {"v"})
+        for a in sys.argv[1:]
+    )
+    try:
+        _run_main()
+    except SystemExit:
+        raise
+    except RecoveryError as error:
+        die(str(error), exit_code=1)
+    except KeyboardInterrupt:
+        eprint(color_yellow("Cancelled."))
+        raise SystemExit(130)
+    except Exception as error:  # noqa: BLE001 - top-level guard: no raw traceback for users
+        if verbose:
+            raise
+        die(f"Unexpected error: {error}. Re-run with -v for the full traceback.", exit_code=1)
+
+
+def _run_main() -> None:
     import sys
     """
     Run the interactive opencode recovery workflow.

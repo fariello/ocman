@@ -656,6 +656,8 @@ def test_parse_args_help_topic(monkeypatch, capsys):
     assert excinfo.value.code == 0
     out = capsys.readouterr().out
     assert "db clean" in out
+    # SD-07: reclaim is discoverable via the maintain topic.
+    assert "reclaim" in out
 
 
 def test_parse_args_help_unknown_topic(monkeypatch, capsys):
@@ -668,6 +670,62 @@ def test_parse_args_help_unknown_topic(monkeypatch, capsys):
     assert excinfo.value.code == 2
     err = capsys.readouterr().err
     assert "Unknown help topic" in err
+
+
+# --- self-documentation fixes (assess self-documentation IPD) ----------------
+
+def test_no_stale_flag_error_strings():
+    """SD-01: no user-facing error should send the user to a removed flag
+    (--show-models / --list-projects). The real commands are 'ocman models' /
+    'ocman list projects'."""
+    import re
+    from pathlib import Path
+    src = Path(ocman.__file__).with_name("cli.py").read_text(encoding="utf-8")
+    # A stale flag is only a problem inside a user-facing quoted string that tells the
+    # user to "Use/Run --show-models/--list-projects". Assert the specific fixed messages.
+    assert "Run 'ocman models' to see available models." in src
+    assert "Run 'ocman list projects' to see available projects." in src
+    assert "Use --show-models to see available models." not in src
+    assert "Use --list-projects to see available projects." not in src
+
+
+def test_db_clean_bad_duration_teaches_formats(temp_db, monkeypatch, capsys):
+    """SD-03: an invalid --older-than value shows the accepted formats at the point of
+    failure."""
+    import sys
+    monkeypatch.setattr(sys, "argv",
+                        ["ocman", "--db", str(temp_db), "db", "clean", "--older-than", "notaduration"])
+    with pytest.raises(SystemExit):
+        ocman.main()
+    err = capsys.readouterr().err
+    assert "6mo" in err or "2h" in err  # accepted-format example present
+
+
+def test_db_not_found_error_has_recovery_hint(monkeypatch, tmp_path):
+    """SD-04: the shared 'database not found' error carries a recovery hint."""
+    monkeypatch.setattr(ocman, "OPENCODE_DB_PATH", tmp_path / "does-not-exist.db")
+    err = ocman._db_not_found_error()
+    assert isinstance(err, ocman.RecoveryError)
+    msg = str(err)
+    assert "Database not found" in msg
+    assert "--db" in msg  # actionable next step
+
+
+def test_main_unexpected_exception_no_traceback(temp_db, monkeypatch, capsys):
+    """SD-02: an unexpected (non-RecoveryError) exception on the normal path prints a clean
+    message with a -v hint and NO raw traceback."""
+    import sys
+    # Force an unexpected error deep in a normal command path.
+    def boom(*a, **k):
+        raise ValueError("synthetic boom")
+    monkeypatch.setattr(ocman, "db_list_projects", boom)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "list", "projects"])
+    with pytest.raises(SystemExit):
+        ocman.main()
+    err = capsys.readouterr().err
+    assert "Unexpected error" in err
+    assert "-v" in err
+    assert "Traceback (most recent call last)" not in err
 
 
 def test_parse_args_dash_h(monkeypatch, capsys):
