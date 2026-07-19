@@ -28,7 +28,7 @@ top-level tabs (maintainer decision, OQ-6).
 | 1 | Delete-safety: extract-on-delete in TUI + working clear-history | `executed/20260718-1648-02-tui-p1-delete-safety-ipd.md` | EXECUTED (commit 45eb8c4) |
 | 2 | Storage checkup (read-only doctor view) + guarded reclaim | `executed/20260718-1648-03-tui-p2-doctor-reclaim-ipd.md` | EXECUTED |
 | 3 | Reporting: spend + running views (read-only) | `executed/20260718-1648-04-tui-p3-spend-running-ipd.md` | EXECUTED |
-| 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `pending/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | to-review |
+| 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `pending/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | reviewed (awaiting approval) |
 | 5 | Breadth: project bundles, local move, backup clean, content search | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | to-review |
 
 The one hard exclusion across all phases: the reclaim snapshot-force mode stays CLI-only
