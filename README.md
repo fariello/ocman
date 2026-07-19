@@ -154,14 +154,27 @@ invoke directly.
 
 ## The TUI Dashboard (`ocman ui`)
 
-The interactive terminal user interface organizes your workflow across several tabbed workspaces:
+The interactive terminal user interface (`ocman ui`, alias `ocman gui`) mirrors the CLI's
+capabilities. A left pane lists projects and sessions (with a content-search box above it)
+and the workspace is organized into tabbed views. Both destructive and reporting operations
+run in background threads so the UI stays responsive.
 
-1.  **Projects & Sessions**: Browse through workspace project directories and see active session trees. Shows session metadata, tokens count, and accumulated costs.
-2.  **Session Preview**: Drill down into the selected session to inspect details or preview the scrollable conversation transcript.
-3.  **Recovery Wizard**: Configure truncation boundaries (by line limit or user-agent interaction count), select a target LLM model with live cost estimation, and generate compacted files.
-4.  **Database Admin**: Review database family details (WAL, SHM, database integrity), execute vacuums, and run backup or restoration threads directly with progress indicators.
-5.  **Activity Log**: Browse detailed histories of past cleanups/recoveries, including a persistent `GRAND TOTALS` card summarizing all-time disk space saved, cost reclaimed, and pruned databases rows.
-6.  **Configuration Settings**: Customize system settings (paths, LLM gateway parameters, retention defaults) with live auto-saving.
+**Sidebar (projects & sessions)**: browse projects and their session trees. Selecting a
+session or project drives the detail/action views. Press **Space** on a session to add it to
+a multi-select set for batch actions. The search box runs a content/title search and lets
+you jump to a matching session.
+
+**Tabs:**
+
+1.  **Details & Transcript**: session metadata plus the scrollable conversation transcript, with format controls (include tools, all roles, max interactions/lines).
+2.  **Actions & Recovery**: write recovery files (`.transcript` / `.restart` / `.prompt`, with a "split into parts (chunk)" option), run LLM compaction (live cost estimate), and the "Filter (LLM re-scope a doc)" action. The Danger Zone deletes the selected session or project (offering to write recovery extracts first), moves it (local metadata move; remote/git-aware moves stay on the CLI), exports it to an `.ocbox` bundle (session or project), and runs batch delete / batch export over the multi-selected sessions.
+3.  **Database Admin**: database family details (WAL/SHM, integrity), prune old sessions (by integer days OR a duration like `6w`, optional project scope, "write recovery extracts first"), sweep orphans, inspect orphaned diff files, import an `.ocbox` bundle (session or project, auto-detected), and create / restore / prune backups.
+4.  **Storage**: a read-only storage checkup (the same checks as `ocman doctor`) with the reclaimable-now / opt-in / reported-only totals, plus guarded reclaim actions (checkpoint + VACUUM, reclaim temp, reclaim compacted parts, prune a backups dir). The dangerous snapshot-force reclaim stays on the CLI (a note points to it).
+5.  **Spend**: per-project LLM cost and split tokens, with an "include historical (deleted) spend" toggle. Read-only.
+6.  **Running**: running OpenCode instances, flagging insecure control servers; fails loud (never a false "all clear") if detection is unreliable. Observe-only.
+7.  **Models Library**: searchable model + pricing table.
+8.  **Activity Log**: past cleanups/recoveries plus a persistent all-time totals card, and a "Clear Historical Activity Log" action.
+9.  **Configuration Settings**: edit paths, LLM/retention defaults, and toggles with live auto-save. (Auto-save preserves config keys not shown in the form.)
 
 ---
 

@@ -46,7 +46,12 @@ export/import).
   written by older versions.
 - **TUI (`ocman_tui/`)** (a Textual application). Launched via `ocman ui` / `ocman gui`.
   `ocman_tui/app.py` holds `OrsessionApp` (the app) and its modal screens; `widgets/`
-  holds tab widgets (database admin, sidebar, models); `css/` holds the Textual stylesheets.
+  holds the tab/panel widgets (`sidebar`, `database`, `models`, `storage`, `spend`,
+  `running`); `css/` holds the Textual stylesheets. The app presents nine tabs (Details &
+  Transcript, Actions & Recovery, Database Admin, Storage, Spend, Running, Models Library,
+  Activity Log, Configuration) plus a multi-select sidebar with a content-search box, giving
+  the interactive UI parity with the CLI's feature set. Deliberate CLI-only exclusions: the
+  reclaim snapshot-force mode and remote/git-aware move + `db rebase`.
 
 ### CLI/TUI relationship (important)
 
