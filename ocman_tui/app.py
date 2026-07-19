@@ -66,6 +66,8 @@ from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
 from .widgets.models import ModelsWidget
 from .widgets.storage import StorageWidget
+from .widgets.spend import SpendWidget
+from .widgets.running import RunningWidget
 
 
 class RestoreBackupModal(ModalScreen[Optional[str]]):
@@ -899,6 +901,14 @@ class OrsessionApp(App):
                     # Tab: Storage (doctor checkup + guarded reclaim)
                     with TabPane("Storage", id="tab-storage"):
                         yield StorageWidget()
+
+                    # Tab: Spend (per-project LLM spend, read-only)
+                    with TabPane("Spend", id="tab-spend"):
+                        yield SpendWidget()
+
+                    # Tab: Running (running OpenCode instances, observe-only)
+                    with TabPane("Running", id="tab-running"):
+                        yield RunningWidget()
                     
                     # Tab 4: Models Library
                     with TabPane("Models Library", id="tab-models"):

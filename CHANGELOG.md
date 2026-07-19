@@ -14,6 +14,13 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **TUI parity, Phase 3 (spend + running views).** Two new read-only TUI tabs. "Spend"
+  shows per-project LLM cost and split tokens (with an "include historical/deleted spend"
+  toggle for the grand total), rendered from the same `gather_spend()` data the CLI uses,
+  so the numbers match `ocman spend`. "Running" lists running OpenCode instances
+  (pid/user/uptime/kind/listener/auth/project) and raises a loud red banner for insecure
+  control servers (no auth, or non-loopback bind); if detection is unreliable it says so
+  explicitly rather than showing a misleading empty "all clear". Both are observe-only.
 - **TUI parity, Phase 2 (storage checkup + guarded reclaim).** The TUI gains a new
   "Storage" tab: a read-only checkup that runs the same checks as `ocman doctor` (schema,
   DB/WAL size, integrity, event bloat, compacted parts, orphans, old sessions, backups,

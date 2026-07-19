@@ -1516,6 +1516,36 @@ def test_spend_json(temp_db, capsys, monkeypatch, mock_history_path):
     assert d["spend"]["projects"][0]["cost"] == 12.5
 
 
+def test_gather_spend_shape_matches_json(temp_db, monkeypatch, mock_history_path):
+    """gather_spend() returns the canonical per-project spend shape used by the CLI JSON
+    and the TUI, so both render identical numbers (Phase 3, PR-002/PR-003)."""
+    import ocman
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/projA', 'A')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'A1', 1, 2, '/projA', 12.5, 1000, 500, 100, '')")
+    conn.commit(); conn.close()
+
+    d = ocman.gather_spend(historical=False)
+    assert d["scope"] == "projects"
+    assert d["live_total"] == 12.5
+    assert d["projects"][0]["cost"] == 12.5
+    assert d["live_tokens"] == {"input": 1000, "output": 500, "cache_read": 100}
+    assert d["historical_total"] is None and d["grand_tokens"] is None
+
+    # Historical seeds add global deleted spend.
+    hist = ocman._load_history()
+    hist["cumulative"].update({"cost_deleted": 5.0, "tokens_input_deleted": 300,
+                               "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
+    ocman._save_history(hist)
+    dh = ocman.gather_spend(historical=True)
+    assert dh["historical_total"] == pytest.approx(5.0)
+    assert dh["grand_total"] == pytest.approx(17.5)
+    assert dh["grand_tokens"] == {"input": 1300, "output": 700, "cache_read": 150}
+
+
 def test_spend_historical_sums_tokens(temp_db, capsys, monkeypatch, mock_history_path):
     """--historical now sums deleted TOKENS (in/out/cache), not just cost."""
     import ocman, sys, json

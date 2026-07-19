@@ -766,3 +766,115 @@ async def test_tui_storage_reclaim_refuses_while_running(tui_db, monkeypatch):
     assert not any(sev == "information" and "finished" in str(msg).lower() for msg, sev in notes)
 
 
+# --- Phase 3: Spend + Running tabs -------------------------------------------
+
+@pytest.mark.anyio
+async def test_tui_spend_tab_renders_and_totals(tui_db):
+    """Phase 3: the Spend tab table/totals match gather_spend() on the same DB."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.spend import SpendWidget
+    # Give sess1 a cost so a project row appears.
+    conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+    cur.execute("UPDATE session SET cost=3.5, tokens_input=200, tokens_output=100, "
+                "tokens_cache_read=20 WHERE id='sess1'")
+    conn.commit(); conn.close()
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-spend"
+        await pilot.pause()
+        sw = app.query_one(SpendWidget)
+        for _ in range(50):
+            if sw.query_one("#spend-table", DataTable).row_count > 0:
+                break
+            await pilot.pause(0.1)
+        assert sw.query_one("#spend-table", DataTable).row_count >= 1
+        totals = str(sw.query_one("#lbl-spend-totals").render())
+        expected = ocman.gather_spend(historical=False)
+        assert ocman.fmt_cost(expected["live_total"]) in totals
+
+
+@pytest.mark.anyio
+async def test_tui_spend_historical_toggle(tui_db):
+    """Phase 3: the historical toggle adds the ledger's deleted spend."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.spend import SpendWidget
+    hist = ocman._load_history()
+    hist["cumulative"].update({"cost_deleted": 9.0, "tokens_input_deleted": 10,
+                               "tokens_output_deleted": 5, "tokens_cache_read_deleted": 1})
+    ocman._save_history(hist)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-spend"
+        await pilot.pause()
+        sw = app.query_one(SpendWidget)
+        for _ in range(30):
+            await pilot.pause(0.1)
+        sw.query_one("#check-spend-historical", Checkbox).value = True
+        for _ in range(30):
+            await pilot.pause(0.1)
+        totals = str(sw.query_one("#lbl-spend-totals").render())
+        assert "Historically saved" in totals
+        assert ocman.fmt_cost(9.0) in totals
+
+
+@pytest.mark.anyio
+async def test_tui_running_tab_renders_instances_and_banner(tui_db, monkeypatch):
+    """Phase 3: the Running tab renders instances and raises the insecure banner."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.running import RunningWidget
+    import ocman_tui.widgets.running as running_mod
+
+    fake = [{
+        "pid": 4242, "user": "me", "elapsed": "01:23", "kind": "serve",
+        "listeners": ["0.0.0.0:7777"], "auth": "unsecured", "vulnerable": True,
+        "exposed": True, "cwd": "/w/proj", "project": "proj",
+        "session": {"id": None, "provenance": "?"},
+    }]
+    monkeypatch.setattr(running_mod, "detect_running_instances", lambda **k: list(fake))
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-running"
+        await pilot.pause()
+        rw = app.query_one(RunningWidget)
+        for _ in range(40):
+            if rw.query_one("#running-table", DataTable).row_count > 0:
+                break
+            await pilot.pause(0.1)
+        assert rw.query_one("#running-table", DataTable).row_count == 1
+        banner = str(rw.query_one("#lbl-running-banner").render())
+        assert "SECURITY WARNING" in banner and "4242" in banner
+
+
+@pytest.mark.anyio
+async def test_tui_running_tab_fail_loud(tui_db, monkeypatch):
+    """Phase 3 (PR-001): when detection is unreliable, the Running tab shows a loud
+    'NOT an all-clear' state, never an empty table."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.running import RunningWidget
+    import ocman_tui.widgets.running as running_mod
+
+    def _boom(**k):
+        raise ocman.RunningDetectionError("ss unavailable")
+    monkeypatch.setattr(running_mod, "detect_running_instances", _boom)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-running"
+        await pilot.pause()
+        rw = app.query_one(RunningWidget)
+        for _ in range(40):
+            if "NOT an all-clear" in str(rw.query_one("#lbl-running-status").render()):
+                break
+            await pilot.pause(0.1)
+        status = str(rw.query_one("#lbl-running-status").render())
+        assert "NOT an all-clear" in status
+        assert rw.query_one("#running-table", DataTable).row_count == 0
+
+

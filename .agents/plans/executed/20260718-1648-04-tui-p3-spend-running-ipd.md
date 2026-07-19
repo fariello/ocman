@@ -3,7 +3,8 @@
 - Date: 2026-07-18
 - Concern: functionality (CLI<->TUI parity), ui-ux
 - Scope: two new read-only top-level tabs in `ocman_tui/` - "Spend" and "Running".
-- Status: reviewed
+- Status: executed
+- Approval: approved by maintainer 2026-07-18
 - Author: its_direct/pt3-claude-opus-4.8
 - Set: tui-parity
 - Order: 3
@@ -16,6 +17,12 @@
   PR-001 (running fail-loud state), PR-002 (gather_spend required, not optional),
   PR-003 (spend --json byte-identical anti-regression), PR-004 (execution contract),
   PR-005 (empty/error states) fixed. GO - PENDING HUMAN APPROVAL.
+- 2026-07-18 executed (its_direct/pt3-claude-opus-4.8): extracted `gather_spend()` (CLI
+  spend text/JSON unchanged); added `ocman_tui/widgets/spend.py` (Spend tab) and
+  `ocman_tui/widgets/running.py` (Running tab, fail-loud on RunningDetectionError) as new
+  top-level tabs; core.py re-exports. 5 net-new tests (gather_spend shape, spend table +
+  historical toggle, running render+banner, running fail-loud). Full suite: 392 passed,
+  2 skipped.
 
 ## Goal
 

@@ -11905,6 +11905,58 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
               "never to other users').")
 
 
+def gather_spend(*, historical: bool = False) -> dict:
+    """Compute the per-project LLM spend report as a data dict (no printing).
+
+    Single source of the per-project spend aggregation, shared by `cli_spend`'s default
+    branch and the TUI Spend tab so both render identical numbers. The returned shape is
+    the canonical `spend` (scope=projects) JSON:
+
+        {"scope": "projects",
+         "projects": [{id, directory, cost, tokens_input, tokens_output, tokens_cache_read}, ...],
+         "live_total": float, "live_tokens": {input, output, cache_read},
+         "historical_total": float|None, "historical_tokens": {..}|None,
+         "grand_total": float, "grand_tokens": {..}|None}
+
+    Historical (deleted) spend is GLOBAL (the deletion ledger has no project_id), so it is
+    reported as single totals, never fabricated per project. When ``historical`` is False
+    the historical/grand-token fields are None (matching the CLI JSON contract).
+    """
+    projects = db_list_projects()
+    proj_rows = [{
+        "id": p["id"],
+        "directory": _display_worktree(p["directory"]),
+        "cost": p.get("cost", 0.0) or 0.0,
+        "tokens_input": p.get("tokens_input", 0) or 0,
+        "tokens_output": p.get("tokens_output", 0) or 0,
+        "tokens_cache_read": p.get("tokens_cache_read", 0) or 0,
+    } for p in projects]
+    proj_rows.sort(key=lambda r: r["cost"], reverse=True)
+    live_total = sum(r["cost"] for r in proj_rows)
+    live_in = sum(r["tokens_input"] for r in proj_rows)
+    live_out = sum(r["tokens_output"] for r in proj_rows)
+    live_cache = sum(r["tokens_cache_read"] for r in proj_rows)
+
+    hist = _load_history().get("cumulative", {}) if historical else {}
+    hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
+    hist_in = hist.get("tokens_input_deleted", 0) if historical else 0
+    hist_out = hist.get("tokens_output_deleted", 0) if historical else 0
+    hist_cache = hist.get("tokens_cache_read_deleted", 0) if historical else 0
+
+    return {
+        "scope": "projects",
+        "projects": proj_rows,
+        "live_total": live_total,
+        "live_tokens": {"input": live_in, "output": live_out, "cache_read": live_cache},
+        "historical_total": hist_cost if historical else None,
+        "historical_tokens": ({"input": hist_in, "output": hist_out,
+                                "cache_read": hist_cache} if historical else None),
+        "grand_total": (live_total + hist_cost) if historical else live_total,
+        "grand_tokens": ({"input": live_in + hist_in, "output": live_out + hist_out,
+                          "cache_read": live_cache + hist_cache} if historical else None),
+    }
+
+
 def cli_spend(project: str | None = None, *, sessions: bool = False,
               historical: bool = False, json_output: bool = False) -> None:
     """Show per-project (default) or per-session LLM spend (F2).
@@ -11954,40 +12006,19 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
         return
 
     # Default: per-project spend table.
-    projects = db_list_projects()
-    proj_rows = [{
-        "id": p["id"],
-        "directory": _display_worktree(p["directory"]),
-        "cost": p.get("cost", 0.0) or 0.0,
-        "tokens_input": p.get("tokens_input", 0) or 0,
-        "tokens_output": p.get("tokens_output", 0) or 0,
-        "tokens_cache_read": p.get("tokens_cache_read", 0) or 0,
-    } for p in projects]
-    proj_rows.sort(key=lambda r: r["cost"], reverse=True)
-    live_total = sum(r["cost"] for r in proj_rows)
-    live_in = sum(r["tokens_input"] for r in proj_rows)
-    live_out = sum(r["tokens_output"] for r in proj_rows)
-    live_cache = sum(r["tokens_cache_read"] for r in proj_rows)
-
-    hist = _load_history().get("cumulative", {}) if historical else {}
-    hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
-    hist_in = hist.get("tokens_input_deleted", 0) if historical else 0
-    hist_out = hist.get("tokens_output_deleted", 0) if historical else 0
-    hist_cache = hist.get("tokens_cache_read_deleted", 0) if historical else 0
+    data = gather_spend(historical=historical)
+    proj_rows = data["projects"]
+    live_total = data["live_total"]
+    live_in = data["live_tokens"]["input"]
+    live_out = data["live_tokens"]["output"]
+    live_cache = data["live_tokens"]["cache_read"]
+    hist_cost = (data["historical_total"] or 0.0) if historical else 0.0
+    hist_in = (data["historical_tokens"]["input"] if historical and data["historical_tokens"] else 0)
+    hist_out = (data["historical_tokens"]["output"] if historical and data["historical_tokens"] else 0)
+    hist_cache = (data["historical_tokens"]["cache_read"] if historical and data["historical_tokens"] else 0)
 
     if json_output:
-        emit_json("spend", {
-            "scope": "projects",
-            "projects": proj_rows,
-            "live_total": live_total,
-            "live_tokens": {"input": live_in, "output": live_out, "cache_read": live_cache},
-            "historical_total": hist_cost if historical else None,
-            "historical_tokens": ({"input": hist_in, "output": hist_out,
-                                    "cache_read": hist_cache} if historical else None),
-            "grand_total": (live_total + hist_cost) if historical else live_total,
-            "grand_tokens": ({"input": live_in + hist_in, "output": live_out + hist_out,
-                              "cache_read": live_cache + hist_cache} if historical else None),
-        })
+        emit_json("spend", data)
         return
 
     print(color_bold(f"LLM spend by project ({len(proj_rows)} projects):"))
