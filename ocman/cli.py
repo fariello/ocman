@@ -379,10 +379,14 @@ def save_ocman_config(config_dict: dict, config_path: Path = None) -> None:
     if config_path is None:
         config_path = OCMAN_CONFIG_PATH
     config_path.parent.mkdir(parents=True, exist_ok=True)
-    # Merge over defaults so every template placeholder is always present, even when a
-    # caller (e.g. the TUI config form) passes only a subset of keys. This keeps the
-    # template render from failing when new config keys are added.
-    merged = dict(DEFAULT_CONFIG)
+    # Merge the passed keys over the EXISTING on-disk config (which itself falls back to
+    # DEFAULT_CONFIG for any key absent from the file). A caller that passes only a subset
+    # (e.g. the TUI config form, which does not surface chunk_*/reclaim_*/filter_* keys)
+    # thus PRESERVES the user's current values for the keys it does not manage, instead of
+    # silently resetting them to defaults. The template stays fully populated because the
+    # base always contains every key. A caller that passes a full dict (e.g. reset-to-
+    # defaults) still writes exactly that dict's values.
+    merged = load_ocman_config(config_path)
     merged.update(config_dict)
     formatted_dict = {}
     home_str = str(Path.home())

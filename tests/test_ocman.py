@@ -486,6 +486,36 @@ def test_chunk_size_config_keys_present_and_roundtrip(tmp_path):
     assert load_ocman_config(p)["chunk_max_lines"] == 777
 
 
+def test_save_ocman_config_preserves_unmanaged_keys(tmp_path):
+    """FU-01: a partial save must NOT reset keys it does not pass (e.g. the TUI config
+    form omits chunk_*/reclaim_*/filter_*)."""
+    from ocman import save_ocman_config, load_ocman_config, DEFAULT_CONFIG
+    p = tmp_path / "ocman.toml"
+
+    # Start from a config with several non-default unmanaged keys.
+    base = dict(DEFAULT_CONFIG)
+    base["chunk_max_lines"] = 9999
+    base["reclaim_tmp_min_age_hours"] = 72
+    base["filter_secret_scan"] = "aggressive"
+    save_ocman_config(base, p)
+    assert load_ocman_config(p)["chunk_max_lines"] == 9999
+
+    # A partial save (like the TUI form) that omits those keys must preserve them.
+    save_ocman_config({"keep_temp": True, "default_retention_days": 12}, p)
+    loaded = load_ocman_config(p)
+    assert loaded["chunk_max_lines"] == 9999
+    assert loaded["reclaim_tmp_min_age_hours"] == 72
+    assert loaded["filter_secret_scan"] == "aggressive"
+    assert loaded["keep_temp"] is True          # the passed key applied
+    assert loaded["default_retention_days"] == 12
+
+    # A full reset-to-defaults still resets everything.
+    save_ocman_config(dict(DEFAULT_CONFIG), p)
+    reset = load_ocman_config(p)
+    assert reset["chunk_max_lines"] == DEFAULT_CONFIG["chunk_max_lines"]
+    assert reset["filter_secret_scan"] == DEFAULT_CONFIG["filter_secret_scan"]
+
+
 def test_db_show_info_backups_section(temp_db, capsys, monkeypatch, tmp_path):
     import ocman
     from ocman import db_show_info, save_ocman_config, DEFAULT_CONFIG, OCMAN_CONFIG_PATH

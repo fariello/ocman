@@ -94,6 +94,13 @@
   and sums all parts in the pre-run cost table. Export (.ocbox) is not chunked.
 
 ### Fixed
+- **Saving config no longer resets keys the caller did not pass.** `save_ocman_config`
+  now merges the passed keys over the EXISTING config (falling back to defaults only for
+  keys never set), instead of over `DEFAULT_CONFIG`. Previously a partial save (notably
+  every TUI config-form save, including the automatic save on tab switch / exit) silently
+  reset unmanaged keys (`chunk_max_*`, `reclaim_*`, `filter_*`,
+  `copy_restart_to_project_prompts`, `history_max_runs`) to their defaults. A full
+  reset-to-defaults still resets everything.
 - **`parse_recovery_name` folded a trailing name segment into the session id.** A
   filter output like `...<sid>.<scope>.compacted.md` (and now chunk part names) parsed
   the session id as `<sid>.<scope>` instead of the bare `<sid>`. It now strips one
