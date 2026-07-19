@@ -25,3 +25,6 @@
 
 ## Section 8 (final ship review) - complete
 - Final audit clean; eight-persona sign-off ACCEPTABLE; gates pass (no LIVE/High, no pending plans); validation cited (407 passed, -V 1.2.0, gitleaks clean, wheel 1.2.0). Recommendation: GO. Committed.
+
+## Closeout (rung A) - complete
+- Review GO, rung A chosen. Section 9 not run. Nothing pushed/tagged/published. v1.2.0 held locally. Committed.
