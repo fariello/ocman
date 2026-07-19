@@ -55,6 +55,14 @@ from ocman import (
     extract_sessions_before_delete,
     resolve_extract_output_dir,
     clear_history_ledger,
+    discover_storage_locations,
+    run_doctor_checks,
+    db_family_open_by_live_pid,
+    reclaim_checkpoint_vacuum,
+    reclaim_temp,
+    reclaim_parts,
+    reclaim_backups_dir,
+    load_ocman_config,
 )
 
 expand_config_refs = expand_env_vars

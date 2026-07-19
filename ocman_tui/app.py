@@ -65,6 +65,7 @@ from .core import (
 from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
 from .widgets.models import ModelsWidget
+from .widgets.storage import StorageWidget
 
 
 class RestoreBackupModal(ModalScreen[Optional[str]]):
@@ -894,6 +895,10 @@ class OrsessionApp(App):
                     # Tab 3: Database Admin
                     with TabPane("Database Admin", id="tab-admin"):
                         yield DatabaseAdminWidget()
+
+                    # Tab: Storage (doctor checkup + guarded reclaim)
+                    with TabPane("Storage", id="tab-storage"):
+                        yield StorageWidget()
                     
                     # Tab 4: Models Library
                     with TabPane("Models Library", id="tab-models"):

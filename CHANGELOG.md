@@ -14,6 +14,16 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **TUI parity, Phase 2 (storage checkup + guarded reclaim).** The TUI gains a new
+  "Storage" tab: a read-only checkup that runs the same checks as `ocman doctor` (schema,
+  DB/WAL size, integrity, event bloat, compacted parts, orphans, old sessions, backups,
+  temp leftovers, snapshots) in a background thread and renders them with the reclaimable
+  now / opt-in / reported-only totals; plus guarded reclaim actions (checkpoint + VACUUM,
+  reclaim temp files, reclaim compacted parts, prune a backups directory), each behind a
+  preview-and-confirm, reusing the CLI's guards (refused while OpenCode holds the DB open
+  unless you opt in, backup first). The dangerous snapshot-force reclaim is intentionally
+  not in the TUI; a note points to `ocman reclaim --force-snapshots` / `ocman doctor` on
+  the command line.
 - **TUI parity, Phase 1 (delete safety).** The interactive TUI no longer deletes more
   destructively than the CLI: the session and project delete confirmations now include a
   "Write recovery extracts first" option (default ON) that writes the

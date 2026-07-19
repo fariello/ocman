@@ -5,7 +5,8 @@
 - Scope: a new top-level "Storage" tab in `ocman_tui/` presenting a read-only doctor view
   and guarded reclaim actions; supporting helpers as needed. CLI logic is reused, not
   reimplemented.
-- Status: reviewed
+- Status: executed
+- Approval: approved by maintainer 2026-07-18
 - Author: its_direct/pt3-claude-opus-4.8
 - Set: tui-parity
 - Order: 2
@@ -16,6 +17,11 @@
   the doctor+reclaim phase, split out for focused review.
 - 2026-07-18 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
   PR-001..PR-006 fixed; GO - PENDING HUMAN APPROVAL. (Details in the gate section below.)
+- 2026-07-18 executed (its_direct/pt3-claude-opus-4.8): added `ocman_tui/widgets/storage.py`
+  (StorageWidget + ReclaimConfirmModal), a new "Storage" tab, and core.py re-exports.
+  Doctor view + the four guarded reclaim actions with stdout capture and refuse-while-running
+  surfacing. 4 new TUI tests (doctor render+totals, no-snapshot-control, checkpoint+VACUUM,
+  refuse-while-running). Full suite: 387 passed, 2 skipped.
 
 ## Goal
 

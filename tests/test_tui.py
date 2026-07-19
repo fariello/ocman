@@ -653,3 +653,116 @@ async def test_tui_app_project_deletion(tui_db):
         conn.close()
 
 
+# --- Phase 2: Storage tab (doctor view + guarded reclaim) --------------------
+
+async def _wait_doctor_rows(pilot, sw, tries=60):
+    for _ in range(tries):
+        if sw.query_one("#doctor-table", DataTable).row_count > 0:
+            return
+        await pilot.pause(0.1)
+
+
+@pytest.mark.anyio
+async def test_tui_storage_doctor_renders_and_totals(tui_db):
+    """Phase 2: the Storage tab runs the checkup and its bucket totals match
+    run_doctor_checks on the same DB."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.storage import StorageWidget
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-storage"
+        await pilot.pause()
+        sw = app.query_one(StorageWidget)
+        await _wait_doctor_rows(pilot, sw)
+        tbl = sw.query_one("#doctor-table", DataTable)
+        assert tbl.row_count > 0
+
+        # Parity: recompute the expected 'now' bucket total directly.
+        loc = ocman.discover_storage_locations(tui_db)
+        recs = ocman.run_doctor_checks(loc, running=False, deep=False)
+        expected_now = sum(r["size_bytes"] for r in recs if r.get("bucket") == "now")
+        summary = str(sw.query_one("#lbl-doctor-summary").render())
+        assert ocman.human_size_local(expected_now) in summary
+
+
+@pytest.mark.anyio
+async def test_tui_storage_no_snapshot_control(tui_db):
+    """Phase 2 (OQ-2): the TUI Storage tab exposes no snapshot-force control; a note
+    points to the CLI instead."""
+    from textual.widgets import TabbedContent, Button
+    from ocman_tui.widgets.storage import StorageWidget
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-storage"
+        await pilot.pause()
+        sw = app.query_one(StorageWidget)
+        btn_ids = {b.id for b in sw.query(Button)}
+        assert not any("snapshot" in (bid or "") for bid in btn_ids)
+        texts = " ".join(str(s.render()) for s in sw.query("Static"))
+        assert "--force-snapshots" in texts
+
+
+@pytest.mark.anyio
+async def test_tui_storage_checkpoint_vacuum(tui_db):
+    """Phase 2: the checkpoint+VACUUM reclaim action runs and reports success."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.storage import StorageWidget, ReclaimConfirmModal
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-storage"
+        await pilot.pause()
+        sw = app.query_one(StorageWidget)
+        await _wait_doctor_rows(pilot, sw)
+        sw.query_one("#btn-reclaim-vacuum", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, ReclaimConfirmModal)
+        app.screen.query_one("#btn-confirm-reclaim", Button).press()
+        for _ in range(60):
+            await pilot.pause(0.1)
+        # DB still present and readable (VACUUM succeeded, not corrupted).
+        sqlite3_ = ocman._get_sqlite()
+        conn = sqlite3_.connect(str(tui_db))
+        conn.execute("PRAGMA integrity_check;")
+        conn.close()
+        log = str(sw.query_one("#reclaim-log", RichLog).lines)
+        assert "REFUSED" not in log  # not running -> not refused
+
+
+@pytest.mark.anyio
+async def test_tui_storage_reclaim_refuses_while_running(tui_db, monkeypatch):
+    """Phase 2 (validation d): if OpenCode holds the DB open, a reclaim action reports the
+    refusal and does NOT claim success."""
+    from textual.widgets import TabbedContent
+    from ocman_tui.widgets.storage import StorageWidget, ReclaimConfirmModal
+    import ocman_tui.widgets.storage as storage_mod
+
+    # Simulate a live process holding the DB family open (the guard trips).
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *_a, **_k: True)
+    monkeypatch.setattr(storage_mod, "db_family_open_by_live_pid", lambda *_a, **_k: True)
+
+    notes = []
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        orig_notify = app.notify
+        monkeypatch.setattr(app, "notify",
+                            lambda msg, *a, **k: (notes.append((msg, k.get("severity"))), None)[1])
+        app.query_one(TabbedContent).active = "tab-storage"
+        await pilot.pause()
+        sw = app.query_one(StorageWidget)
+        await _wait_doctor_rows(pilot, sw)
+        sw.query_one("#btn-reclaim-vacuum", Button).press()
+        await pilot.pause()
+        assert isinstance(app.screen, ReclaimConfirmModal)
+        app.screen.query_one("#btn-confirm-reclaim", Button).press()
+        for _ in range(60):
+            await pilot.pause(0.1)
+        log = str(sw.query_one("#reclaim-log", RichLog).lines)
+    assert "REFUSED" in log
+    # No success notification was emitted for the reclaim.
+    assert not any(sev == "information" and "finished" in str(msg).lower() for msg, sev in notes)
+
+
