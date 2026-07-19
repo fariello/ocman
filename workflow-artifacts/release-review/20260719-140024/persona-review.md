@@ -43,3 +43,12 @@
   the stated purpose; fitness-for-purpose met. Only the version bump / CHANGELOG cut stands
   between here and a clean ship.
 No F/U/M/GP/KD findings filed in Section 5.
+
+## Section 6 (compatibility/packaging/release)
+- Operator/stakeholder (8): `pip install .` yields the `ocman` console script; wheel builds
+  cleanly with both packages + the migrate script; CI covers ubuntu/macos/windows x
+  py3.10-3.14. A first-time operator can install and run guided by pyproject + README. GOOD.
+- Software engineer (5): no breaking changes this cycle (the removed --show-models/
+  --list-projects flags predate v1.1.0); minor bump 1.1.0 -> 1.2.0 is correct; PyPI latest
+  is 1.1.0 so 1.2.0 is a valid publish. The one packaging-adjacent item is the secret-scan
+  baseline (S2-S1) so CI stays green.

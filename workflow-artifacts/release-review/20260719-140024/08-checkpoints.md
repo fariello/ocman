@@ -16,3 +16,6 @@
 
 ## Section 5 (feature/usability/maintainability) - complete
 - All-eight-persona pass done; principles STRONG/GOOD (no GP violation); cold-start adequate (no KD gap); TODO triage = no blockers. No new findings. Committed.
+
+## Section 6 (compatibility/packaging/release) - complete
+- Wheel builds; entry point + both packages + script present; PyPI latest 1.1.0 -> 1.2.0 valid; CI adequate (matrix + secret-scan); no breaking changes; no SCH/CI findings. Committed.
