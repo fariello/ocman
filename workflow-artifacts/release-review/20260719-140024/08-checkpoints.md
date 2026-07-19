@@ -13,3 +13,6 @@
 
 ## Section 4 (docs/specs) - complete
 - Docs accurate (no stale claims; valid+complete config template; features documented; 9-tab TUI described). Cold-start adequate via README/ARCHITECTURE/CHANGELOG + executed IPDs. No findings. Committed.
+
+## Section 5 (feature/usability/maintainability) - complete
+- All-eight-persona pass done; principles STRONG/GOOD (no GP violation); cold-start adequate (no KD gap); TODO triage = no blockers. No new findings. Committed.
