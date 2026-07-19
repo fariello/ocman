@@ -12,6 +12,7 @@
 - Current version: pyproject.toml 1.1.0; ocman/cli.py __version__ 1.1.0
 - workflow-artifacts/ gitignored: no (good; artifacts are committed deliverables)
 - Initial status: in progress
+- Final status: HALTED at Section 9 (CI red; blocker S9-REL2: no published vistab works). main pushed; nothing tagged/released/published.
 
 ## Context (from the current session)
 

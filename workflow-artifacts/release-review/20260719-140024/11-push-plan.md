@@ -19,3 +19,7 @@
   run artifacts remain LOCAL (48 commits ahead of origin/main; clean tree).
 - Section 9 (release execution) was NOT run. It can be run later when the maintainer is
   ready (choose rung B or C then).
+
+## Section 9 outcome
+- Rung C authorized; main PUSHED (1f0467c). CI verify FAILED (S9-REL2, dependency blocker).
+- Halted: NO tag, NO GitHub Release, NO PyPI publish. Release NOT cut.
