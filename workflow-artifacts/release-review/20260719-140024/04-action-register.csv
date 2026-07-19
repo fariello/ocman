@@ -1,2 +1,3 @@
 id,source_finding_ids,section,status,description,remediation_risk,files_changed,commit,validation,reason_not_done,next_step
 20260719-140024-S7-A1,20260719-140024-S1-REL1,7,planned,Bump version 1.1.0->1.2.0 (pyproject + cli.py) and cut CHANGELOG,Low,pyproject.toml;ocman/cli.py;CHANGELOG.md,,ocman -V; full suite,,Execute in Section 7
+20260719-140024-S7-A2,20260719-140024-S2-S1,7,planned,Add the 6 confirmed-false-positive gitleaks fingerprints to .gitleaksignore,Low,.gitleaksignore,,gitleaks detect clean,,Execute in Section 7
