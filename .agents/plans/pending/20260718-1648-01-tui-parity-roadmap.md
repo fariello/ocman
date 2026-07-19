@@ -29,7 +29,7 @@ top-level tabs (maintainer decision, OQ-6).
 | 2 | Storage checkup (read-only doctor view) + guarded reclaim | `executed/20260718-1648-03-tui-p2-doctor-reclaim-ipd.md` | EXECUTED |
 | 3 | Reporting: spend + running views (read-only) | `executed/20260718-1648-04-tui-p3-spend-running-ipd.md` | EXECUTED |
 | 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `executed/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | EXECUTED |
-| 5 | Breadth: project bundles, local move, backup clean, content search | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | to-review |
+| 5 | Breadth: project bundles, local move, backup clean, content search, filter | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | reviewed (awaiting approval) |
 
 The one hard exclusion across all phases: the reclaim snapshot-force mode stays CLI-only
 (OQ-2); the TUI shows a note pointing to `ocman reclaim --force-snapshots` / `ocman doctor`.
@@ -259,8 +259,13 @@ This umbrella is NOT executed directly. For each phase:
 1. Its per-phase IPD is written (Status: to-review) using the source spec above.
 2. `plan-review` hardens it (Status: reviewed).
 3. The maintainer approves it (Status: approved).
-4. It is executed: implement, run the suite (paste real output), update docs/CHANGELOG,
-   commit path-scoped (never push without direction).
+4. It is executed: FIRST create a TodoWrite checklist that tracks the phase at step
+   granularity (one item per numbered Step, plus core.py re-exports, the full-suite run with
+   pasted output, the CHANGELOG entry, the path-scoped commit, and the Status-executed +
+   `git mv` lifecycle move), keeping exactly one item in_progress at a time; THEN implement,
+   run the suite (paste real output), update docs/CHANGELOG, commit path-scoped (never push
+   without direction). Every per-phase IPD's gate MUST carry this "create a TodoWrite
+   checklist first" instruction.
 5. On completion, its Status becomes `executed` and the per-phase IPD is moved to
    `.agents/plans/executed/`.
 
