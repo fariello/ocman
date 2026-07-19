@@ -61,6 +61,9 @@ from .core import (
     extract_sessions_before_delete,
     resolve_extract_output_dir,
     clear_history_ledger,
+    db_delete_sessions_batch,
+    chunk_turns,
+    part_recovery_name,
 )
 from .widgets.sidebar import SidebarWidget
 from .widgets.database import DatabaseAdminWidget
@@ -152,6 +155,51 @@ class ClearHistoryModal(ModalScreen[bool]):
             self.dismiss(False)
         elif event.button.id == "btn-confirm-clear-history":
             self.dismiss(True)
+
+
+class BatchDeleteModal(ModalScreen[Optional[dict]]):
+    """Typed-yes confirmation for deleting MANY selected sessions in one batch.
+
+    Dismisses None on cancel, or {"extracts": bool} on confirm (whether to write recovery
+    extracts for the selected sessions first). db_delete_sessions_batch does not confirm on
+    its own, so this modal is the required gate.
+    """
+    def __init__(self, count: int) -> None:
+        super().__init__()
+        self._count = count
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("CONFIRM BATCH SESSION DELETION", id="dialog-title"),
+            Label(f"You are about to delete {self._count} selected session(s) and their "
+                  "subagent descendants, in one consolidated operation. A single rollback "
+                  "backup is taken first. This is irreversible.", classes="info-value"),
+            Checkbox("Write recovery extracts first (.prompt/.restart/.transcript)",
+                     value=True, id="check-batch-extracts"),
+            Label("Type 'yes' below to confirm:", classes="info-label"),
+            Input(placeholder="Type 'yes' to confirm", id="input-batch-yes"),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-batch-del"),
+                Button("CONFIRM BATCH DELETE", id="btn-confirm-batch-del",
+                       variant="error", disabled=True),
+                classes="horizontal-buttons",
+            ),
+            id="dialog-container",
+        )
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "input-batch-yes":
+            self.query_one("#btn-confirm-batch-del", Button).disabled = (
+                event.value.strip().lower() != "yes")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-batch-del":
+            self.dismiss(None)
+        elif event.button.id == "btn-confirm-batch-del":
+            extracts = True
+            with contextlib.suppress(Exception):
+                extracts = self.query_one("#check-batch-extracts", Checkbox).value
+            self.dismiss({"extracts": bool(extracts)})
 
 
 class DeletionSafetyModal(ModalScreen[Optional[dict]]):
@@ -803,6 +851,7 @@ class OrsessionApp(App):
         Binding("ctrl+q", "quit", "Quit", show=True),
         Binding("ctrl+s", "toggle_sidebar", "Toggle Sidebar", show=True),
         Binding("ctrl+r", "refresh_data", "Refresh", show=True),
+        Binding("space", "toggle_select", "Select/Deselect session", show=True),
     ]
 
     # Custom messages
@@ -813,6 +862,7 @@ class OrsessionApp(App):
     def __init__(self) -> None:
         super().__init__()
         self.temp_dir = Path(tempfile.mkdtemp(prefix="ocman-tui-"))
+        self.selected_session_ids: set[str] = set()  # multi-select batch set
         self.selected_session_id: Optional[str] = None
         self.selected_session_title: str = ""
         self.selected_project_id: Optional[str] = None
@@ -871,6 +921,8 @@ class OrsessionApp(App):
                                 with Vertical(classes="panel-card"):
                                     yield Label("RECOVERY FILE GENERATOR", classes="panel-card-title")
                                     yield Label("Write raw/restart context files to disk:", classes="info-label")
+                                    yield Checkbox("Split into parts (chunk) instead of one file",
+                                                   value=False, id="check-chunk")
                                     yield Button("Write Transcript (.transcript.md)", id="btn-write-transcript")
                                     yield Button("Write Restart Wrapper (.restart.md)", id="btn-write-restart")
                                     yield Button("Write Compaction Prompt (.compact-prompt.md)", id="btn-write-prompt")
@@ -893,6 +945,16 @@ class OrsessionApp(App):
                                     yield Button("Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
                                     yield Button("Move/Update Path", id="btn-move-project", disabled=True)
                                     yield Button("Export Session Bundle", id="btn-export-session", disabled=True)
+                                # Multi-select batch actions (press Space on a session in the
+                                # sidebar to add/remove it from the selection).
+                                yield Static("No sessions selected for batch actions. "
+                                             "Press Space on a session in the sidebar to select.",
+                                             id="lbl-batch-selection", classes="info-label")
+                                with Horizontal():
+                                    yield Button("Batch Delete Selected", id="btn-batch-delete",
+                                                 variant="error", disabled=True)
+                                    yield Button("Batch Export Selected", id="btn-batch-export",
+                                                 disabled=True)
                     
                     # Tab 3: Database Admin
                     with TabPane("Database Admin", id="tab-admin"):
@@ -1064,8 +1126,40 @@ class OrsessionApp(App):
     def action_refresh_data(self) -> None:
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.load_audit_trail()
+        self.selected_session_ids.clear()
+        self._refresh_batch_ui()
         with contextlib.suppress(Exception):
             self.query_one(DatabaseAdminWidget).refresh_metrics()
+
+    def action_toggle_select(self) -> None:
+        """Toggle the highlighted sidebar session into/out of the batch selection set."""
+        sidebar = self.query_one("#sidebar", SidebarWidget)
+        node = getattr(sidebar, "cursor_node", None)
+        data = getattr(node, "data", None) if node else None
+        if not data or data.get("type") != "session":
+            self.notify("Highlight a session in the sidebar, then press Space to select it.",
+                        severity="warning")
+            return
+        sid = data["id"]
+        if sid in self.selected_session_ids:
+            self.selected_session_ids.discard(sid)
+        else:
+            self.selected_session_ids.add(sid)
+        self._refresh_batch_ui()
+
+    def _refresh_batch_ui(self) -> None:
+        """Reflect the batch selection count in the label + enable/disable batch buttons."""
+        n = len(self.selected_session_ids)
+        with contextlib.suppress(Exception):
+            lbl = self.query_one("#lbl-batch-selection", Static)
+            if n == 0:
+                lbl.update("No sessions selected for batch actions. "
+                           "Press Space on a session in the sidebar to select.")
+            else:
+                lbl.update(f"{n} session(s) selected for batch actions.")
+        with contextlib.suppress(Exception):
+            self.query_one("#btn-batch-delete", Button).disabled = (n == 0)
+            self.query_one("#btn-batch-export", Button).disabled = (n == 0)
 
     def on_orsession_app_refresh_sidebar(self, event: RefreshSidebar) -> None:
         self.query_one("#sidebar", SidebarWidget).load_data()
@@ -1262,6 +1356,10 @@ class OrsessionApp(App):
             self.confirm_and_move_project()
         elif event.button.id == "btn-export-session":
             self.confirm_and_export_session()
+        elif event.button.id == "btn-batch-delete":
+            self.confirm_and_batch_delete()
+        elif event.button.id == "btn-batch-export":
+            self.batch_export_selected()
 
         # Clear the activity ledger (runs + all-time totals), with typed-yes confirm.
         elif event.button.id == "btn-clear-history-log":
@@ -1321,27 +1419,42 @@ class OrsessionApp(App):
             raw: dict = field(default_factory=dict)
         dummy_sess = DummySession(self.selected_session_id, self.selected_session_title, "", "")
 
-        if button_id == "btn-write-transcript":
-            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "transcript")
-            content = render_transcript(turns, self.selected_session_title)
-            write_text(path, content)
-            self.app.notify(f"Transcript written to: {path}", severity="information")
+        kind = {"btn-write-transcript": "transcript",
+                "btn-write-restart": "restart",
+                "btn-write-prompt": "prompt"}.get(button_id)
+        if kind is None:
+            return
+        src = f"session_export_{self.selected_session_id[:8]}"
 
-        elif button_id == "btn-write-restart":
-            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "restart")
-            content = render_restart_context(turns, f"session_export_{self.selected_session_id[:8]}", dummy_sess)
-            write_text(path, content)
-            self.app.notify(f"Restart file written to: {path}", severity="information")
+        def _render(kind_: str, part_turns: list) -> str:
+            if kind_ == "transcript":
+                return render_transcript(part_turns, self.selected_session_title)
+            if kind_ == "restart":
+                return render_restart_context(part_turns, src, dummy_sess)
+            return render_compact_prompt(part_turns, source_name=src, session=dummy_sess)
 
-        elif button_id == "btn-write-prompt":
-            path = out_dir / canonical_recovery_name(self.selected_session_id, now, "prompt")
-            content = render_compact_prompt(
-                turns,
-                source_name=f"session_export_{self.selected_session_id[:8]}",
-                session=dummy_sess,
-            )
-            write_text(path, content)
-            self.app.notify(f"Compaction prompt written to: {path}", severity="information")
+        chunk = False
+        with contextlib.suppress(Exception):
+            chunk = self.query_one("#check-chunk", Checkbox).value
+
+        if chunk:
+            cfg = load_ocman_config()
+            max_i = int(cfg.get("chunk_max_interactions", 100))
+            max_l = int(cfg.get("chunk_max_lines", 2500))
+            parts = chunk_turns(turns, max_interactions=max_i, max_lines=max_l)
+            total = len(parts)
+            written = []
+            for idx, part in enumerate(parts, start=1):
+                path = out_dir / part_recovery_name(self.selected_session_id, now, kind, idx, total)
+                write_text(path, _render(kind, part))
+                written.append(path)
+            self.app.notify(
+                f"Wrote {len(written)} {kind} part file(s) (.part-NNof{total:02d}) to {out_dir}",
+                severity="information")
+        else:
+            path = out_dir / canonical_recovery_name(self.selected_session_id, now, kind)
+            write_text(path, _render(kind, turns))
+            self.app.notify(f"{kind.capitalize()} written to: {path}", severity="information")
 
     def run_llm_compaction(self) -> None:
         """Call external model completions API in a background thread."""
@@ -1672,6 +1785,76 @@ class OrsessionApp(App):
             ExportSessionModal(self.selected_session_id, self.selected_session_title),
             handle_export_completion
         )
+
+    def confirm_and_batch_delete(self) -> None:
+        """Confirm, then delete all selected sessions in one consolidated batch."""
+        ids = sorted(self.selected_session_ids)
+        if not ids:
+            self.app.notify("No sessions selected. Press Space on sessions in the sidebar.",
+                            severity="warning")
+            return
+
+        def handle(result: Optional[dict]) -> None:
+            if not result:
+                return
+            extracts = bool(result.get("extracts", True))
+            self.app.notify(f"Batch-deleting {len(ids)} session(s) in background...",
+                            severity="information")
+            self.run_worker(lambda: self._do_batch_delete_worker(ids, extracts), thread=True)
+
+        self.app.push_screen(BatchDeleteModal(len(ids)), handle)
+
+    def _do_batch_delete_worker(self, session_ids: list, extracts: bool) -> None:
+        try:
+            if extracts:
+                # Reuse the Phase 1 helper: expand each id's subtree, extract, best-effort.
+                self._write_delete_extracts(session_ids, expand_descendants=True)
+            db_delete_sessions_batch(
+                session_ids, dry_run=False, force=True, verbosity=0,
+            )
+            def done() -> None:
+                self.app.notify(f"Batch-deleted {len(session_ids)} session(s).",
+                                severity="information")
+                self.selected_session_ids.clear()
+                self._refresh_batch_ui()
+                self.action_refresh_data()
+            self._safe_call_from_thread(done)
+        except Exception as e:  # noqa: BLE001
+            self._safe_call_from_thread(self.app.notify,
+                                        f"Batch deletion failed: {e}", severity="error")
+
+    def batch_export_selected(self) -> None:
+        """Export each selected session to its own .ocbox in the configured out-dir."""
+        ids = sorted(self.selected_session_ids)
+        if not ids:
+            self.app.notify("No sessions selected. Press Space on sessions in the sidebar.",
+                            severity="warning")
+            return
+        self.app.notify(f"Exporting {len(ids)} session(s) in background...",
+                        severity="information")
+        self.run_worker(lambda: self._do_batch_export_worker(ids), thread=True)
+
+    def _do_batch_export_worker(self, session_ids: list) -> None:
+        from .core import load_ocman_config, bundle_session_data
+        out_dir = Path(load_ocman_config().get("default_out_dir", "opencode-recovery"))
+        try:
+            out_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            self._safe_call_from_thread(self.app.notify,
+                                        f"Cannot create export dir: {e}", severity="error")
+            return
+        written = 0
+        for sid in session_ids:
+            try:
+                dest = out_dir / f"{sid}.ocbox"
+                bundle_session_data(sid, dest)
+                written += 1
+            except Exception as e:  # noqa: BLE001 - one failure should not stop the rest
+                self._safe_call_from_thread(
+                    self.app.notify, f"Export failed for {sid[:8]}: {e}", severity="warning")
+        self._safe_call_from_thread(
+            self.app.notify, f"Exported {written} of {len(session_ids)} session(s) to {out_dir}",
+            severity="information")
 
     def _do_delete_project_worker(self, project_id: str, project_name: str, extracts: bool = True) -> None:
         db_path = get_db_path()

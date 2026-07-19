@@ -878,3 +878,165 @@ async def test_tui_running_tab_fail_loud(tui_db, monkeypatch):
         assert rw.query_one("#running-table", DataTable).row_count == 0
 
 
+# --- Phase 4: bulk multi-select, db-clean duration/scope, chunk --------------
+
+@pytest.mark.anyio
+async def test_tui_multiselect_and_batch_delete(tui_db, tmp_path):
+    """Phase 4: multi-select two sessions, confirm batch delete, both are removed in one
+    pass and recovery extracts are written first."""
+    from ocman_tui.app import BatchDeleteModal
+    _seed_tui_conversation(tui_db)  # gives sess1 a conversation
+    # Add a second deletable root session with a conversation.
+    conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, parent_id) VALUES ('sessX','proj1','SX',1000,2000,'/path/to/proj','')")
+    cur.execute("INSERT INTO message VALUES ('mx','sessX',1000,1000,?)", ('{"role":"user"}',))
+    cur.execute("INSERT INTO part VALUES ('px','mx','sessX',1000,1000,?)",
+                ('{"type":"text","text":"second session content"}',))
+    conn.commit(); conn.close()
+
+    out = tmp_path / "batch-recovery"
+    cfg = ocman.load_ocman_config(); cfg["default_out_dir"] = str(out)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.selected_session_ids = {"sess1", "sessX"}
+        app._refresh_batch_ui()
+        await pilot.pause()
+        assert app.query_one("#btn-batch-delete", Button).disabled is False
+        app.confirm_and_batch_delete()
+        await pilot.pause()
+        assert isinstance(app.screen, BatchDeleteModal)
+        app.screen.query_one("#input-batch-yes", Input).value = "yes"
+        await pilot.pause()
+        app.screen.query_one("#btn-confirm-batch-del", Button).press()
+        for _ in range(80):
+            conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+            cur.execute("SELECT COUNT(*) FROM session WHERE id IN ('sess1','sessX')")
+            remaining = cur.fetchone()[0]; conn.close()
+            if remaining == 0:
+                break
+            await pilot.pause(0.1)
+    conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session WHERE id IN ('sess1','sessX')")
+    assert cur.fetchone()[0] == 0
+    conn.close()
+    # Extracts written for the batch.
+    assert out.exists() and any(p.name.endswith(".restart.md") for p in out.iterdir())
+
+
+@pytest.mark.anyio
+async def test_tui_batch_delete_cancel_deletes_nothing(tui_db):
+    """Phase 4: cancelling the batch-delete confirm deletes nothing."""
+    from ocman_tui.app import BatchDeleteModal
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.selected_session_ids = {"sess1"}
+        app._refresh_batch_ui()
+        app.confirm_and_batch_delete()
+        await pilot.pause()
+        assert isinstance(app.screen, BatchDeleteModal)
+        app.screen.query_one("#btn-cancel-batch-del", Button).press()
+        await pilot.pause()
+    conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM session WHERE id='sess1'")
+    assert cur.fetchone()[0] == 1  # still there
+    conn.close()
+
+
+@pytest.mark.anyio
+async def test_tui_batch_export(tui_db, tmp_path):
+    """Phase 4: batch export writes one .ocbox per selected session."""
+    _seed_tui_conversation(tui_db)
+    out = tmp_path / "batch-export"
+    cfg = ocman.load_ocman_config(); cfg["default_out_dir"] = str(out)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.selected_session_ids = {"sess1"}
+        app._refresh_batch_ui()
+        app.batch_export_selected()
+        for _ in range(60):
+            if out.exists() and any(p.suffix == ".ocbox" for p in out.iterdir()):
+                break
+            await pilot.pause(0.1)
+    assert out.exists()
+    assert any(p.name == "sess1.ocbox" for p in out.iterdir())
+
+
+@pytest.mark.anyio
+async def test_tui_prune_duration_and_scope(tui_db):
+    """Phase 4: the prune UI parses a duration string and honors it (delegates to
+    db_run_cleanup with the parsed days)."""
+    from textual.widgets import TabbedContent
+    captured = {}
+
+    def fake_cleanup(**kwargs):
+        captured.update(kwargs)
+    import ocman_tui.widgets.database as dbmod
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-admin"
+        await pilot.pause()
+        widget = app.query_one(DatabaseAdminWidget)
+        # Patch the cleanup entry point the widget calls.
+        orig = dbmod.db_run_cleanup
+        dbmod.db_run_cleanup = lambda **k: fake_cleanup(**k)
+        try:
+            widget.query_one("#input-retention-duration", Input).value = "6w"
+            widget.query_one("#check-dry-run", Checkbox).value = True
+            widget.run_prune_operation()
+            for _ in range(40):
+                if captured:
+                    break
+                await pilot.pause(0.1)
+        finally:
+            dbmod.db_run_cleanup = orig
+    assert captured, "db_run_cleanup was not called"
+    assert abs(captured["days"] - 42.0) < 0.001  # 6 weeks = 42 days
+
+
+@pytest.mark.anyio
+async def test_tui_recovery_chunk_writes_parts(tui_db, tmp_path):
+    """Phase 4: the chunk checkbox produces multiple .part-NNofMM files covering all turns.
+
+    Uses > default chunk_max_interactions (100) worth of interactions so the split does not
+    depend on custom caps (the TUI's config auto-save does not persist chunk_max_* keys).
+    """
+    from ocman.cli import Turn
+
+    out = tmp_path / "chunk-out"
+    cfg = ocman.load_ocman_config()
+    cfg["default_out_dir"] = str(out)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    # 150 user+assistant interactions -> exceeds the default 100/part cap -> >=2 parts.
+    many = []
+    for i in range(150):
+        many.append(Turn(role="user", text=f"user message number {i} asking to do a thing",
+                         index=2 * i + 1, source="x"))
+        many.append(Turn(role="assistant", text=f"assistant reply number {i} doing the thing",
+                         index=2 * i + 2, source="x"))
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.selected_session_id = "sess1"
+        app.selected_session_title = "S1"
+        app.current_turns = many
+        app.query_one("#check-chunk", Checkbox).value = True
+        await pilot.pause()
+        app.generate_recovery_files("btn-write-transcript")
+        await pilot.pause()
+    parts = sorted(p.name for p in out.iterdir()
+                   if ".part-" in p.name and p.name.endswith(".transcript.md"))
+    assert len(parts) >= 2
+
+

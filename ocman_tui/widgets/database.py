@@ -236,6 +236,16 @@ class DatabaseAdminWidget(Static):
                         Input("5", id="input-retention-days", placeholder="e.g. 5"),
                     ),
                     Horizontal(
+                        Label("Or duration:", classes="info-label"),
+                        Input("", id="input-retention-duration",
+                              placeholder="e.g. 2h, 6w, 6mo, 1y (overrides days)"),
+                    ),
+                    Horizontal(
+                        Label("Project scope (optional):", classes="info-label"),
+                        Input("", id="input-prune-project",
+                              placeholder="project name/number/id/path; blank = all"),
+                    ),
+                    Horizontal(
                         Checkbox("Dry Run (Preview changes)", value=True, id="check-dry-run"),
                     ),
                     Horizontal(
@@ -243,6 +253,9 @@ class DatabaseAdminWidget(Static):
                     ),
                     Horizontal(
                         Checkbox("Sweep Orphans", value=True, id="check-sweep-orphans"),
+                    ),
+                    Horizontal(
+                        Checkbox("Write recovery extracts first", value=True, id="check-prune-extracts"),
                     ),
                     id="ops-fields"
                 )
@@ -350,30 +363,52 @@ class DatabaseAdminWidget(Static):
 
     def run_prune_operation(self) -> None:
         """Run prune clean operation and redirect prints to textual log."""
+        from .. import core
         log_widget = self.query_one("#live-log-output", RichLog)
         log_widget.clear()
 
-        # Gather form values
-        try:
-            days = int(self.query_one("#input-retention-days", Input).value)
-        except ValueError:
-            self.app.notify("Retention Days must be an integer.", severity="error")
-            return
+        # Resolve the retention window: a duration string (2h/6w/6mo/1y/"30 days")
+        # overrides the integer-days field when present.
+        duration = self.query_one("#input-retention-duration", Input).value.strip()
+        if duration:
+            try:
+                days = core.parse_duration_to_days(duration)
+            except Exception as e:  # noqa: BLE001
+                self.app.notify(f"Invalid duration '{duration}': {e}", severity="error")
+                return
+        else:
+            try:
+                days = int(self.query_one("#input-retention-days", Input).value)
+            except ValueError:
+                self.app.notify("Retention Days must be an integer (or set a duration).",
+                                severity="error")
+                return
 
         dry_run = self.query_one("#check-dry-run", Checkbox).value
         force = self.query_one("#check-force", Checkbox).value
         sweep_orphans = self.query_one("#check-sweep-orphans", Checkbox).value
+        extracts = self.query_one("#check-prune-extracts", Checkbox).value
 
-        # Inform user
+        # Optional project scope.
+        project_spec = self.query_one("#input-prune-project", Input).value.strip()
+        project_id = None
+        project_dir = None
+        if project_spec:
+            found = core.db_find_project(project_spec)
+            if not found:
+                self.app.notify(f"Project '{project_spec}' not found.", severity="error")
+                return
+            project_id, project_dir = found
+
         self.app.notify("Running prune operation in background...", severity="information")
-
-        # Run in worker thread
         self.run_worker(
-            lambda: self._do_prune_worker(days, dry_run, force, sweep_orphans, log_widget),
+            lambda: self._do_prune_worker(days, dry_run, force, sweep_orphans,
+                                          project_id, project_dir, extracts, log_widget),
             thread=True
         )
 
-    def _do_prune_worker(self, days: int, dry_run: bool, force: bool, sweep_orphans: bool, log_widget: RichLog) -> None:
+    def _do_prune_worker(self, days, dry_run: bool, force: bool, sweep_orphans: bool,
+                         project_id, project_dir, extracts: bool, log_widget: RichLog) -> None:
         import builtins
         original_input = builtins.input
         builtins.input = lambda *args, **kwargs: "yes"
@@ -382,12 +417,14 @@ class DatabaseAdminWidget(Static):
             with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
                 db_run_cleanup(
                     days=days,
-                    project_id=None,
-                    project_dir=None,
+                    project_id=project_id,
+                    project_dir=project_dir,
                     dry_run=dry_run,
                     force=force,
                     clean_orphans=sweep_orphans,
-                    verbosity=0
+                    verbosity=0,
+                    assume_yes=True,
+                    extracts=extracts,
                 )
             self.app._safe_call_from_thread(self.app.notify, "Prune operation finished.", severity="information")
         except Exception as e:

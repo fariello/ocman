@@ -4,7 +4,8 @@
 - Concern: functionality (CLI<->TUI parity), ui-ux
 - Scope: sidebar multi-select + batch delete/export in `ocman_tui/`; the Database Admin
   prune UI (duration + scope + extracts); the recovery controls (chunk option).
-- Status: reviewed
+- Status: executed
+- Approval: approved by maintainer 2026-07-18
 - Author: its_direct/pt3-claude-opus-4.8
 - Set: tui-parity
 - Order: 4
@@ -18,6 +19,13 @@
   PR-003 (duration->days via parse_duration_to_days), PR-004 (chunk in the hand-rolled write
   path), PR-005 (execution contract), PR-006 (multi-select UX resolved) fixed.
   GO - PENDING HUMAN APPROVAL.
+- 2026-07-18 executed (its_direct/pt3-claude-opus-4.8): sidebar multi-select (Space) with a
+  batch-selection label; BatchDeleteModal (typed-yes + extract checkbox) -> confirm ->
+  _write_delete_extracts + db_delete_sessions_batch; batch export (one .ocbox per session);
+  prune UI duration string (parse_duration_to_days) + project scope + extract toggle; chunk
+  checkbox in the recovery-file generator (chunk_turns + part_recovery_name). 5 new TUI
+  tests. Full suite: 397 passed, 2 skipped. Discovered follow-up FU-01 (save_tui_config
+  resets unmanaged config keys); recorded in the roadmap, out of P4 scope.
 
 ## Goal
 

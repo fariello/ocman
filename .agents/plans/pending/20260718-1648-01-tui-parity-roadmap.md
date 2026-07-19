@@ -28,11 +28,23 @@ top-level tabs (maintainer decision, OQ-6).
 | 1 | Delete-safety: extract-on-delete in TUI + working clear-history | `executed/20260718-1648-02-tui-p1-delete-safety-ipd.md` | EXECUTED (commit 45eb8c4) |
 | 2 | Storage checkup (read-only doctor view) + guarded reclaim | `executed/20260718-1648-03-tui-p2-doctor-reclaim-ipd.md` | EXECUTED |
 | 3 | Reporting: spend + running views (read-only) | `executed/20260718-1648-04-tui-p3-spend-running-ipd.md` | EXECUTED |
-| 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `pending/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | reviewed (awaiting approval) |
+| 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `executed/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | EXECUTED |
 | 5 | Breadth: project bundles, local move, backup clean, content search | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | to-review |
 
 The one hard exclusion across all phases: the reclaim snapshot-force mode stays CLI-only
 (OQ-2); the TUI shows a note pointing to `ocman reclaim --force-snapshots` / `ocman doctor`.
+
+## Follow-ups discovered during execution (not in scope of the parity phases)
+
+- FU-01 (found in P4): `save_tui_config` (`ocman_tui/app.py`) writes only the keys the config
+  form manages, and `save_ocman_config` merges the passed subset over `DEFAULT_CONFIG` (not
+  over the EXISTING config). So a TUI config save silently RESETS unmanaged keys
+  (`chunk_max_interactions`, `chunk_max_lines`, `reclaim_*`, `filter_*`,
+  `copy_restart_to_project_prompts`, `history_max_runs`) to their defaults, discarding a
+  user's customization. Pre-existing (not introduced by the parity work) and out of the P4
+  scope fence. Recommend a small corrective IPD: either have `save_tui_config` load-merge
+  the current config before saving, or have `save_ocman_config` merge over the existing file
+  rather than over `DEFAULT_CONFIG`. Data-loss-of-config severity: Medium.
 
 ## Workflow history
 

@@ -14,6 +14,15 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **TUI parity, Phase 4 (bulk actions, duration prune, chunking).** The TUI sidebar now
+  supports multi-select (press Space on a session to add/remove it), enabling batch actions:
+  Batch Delete (one consolidated backup/transaction/VACUUM via the same path as the CLI,
+  behind a typed-yes confirmation that offers to write recovery extracts first) and Batch
+  Export (one `.ocbox` per selected session). The Database Admin prune form accepts a
+  duration string (2h/5d/6w/6mo/1y or "30 days") in addition to integer days, an optional
+  project scope, and a "write recovery extracts first" toggle. The recovery-file generator
+  gained a "Split into parts (chunk)" option that writes ordered `.part-NNofMM` files
+  instead of one file, matching `recover --chunk`.
 - **TUI parity, Phase 3 (spend + running views).** Two new read-only TUI tabs. "Spend"
   shows per-project LLM cost and split tokens (with an "include historical/deleted spend"
   toggle for the grand total), rendered from the same `gather_spend()` data the CLI uses,
