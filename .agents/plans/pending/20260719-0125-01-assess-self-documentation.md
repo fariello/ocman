@@ -6,13 +6,20 @@
   system, error messages, flag/command naming, first-run) and the TUI (`ocman_tui/`:
   labels, hints). Repo docs (README/ARCHITECTURE) are out of scope (that is the
   `documentation` lens, already assessed separately).
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
 
 - 2026-07-19 /assess self-documentation (its_direct/pt3-claude-opus-4.8): assessed the CLI
   and TUI for learn-as-you-go clarity; proposed 8 changes.
+- 2026-07-19 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED.
+  PR-001 ("Database not found" is at 7+ sites, not 2 -> fix all via a shared message/helper),
+  PR-002 (pin the SD-02 catch-all to the outer try at cli.py:15779/16309, use the in-scope
+  `verbosity`, no double "Error:" prefix), PR-003 (add concrete automated tests, not just
+  manual checks), PR-004 (SD-05: range OR token-set, do not fabricate a range). OQ-1 (reclaim
+  in help maintain + overview pointer) and OQ-2 (clean message default, traceback under -v)
+  resolved by the maintainer. GO - PENDING HUMAN APPROVAL.
 
 ## Goal
 
@@ -74,10 +81,10 @@ teaching-error and discoverability polish.
 | Step | Source | Change | Files | Rem.Risk | Validation |
 |------|--------|--------|-------|----------|------------|
 | 1 | SD-01 | Fix the two stale-flag error strings to name the real commands: `"Use 'ocman models' to see available models."` (`cli.py:828`) and `"Use 'ocman list projects' to see available projects."` (`cli.py:7525`). Grep the whole file for any other `--show-models` / `--list-projects` in user-facing strings and fix those too. | `ocman/cli.py` | Low | grep shows no user-facing `--show-models`/`--list-projects` remain; the two messages name commands that actually run. |
-| 2 | SD-02 | Add a top-level catch-all in `main()` after the `RecoveryError` handler: `except Exception as e:` -> if verbose (`args.verbose`/global) is set, re-raise (keep the traceback for debugging); otherwise `die(f"Unexpected error: {e}\n(run with -v for details)")`. Never leak a bare traceback on the normal path; never swallow the info a developer needs. | `ocman/cli.py` | Medium | A forced unexpected exception on the normal path prints a clean one-line error + the `-v` hint (no traceback); with `-v` the traceback still shows. Existing error paths unchanged. |
+| 2 | SD-02 | Add a top-level catch-all as the LAST handler on the outer `try:` in `main()` (the try opens at `cli.py:15779`; handlers are `except KeyboardInterrupt` `:16309` then `except RecoveryError` `:16312`). Add `except Exception as e:` AFTER the RecoveryError handler: if `verbosity` (the local at `cli.py:14805`, in scope in the handler) is truthy, `raise` (keep the full traceback for debugging); else `die(f"Unexpected error: {e}. Re-run with -v for the full traceback.")`. NOTE: `die` already prefixes `"Error: "` (`cli.py:1198`), so do NOT add another prefix. This must be the LAST except so it never shadows the KeyboardInterrupt/RecoveryError handling. | `ocman/cli.py` | Medium | A forced unexpected exception on the normal path prints a clean one-line `Error: Unexpected error: ...` with the `-v` hint and NO "Traceback" text on stderr; with `-v` the traceback still shows; KeyboardInterrupt (exit 130) and RecoveryError paths unchanged. |
 | 3 | SD-03 | Make the duration failure teach the valid formats at the point of use: include `"(accepted: 2h, 5d, 6w, 6mo, 1y, or '30 days')"` in the `DurationError` surfaced to the user (either in the messages at `cli.py:4935/4939/4941` or in the `_die_cli` wrapper at `cli.py:6558`; prefer the wrapper so the CLI-facing message is consistent). | `ocman/cli.py` | Low | `ocman db clean --older-than blah` prints an error that includes the accepted-format example. |
-| 4 | SD-04, SD-06 | Add a recovery hint to two common "not found" errors: `"Database not found at {path}"` -> add `"Point at a different database with --db PATH, or run OpenCode first to create one."`; `"Session {id} not found in database."` -> add `"Run 'ocman list sessions' to see available sessions."` | `ocman/cli.py` | Low | both messages now end with an actionable next step. |
-| 5 | SD-05 | Give the bare "Invalid selection/choice" prompts a valid-range hint (e.g. `"Invalid selection: {choice} (enter a number 1-{n})"`), where the range is known at the call site. | `ocman/cli.py` | Low | each interactive-selection error names the accepted range. |
+| 4 | SD-04, SD-06 | Add a recovery hint to the "not found" errors. NOTE (PR-001): `"Database not found at {path}"` appears at SEVEN+ sites (`cli.py:8064, 8612, 8793, 9763, 9810, 9859, 10848`), not two. Fix ALL of them consistently: EITHER route them through a single shared message/helper (preferred, e.g. a `_db_not_found_error()` returning the RecoveryError, so the wording lives in one place) OR grep-drive an identical edit to every occurrence. Append `"Point at a database with --db PATH, or run OpenCode first to create one."`. Also `"Session {id} not found in database."` (`cli.py:8087`) -> add `"Run 'ocman list sessions' to see available sessions."`; and `"Project with ID {id} not found in database."` (`cli.py:8808`) -> add `"Run 'ocman list projects' to see available projects."` | `ocman/cli.py` | Low | grep confirms EVERY "Database not found" occurrence carries the hint (no bare one remains); the session/project not-found messages end with an actionable next step. |
+| 5 | SD-05 | Give the bare "Invalid selection/choice" prompts a valid-range or valid-set hint. Where a numeric range is known at the call site (`cli.py:5320, 9283`), show it (e.g. `"Invalid selection: {choice} (enter a number 1-{n})"`); where the accepted options are a fixed token set rather than a range (`cli.py:7406` "Invalid choice."), show the accepted tokens instead. Do not fabricate a range that is not known at the site. | `ocman/cli.py` | Low | each interactive-selection error names the accepted range OR the accepted token set. |
 | 6 | SD-07 | Improve `reclaim` discoverability WITHOUT crowding the overview: add `reclaim` to the `maintain` help TOPIC (it is a maintenance capability), and add a one-line pointer in the overview's maintain group (e.g. under `doctor`) like `"reclaim   reclaim disk (see 'ocman help maintain')"`. Do not dump all reclaim flags into the overview. | `ocman/cli.py` (`build_help` / the maintain topic) | Low | `ocman help maintain` shows `reclaim`; the overview points to it; `help all` unchanged. |
 | 7 | SD-08 | Make the two TUI reclaim button faces self-explaining: `"Checkpoint + VACUUM"` -> `"Compact database (checkpoint + VACUUM)"`; `"Reclaim compacted parts"` -> `"Reclaim compacted tool output (parts)"`. Keep the confirm-modal preview as the detailed explanation. | `ocman_tui/widgets/storage.py` | Low | button labels convey intent without opening the modal; storage tests still pass. |
 
@@ -98,13 +105,20 @@ teaching-error and discoverability polish.
 ## Required tests / validation
 
 - `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output.
-- Targeted checks: `ocman db clean --older-than nope` shows the accepted formats;
-  a model-not-found and project-not-found error name real commands; a forced unexpected
-  exception yields a clean message (no traceback) without `-v` and a traceback with `-v`;
-  `ocman help maintain` lists `reclaim`; the TUI storage buttons read clearly (storage tests
-  green).
-- Add/extend unit tests where a helper is touched (e.g. the duration error text; the stale
-  strings). No em/en dashes introduced.
+- Concrete automated tests to ADD (PR-003), not just manual checks:
+  - SD-01: a test asserting no user-facing `--show-models` / `--list-projects` string remains
+    in `ocman/cli.py` (grep-style assertion over the source, or assert the two specific error
+    strings now contain `ocman models` / `ocman list projects`).
+  - SD-02: drive `main()` (or the outer handler) with a forced non-RecoveryError exception and
+    assert stderr contains `Error: Unexpected error:` and NOT `Traceback` when `-v` is absent;
+    and that `-v` propagates the exception (traceback shown / re-raised). Use the existing
+    argv-monkeypatch + capsys pattern used by other `main()` tests.
+  - SD-03: assert the CLI duration-failure path (`db clean --older-than nope`, or `_die_cli`)
+    output contains the accepted-format example (e.g. `6mo`).
+  - SD-04/06: assert a representative "Database not found" and "Session not found" message now
+    contains its recovery hint.
+- Manual checks: `ocman help maintain` lists `reclaim`; the TUI storage buttons read clearly
+  (existing storage tests stay green). No em/en dashes introduced.
 
 ## Spec / documentation sync
 
@@ -113,11 +127,13 @@ A short CHANGELOG "Fixed"/"Changed" note for the stale-flag errors and the trace
 
 ## Open questions
 
-- OQ-1 (SD-07): is keeping `reclaim` out of the plain overview intentional enough that you
-  want ONLY the `help maintain` addition (not the overview pointer)? Leaning: add it to
-  `help maintain` at minimum; the overview pointer is optional.
-- OQ-2 (SD-02): on an unexpected exception, prefer `die(...)` with a `-v` hint (proposed), or
-  always show the traceback? Leaning: clean message by default, traceback under `-v`.
+- OQ-1 (SD-07): RESOLVED (maintainer 2026-07-19) - add `reclaim` to the `help maintain`
+  topic AND a one-line pointer in the overview's maintain group (Step 6 reflects this; the
+  overview pointer is now required, not optional).
+- OQ-2 (SD-02): RESOLVED (maintainer 2026-07-19) - clean message by default, full traceback
+  only under `-v` (Step 2 reflects this).
+
+No open questions remain.
 
 ## Approval and execution gate
 
