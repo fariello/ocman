@@ -7,3 +7,13 @@
 #
 # This baseline starts empty. Example (commented out):
 # 0a1b2c3d4e5f6a7b8c9d:tests/fixtures/sample.env:generic-api-key:12
+
+# Confirmed false positives: synthetic AWS-key-shaped strings in tests/test_ocman.py that
+# exercise ocman's own secret-detection/redaction feature (e.g. "Here is my aws token
+# AKIA... on this line"). These are NOT live credentials; there is nothing to rotate.
+6985a1b9ed51f35650220a8dc41b7eb3f07a046e:tests/test_ocman.py:aws-access-token:2630
+6985a1b9ed51f35650220a8dc41b7eb3f07a046e:tests/test_ocman.py:aws-access-token:2684
+63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2182
+63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2187
+63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2208
+63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2211

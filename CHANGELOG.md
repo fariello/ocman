@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-07-19
+
 ### Changed
 - **Unified, richer session listings.** `session list` (and `ls` / `list sessions`),
   `search`, and the interactive session pickers now render every session through one
