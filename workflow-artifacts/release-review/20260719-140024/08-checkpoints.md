@@ -19,3 +19,6 @@
 
 ## Section 6 (compatibility/packaging/release) - complete
 - Wheel builds; entry point + both packages + script present; PyPI latest 1.1.0 -> 1.2.0 valid; CI adequate (matrix + secret-scan); no breaking changes; no SCH/CI findings. Committed.
+
+## Section 7 (implementation) - complete
+- A1 version bump 1.2.0 + CHANGELOG cut; A2 gitleaks baseline (6 fps); A3 wheel rebuild verify. Product commit 2554395. Re-validated: -V=1.2.0, gitleaks clean, 407 passed, wheel 1.2.0. Committed.

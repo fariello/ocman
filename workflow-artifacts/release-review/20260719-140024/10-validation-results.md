@@ -16,3 +16,10 @@ Each shipped feature carries dedicated tests (43 matched by name):
   db_not_found hint, unexpected-exception traceback guard, bare-word help.
 
 ## Packaging / build - deferred to Section 6.
+
+## Section 7 (post-implementation) re-validation
+- `ocman -V` -> `ocman 1.2.0`.
+- `gitleaks detect` (353 commits) -> **no leaks found** (baseline effective).
+- Full suite re-run: **407 passed, 2 skipped** (unchanged; bump/CHANGELOG/baseline are
+  non-behavioral).
+- `python -m build --wheel` -> **ocman-1.2.0-py3-none-any.whl** built cleanly.
