@@ -10,3 +10,6 @@
 
 ## Section 3 (tests/regression) - complete
 - Full suite green (407 passed, 2 skipped). New-feature coverage confirmed. Committed.
+
+## Section 4 (docs/specs) - complete
+- Docs accurate (no stale claims; valid+complete config template; features documented; 9-tab TUI described). Cold-start adequate via README/ARCHITECTURE/CHANGELOG + executed IPDs. No findings. Committed.

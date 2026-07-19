@@ -21,3 +21,7 @@
 
 ## Section 3 (tests/regression)
 - Testing expert (2): 276 tests; full suite 407 passed / 2 skipped; every release-cycle feature has dedicated coverage incl. the fail-loud and negative-path tests. No untested critical path.
+
+## Section 4 (docs/specs)
+- Novice (7): README documents every new command + the 9 TUI tabs; config template is copy-paste valid TOML; self-doc pass already fixed dead-end errors this cycle. A new user can orient without external docs.
+- UI/UX (3): CHANGELOG + README terminology consistent with the CLI/TUI; no documented-but-unimplemented behavior found.
