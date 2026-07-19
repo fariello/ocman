@@ -14,6 +14,15 @@
   "Duration" is derived from the timestamps (there is no separate "finished" marker).
 
 ### Added
+- **TUI parity, Phase 5 (project bundles, move, backup clean, search, filter).** Completes
+  CLI/TUI parity. The TUI can now export a whole project to an `.ocbox` bundle and import
+  either a session or a project bundle (auto-detected from the bundle). It gains a local
+  session move (updates the session's working directory; remote/git-aware moves stay on the
+  CLI, with an in-app note), a "Prune Old Backups" action, a session content-search box
+  (results select into the current session), and a "Filter" action that re-scopes a
+  recovery/compacted document via the LLM using the same egress guards as compaction. Also
+  hardened the transcript-export worker's error path (it no longer touches a widget off the
+  UI thread, so a background export failing while a modal is open cannot crash the worker).
 - **TUI parity, Phase 4 (bulk actions, duration prune, chunking).** The TUI sidebar now
   supports multi-select (press Space on a session to add/remove it), enabling batch actions:
   Batch Delete (one consolidated backup/transaction/VACUUM via the same path as the CLI,

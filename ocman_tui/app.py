@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
-    Header, Footer, Static, Button, Checkbox, Input, Label, Select, TabbedContent, TabPane, Markdown, RichLog, Tree
+    Header, Footer, Static, Button, Checkbox, Input, Label, Select, TabbedContent, TabPane, Markdown, RichLog, Tree, DataTable
 )
 from textual.screen import ModalScreen
 from textual.binding import Binding
@@ -58,6 +58,8 @@ from .core import (
     db_move_project_metadata,
     bundle_session_data,
     extract_and_import_session,
+    bundle_project_data,
+    extract_and_import_project,
     extract_sessions_before_delete,
     resolve_extract_output_dir,
     clear_history_ledger,
@@ -647,23 +649,170 @@ class MoveProjectModal(ModalScreen[bool]):
             self.app._safe_call_from_thread(update_failure)
 
 
-class ExportSessionModal(ModalScreen[bool]):
-    """Modal screen for exporting a session and descendants to .ocbox bundle."""
-    def __init__(self, session_id: str, title: str) -> None:
+class MoveSessionModal(ModalScreen[bool]):
+    """Local session move: update the session's working directory in the DB (metadata-only).
+
+    Remote/git-aware move stays on the CLI (`ocman session move ID --to host:/path`); a note
+    says so. This modal performs the local DB metadata update via db_move_session_metadata.
+    """
+    def __init__(self, session_id: str, title: str, current_dir: str) -> None:
         super().__init__()
         self.session_id = session_id
         self.session_title = title
+        self.current_dir = current_dir or ""
+
+    def compose(self) -> ComposeResult:
+        yield Container(
+            Label("MOVE SESSION (local, metadata)", id="dialog-title"),
+            VerticalScroll(
+                Label(f"Session: {self.session_title} [{self.session_id[:8]}]", classes="info-label"),
+                Label(f"Current directory: {self.current_dir or '(unknown)'}", classes="info-label"),
+                Label("New directory:", classes="info-label"),
+                Input(value=self.current_dir, placeholder="e.g. ~/VC/moved-project", id="input-move-session-dir"),
+                Label("Remote / git-aware moves stay on the CLI: "
+                      "ocman session move <id> --to host:/path", classes="info-value"),
+                id="move-session-scroll",
+            ),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-move-session"),
+                Button("MOVE", id="btn-submit-move-session", variant="primary"),
+                classes="horizontal-buttons",
+            ),
+            id="dialog-container",
+        )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-cancel-move-session":
+            self.dismiss(False)
+        elif event.button.id == "btn-submit-move-session":
+            new_dir = self.query_one("#input-move-session-dir", Input).value.strip()
+            if not new_dir:
+                self.app.notify("New directory cannot be empty.", severity="warning")
+                return
+            self.app.notify("Moving session (metadata) in background...", severity="information")
+            self.run_worker(lambda: self._do_move_worker(new_dir), thread=True)
+
+    def _do_move_worker(self, new_dir: str) -> None:
+        from .core import db_move_session_metadata
+        try:
+            db_move_session_metadata(self.session_id, self.current_dir, new_dir)
+
+            def ok() -> None:
+                self.app.notify("Session directory updated.", severity="information")
+                self.dismiss(True)
+            self.app._safe_call_from_thread(ok)
+        except Exception as e:  # noqa: BLE001
+            self.app._safe_call_from_thread(
+                self.app.notify, f"Session move failed: {e}", severity="error")
+
+
+class FilterModal(ModalScreen[bool]):
+    """LLM re-scope a recovery/compacted document to a project/scope (CLI `filter` parity).
+
+    Reuses cli_filter, which enforces the same egress guards as compaction (size cap
+    filter_max_bytes + secret/PII scan). Runs in a worker; the cost confirmation is
+    auto-accepted (the user opted in by launching it) and output is captured to a log.
+    """
+    def compose(self) -> ComposeResult:
+        from textual.widgets import Select
+        yield Container(
+            Label("FILTER (LLM RE-SCOPE A DOCUMENT)", id="dialog-title"),
+            VerticalScroll(
+                Label("Input document (.md/.txt recovery or compacted file):", classes="info-label"),
+                Input(placeholder="e.g. ./opencode-recovery/...restart.md", id="input-filter-src"),
+                Label("Scope (free text describing what to keep):", classes="info-label"),
+                Input(placeholder="e.g. only the auth refactor", id="input-filter-scope"),
+                Label("Model:", classes="info-label"),
+                Select([], prompt="Choose model...", id="select-filter-model"),
+                Static("Egress guards apply (size cap + secret scan), same as compaction.",
+                       classes="info-value"),
+                id="filter-scroll",
+            ),
+            Horizontal(
+                Button("Cancel", id="btn-cancel-filter"),
+                Button("RUN FILTER", id="btn-submit-filter", variant="success"),
+                classes="horizontal-buttons",
+            ),
+            id="dialog-container",
+        )
+
+    def on_mount(self) -> None:
+        from textual.widgets import Select
+        opts = []
+        try:
+            config = load_opencode_config()
+            models = extract_models_from_config(config)
+            opts = [(m.name, f"{m.provider_id}/{m.model_id}")
+                    for m in models if m.compatible and m.api_key and m.base_url]
+        except Exception:
+            opts = []
+        self.query_one("#select-filter-model", Select).set_options(opts)
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        from textual.widgets import Select
+        if event.button.id == "btn-cancel-filter":
+            self.dismiss(False)
+        elif event.button.id == "btn-submit-filter":
+            src = self.query_one("#input-filter-src", Input).value.strip()
+            scope = self.query_one("#input-filter-scope", Input).value.strip()
+            model = self.query_one("#select-filter-model", Select).value
+            if not src:
+                self.app.notify("Input document path is required.", severity="warning")
+                return
+            if not scope:
+                self.app.notify("A scope is required.", severity="warning")
+                return
+            if not model or model == Select.BLANK:
+                self.app.notify("Choose a model.", severity="warning")
+                return
+            self.app.notify("Running filter in background...", severity="information")
+            self.run_worker(
+                lambda: self._do_filter_worker(Path(src).expanduser(), scope, str(model)),
+                thread=True)
+
+    def _do_filter_worker(self, src: Path, scope: str, model_spec: str) -> None:
+        from .core import cli_filter
+        import builtins
+        original_input = builtins.input
+        builtins.input = lambda *a, **k: "yes"  # auto-accept the cost confirmation
+        try:
+            out = cli_filter(src, project=None, scope=scope, model_spec=model_spec,
+                             out_path=None, verbosity=0)
+            def ok() -> None:
+                if out:
+                    self.app.notify(f"Filter wrote {Path(out).name}", severity="information")
+                else:
+                    self.app.notify("Filter cancelled or produced no output.", severity="warning")
+                self.dismiss(True)
+            self.app._safe_call_from_thread(ok)
+        except Exception as e:  # noqa: BLE001
+            self.app._safe_call_from_thread(
+                self.app.notify, f"Filter failed: {e}", severity="error")
+        finally:
+            builtins.input = original_input
+
+
+class ExportSessionModal(ModalScreen[bool]):
+    """Modal screen for exporting a session (or a whole project) to an .ocbox bundle."""
+    def __init__(self, target_id: str, title: str, is_project: bool = False) -> None:
+        super().__init__()
+        self.session_id = target_id  # session id OR project id (see is_project)
+        self.session_title = title
+        self.is_project = is_project
 
     def compose(self) -> ComposeResult:
         default_name = f"{self.session_id}.ocbox"
         default_path = str(Path.home() / default_name)
+        kind = "PROJECT" if self.is_project else "SESSION"
+        id_label = "Project ID" if self.is_project else "Session ID"
+        title_label = "Project" if self.is_project else "Session Title"
         yield Container(
-            Label("EXPORT SESSION BUNDLE", id="dialog-title"),
+            Label(f"EXPORT {kind} BUNDLE", id="dialog-title"),
             VerticalScroll(
-                Label(f"Session ID: {self.session_id}", classes="info-label"),
-                Label(f"Session Title: {self.session_title}", classes="info-label"),
+                Label(f"{id_label}: {self.session_id}", classes="info-label"),
+                Label(f"{title_label}: {self.session_title}", classes="info-label"),
                 Label("Export File Target Path:", classes="info-label"),
-                Input(value=default_path, placeholder="e.g. ~/my_session.ocbox", id="input-export-path"),
+                Input(value=default_path, placeholder="e.g. ~/my_bundle.ocbox", id="input-export-path"),
                 id="export-session-scroll"
             ),
             Horizontal(
@@ -695,10 +844,17 @@ class ExportSessionModal(ModalScreen[bool]):
 
     def _do_export_worker(self, dest_path: Path) -> None:
         try:
-            bundle_session_data(self.session_id, dest_path)
-            
+            if self.is_project:
+                from .core import bundle_project_data
+                bundle_project_data(self.session_id, dest_path)
+                noun = "project"
+            else:
+                bundle_session_data(self.session_id, dest_path)
+                noun = "session"
+
             def on_success() -> None:
-                self.app.notify(f"Successfully exported session to {dest_path.name}!", severity="information")
+                self.app.notify(f"Successfully exported {noun} to {dest_path.name}!",
+                                severity="information")
                 self.dismiss(True)
             self.app._safe_call_from_thread(on_success)
         except Exception as e:
@@ -792,14 +948,34 @@ class ImportSessionModal(ModalScreen[bool]):
 
     def _do_import_worker(self, bundle_path: Path, target_project_id: str | None, new_project_path: str | None) -> None:
         try:
-            imported_id = extract_and_import_session(
-                bundle_path,
-                target_project_id=target_project_id,
-                new_project_path=new_project_path
-            )
-            
+            # Auto-detect bundle kind from meta.json (mirrors the CLI import): a project
+            # bundle routes to the project importer; anything else is a session import.
+            kind = None
+            try:
+                import zipfile as _zf, json as _json
+                with _zf.ZipFile(bundle_path, "r") as zf:
+                    kind = _json.loads(zf.read("meta.json").decode("utf-8")).get("kind")
+            except Exception:
+                kind = None
+
+            if kind == "project":
+                imported_id = extract_and_import_project(
+                    bundle_path,
+                    target_project_id=target_project_id,
+                    new_project_path=new_project_path,
+                )
+                noun = "project"
+            else:
+                imported_id = extract_and_import_session(
+                    bundle_path,
+                    target_project_id=target_project_id,
+                    new_project_path=new_project_path,
+                )
+                noun = "session"
+
             def on_success() -> None:
-                self.app.notify(f"Successfully imported session as {imported_id}!", severity="information")
+                self.app.notify(f"Successfully imported {noun} as {imported_id}!",
+                                severity="information")
                 self.dismiss(True)
             self.app._safe_call_from_thread(on_success)
         except Exception as e:
@@ -865,6 +1041,7 @@ class OrsessionApp(App):
         self.selected_session_ids: set[str] = set()  # multi-select batch set
         self.selected_session_id: Optional[str] = None
         self.selected_session_title: str = ""
+        self.selected_session_dir: str = ""
         self.selected_project_id: Optional[str] = None
         self.selected_project_name: Optional[str] = None
         self.session_turn_cache: Dict[str, int] = {}
@@ -880,7 +1057,11 @@ class OrsessionApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal():
-            yield SidebarWidget(id="sidebar")
+            with Vertical(id="sidebar-pane"):
+                yield Input(placeholder="Search sessions (content/title), Enter to run",
+                            id="input-session-search")
+                yield SidebarWidget(id="sidebar")
+                yield DataTable(id="search-results")
             with Container(id="workspace"):
                 with TabbedContent():
                     # Tab 1: Details & Transcript
@@ -934,6 +1115,7 @@ class OrsessionApp(App):
                                     yield Select([], id="select-compaction-model", prompt="Choose model...")
                                     yield Label("Est Cost: $0.00", id="lbl-est-cost", classes="info-label")
                                     yield Button("Run Compaction API", id="btn-run-compaction", variant="success")
+                                    yield Button("Filter (LLM re-scope a doc)", id="btn-filter-doc")
                                     yield Static("Idle", id="lbl-compaction-status")
 
                             # Danger Zone Card
@@ -1030,6 +1212,78 @@ class OrsessionApp(App):
         self.populate_compaction_models()
         self.load_audit_trail()
         self.load_tui_config()
+        with contextlib.suppress(Exception):
+            results = self.query_one("#search-results", DataTable)
+            results.add_column("Match", width=8)
+            results.add_column("Title", width=34)
+            results.add_column("Session", width=12)
+            results.cursor_type = "row"
+            results.display = False  # hidden until a search runs
+
+    def run_session_search(self, query: str) -> None:
+        """Run db_search_sessions in a worker and show hits in the results table."""
+        query = query.strip()
+        if not query:
+            with contextlib.suppress(Exception):
+                self.query_one("#search-results", DataTable).display = False
+            return
+        self.run_worker(lambda: self._do_search_worker(query), thread=True)
+
+    def _do_search_worker(self, query: str) -> None:
+        from .core import db_search_sessions
+        try:
+            results = db_search_sessions(query)
+        except Exception as e:  # noqa: BLE001
+            self._safe_call_from_thread(self.app.notify,
+                                        f"Search failed: {e}", severity="error")
+            return
+
+        def update_ui() -> None:
+            table = self.query_one("#search-results", DataTable)
+            table.clear()
+            table.display = True
+            self._search_hits = {}
+            if not results:
+                self.app.notify(f"No sessions matched '{query}'.", severity="information")
+                return
+            for r in results:
+                sid = r["id"]
+                key = table.add_row(r.get("match_where", ""),
+                                    (r.get("title") or "(untitled)")[:34],
+                                    sid[:8])
+                self._search_hits[key] = sid
+            self.app.notify(f"{len(results)} session(s) matched '{query}'.",
+                            severity="information")
+        self._safe_call_from_thread(update_ui)
+
+    def on_data_table_row_selected(self, event) -> None:
+        """Selecting a search hit loads that session as the current selection."""
+        table = getattr(event, "data_table", None)
+        if table is None or table.id != "search-results":
+            return
+        sid = getattr(self, "_search_hits", {}).get(event.row_key)
+        if not sid:
+            return
+        try:
+            sqlite3 = _get_sqlite()
+            conn = sqlite3.connect(str(get_db_path()))
+            cur = conn.cursor()
+            cur.execute("SELECT title, directory FROM session WHERE id = ?", (sid,))
+            row = cur.fetchone()
+            conn.close()
+        except Exception:
+            row = None
+        self.selected_session_id = sid
+        self.selected_session_title = (row[0] if row else "") or "(untitled)"
+        self.selected_session_dir = (row[1] if row else "") or ""
+        self.selected_project_id = None
+        self.selected_project_name = None
+        with contextlib.suppress(Exception):
+            self.query_one("#btn-delete-session-rec", Button).disabled = False
+            self.query_one("#btn-export-session", Button).disabled = False
+            self.query_one("#btn-move-project", Button).disabled = False
+        self.start_session_export()
+        self.app.notify(f"Selected session {sid[:8]} from search.", severity="information")
 
     def populate_compaction_models(self) -> None:
         """Populate the LLM select dropdown with OpenAI-compatible models."""
@@ -1171,6 +1425,7 @@ class OrsessionApp(App):
             s = node_data["data"]
             self.selected_session_id = node_data["id"]
             self.selected_session_title = s.get("title") or "(untitled)"
+            self.selected_session_dir = s.get("directory") or ""
             self.selected_project_id = None
             self.selected_project_name = None
             self.update_metadata_view(s)
@@ -1178,7 +1433,8 @@ class OrsessionApp(App):
             with contextlib.suppress(Exception):
                 self.query_one("#btn-delete-session-rec", Button).disabled = False
                 self.query_one("#btn-delete-project", Button).disabled = True
-                self.query_one("#btn-move-project", Button).disabled = True
+                # Move now supports sessions too (local metadata move).
+                self.query_one("#btn-move-project", Button).disabled = False
                 self.query_one("#btn-export-session", Button).disabled = False
         elif node_data and node_data.get("type") == "project":
             self.selected_session_id = None
@@ -1213,7 +1469,8 @@ class OrsessionApp(App):
                 self.query_one("#btn-delete-session-rec", Button).disabled = True
                 self.query_one("#btn-delete-project", Button).disabled = False
                 self.query_one("#btn-move-project", Button).disabled = False
-                self.query_one("#btn-export-session", Button).disabled = True
+                # Export now supports projects too (a project .ocbox bundle).
+                self.query_one("#btn-export-session", Button).disabled = False
 
     def update_metadata_view(self, s: dict) -> None:
         """Update the top metadata card with session info."""
@@ -1264,7 +1521,14 @@ class OrsessionApp(App):
                     self._safe_call_from_thread(self.render_current_transcript)
                 except Exception as e:
                     self._safe_call_from_thread(self.app.notify, f"Export failed: {e}", severity="error")
-                    self._safe_call_from_thread(self.query_one("#transcript-md", Markdown).update, f"**Error loading transcript:** {e}")
+                    # Marshal the transcript-error render onto the UI thread and guard the
+                    # widget lookup: a modal screen (or teardown) may mean #transcript-md is
+                    # not currently mounted, and query_one must not run in the worker thread.
+                    def _show_error() -> None:
+                        with contextlib.suppress(Exception):
+                            self.query_one("#transcript-md", Markdown).update(
+                                f"**Error loading transcript:** {e}")
+                    self._safe_call_from_thread(_show_error)
 
         threading.Thread(target=export_worker, daemon=True).start()
 
@@ -1346,6 +1610,8 @@ class OrsessionApp(App):
         # LLM Compaction Execution
         elif event.button.id == "btn-run-compaction":
             self.run_llm_compaction()
+        elif event.button.id == "btn-filter-doc":
+            self.app.push_screen(FilterModal())
             
         # Recursive session deletion
         elif event.button.id == "btn-delete-session-rec":
@@ -1748,9 +2014,20 @@ class OrsessionApp(App):
         )
 
     def confirm_and_move_project(self) -> None:
-        """Spawn MoveProjectModal overlay screen for project relocation."""
+        """Relocate the selected project (local) OR session (local metadata move)."""
+        if self.selected_session_id:
+            def handle_session_move(success: bool) -> None:
+                if success:
+                    self.action_refresh_data()
+            self.app.push_screen(
+                MoveSessionModal(self.selected_session_id, self.selected_session_title,
+                                 self.selected_session_dir),
+                handle_session_move,
+            )
+            return
         if not self.selected_project_id:
-            self.app.notify("Please select a project in the sidebar tree first.", severity="warning")
+            self.app.notify("Please select a project or session in the sidebar first.",
+                            severity="warning")
             return
 
         def handle_move_completion(success: bool) -> None:
@@ -1772,19 +2049,27 @@ class OrsessionApp(App):
         )
 
     def confirm_and_export_session(self) -> None:
-        """Spawn ExportSessionModal overlay screen for session export."""
-        if not self.selected_session_id:
-            self.app.notify("Please select a session in the sidebar tree first.", severity="warning")
-            return
-
+        """Spawn ExportSessionModal for the selected session OR project (.ocbox bundle)."""
         def handle_export_completion(success: bool) -> None:
             if success:
                 pass
 
-        self.app.push_screen(
-            ExportSessionModal(self.selected_session_id, self.selected_session_title),
-            handle_export_completion
-        )
+        if self.selected_session_id:
+            self.app.push_screen(
+                ExportSessionModal(self.selected_session_id, self.selected_session_title,
+                                   is_project=False),
+                handle_export_completion,
+            )
+        elif self.selected_project_id:
+            self.app.push_screen(
+                ExportSessionModal(self.selected_project_id,
+                                   self.selected_project_name or self.selected_project_id,
+                                   is_project=True),
+                handle_export_completion,
+            )
+        else:
+            self.app.notify("Please select a session or project in the sidebar first.",
+                            severity="warning")
 
     def confirm_and_batch_delete(self) -> None:
         """Confirm, then delete all selected sessions in one consolidated batch."""
@@ -2004,7 +2289,10 @@ class OrsessionApp(App):
             self.notify(f"Reset failed: {e}", severity="error")
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        """Auto-save configuration settings when user presses Enter on any configuration input."""
+        """Auto-save config on Enter in config inputs; run a session search on Enter in the box."""
+        if event.input.id == "input-session-search":
+            self.run_session_search(event.value)
+            return
         if event.input.id and event.input.id.startswith("cfg-") and getattr(self, "config_loaded", False):
             self.save_tui_config(notify=True)
 

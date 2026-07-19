@@ -1040,3 +1040,165 @@ async def test_tui_recovery_chunk_writes_parts(tui_db, tmp_path):
     assert len(parts) >= 2
 
 
+# --- Phase 5: breadth (bundles, move, backup clean, search, filter) ----------
+
+import zipfile
+import json as _json
+
+
+def _make_ocbox(path: Path, kind: str) -> None:
+    """Write a minimal .ocbox with a meta.json declaring the given kind (for auto-detect)."""
+    with zipfile.ZipFile(path, "w") as zf:
+        zf.writestr("meta.json", _json.dumps({"kind": kind}))
+
+
+@pytest.mark.anyio
+async def test_tui_import_autodetect_routes_by_kind(tui_db, tmp_path, monkeypatch):
+    """Phase 5: the import worker reads meta.json 'kind' and routes to the project vs
+    session importer."""
+    from ocman_tui.app import ImportSessionModal
+    import ocman_tui.app as app_mod
+
+    called = {"project": 0, "session": 0}
+    monkeypatch.setattr(app_mod, "extract_and_import_project",
+                        lambda *a, **k: called.__setitem__("project", called["project"] + 1) or "proj_new")
+    monkeypatch.setattr(app_mod, "extract_and_import_session",
+                        lambda *a, **k: called.__setitem__("session", called["session"] + 1) or "ses_new")
+
+    proj_box = tmp_path / "p.ocbox"; _make_ocbox(proj_box, "project")
+    sess_box = tmp_path / "s.ocbox"; _make_ocbox(sess_box, "session")
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = ImportSessionModal()
+        await app.push_screen(modal)
+        await pilot.pause()
+        modal._do_import_worker(proj_box, None, None)
+        modal._do_import_worker(sess_box, None, None)
+        for _ in range(30):
+            if called["project"] and called["session"]:
+                break
+            await pilot.pause(0.1)
+    assert called["project"] == 1
+    assert called["session"] == 1
+
+
+@pytest.mark.anyio
+async def test_tui_local_session_move(tui_db):
+    """Phase 5: the local session-move modal updates the session's directory in the DB."""
+    from ocman_tui.app import MoveSessionModal
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = MoveSessionModal("sess1", "S1", "/path/to/proj")
+        await app.push_screen(modal)
+        await pilot.pause()
+        modal._do_move_worker("/new/location")
+        for _ in range(40):
+            conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+            cur.execute("SELECT directory FROM session WHERE id='sess1'")
+            d = cur.fetchone()[0]; conn.close()
+            if d and d.endswith("/new/location"):
+                break
+            await pilot.pause(0.1)
+    conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
+    cur.execute("SELECT directory FROM session WHERE id='sess1'")
+    assert cur.fetchone()[0].endswith("/new/location")
+    conn.close()
+
+
+@pytest.mark.anyio
+async def test_tui_backup_clean(tui_db, tmp_path, monkeypatch):
+    """Phase 5: prune old backups removes an old archive and keeps a recent one."""
+    from textual.widgets import TabbedContent
+    import time
+    backups = tmp_path / "backups"
+    backups.mkdir()
+    # cli_clean_backups only prunes files named like ocman's own backups.
+    old = backups / "opencode-backup-20200101-000000.zip"; old.write_text("x")
+    recent = backups / "opencode-backup-20990101-000000.zip"; recent.write_text("y")
+    # Age the old file ~100 days.
+    old_ts = time.time() - 100 * 86400
+    os.utime(old, (old_ts, old_ts))
+
+    cfg = ocman.load_ocman_config()
+    cfg["default_backup_dir"] = str(backups)
+    ocman.save_ocman_config(cfg, ocman.OCMAN_CONFIG_PATH)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-admin"
+        await pilot.pause()
+        widget = app.query_one(DatabaseAdminWidget)
+        widget.query_one("#input-backup-clean-days", Input).value = "30"
+        widget.run_clean_backups_operation()
+        for _ in range(60):
+            if not old.exists():
+                break
+            await pilot.pause(0.1)
+    assert not old.exists()      # older than 30 days -> pruned
+    assert recent.exists()       # recent -> kept
+
+
+@pytest.mark.anyio
+async def test_tui_search_selects_session(tui_db):
+    """Phase 5: content search finds a seeded match; selecting the row sets the current
+    session."""
+    _seed_tui_conversation(tui_db)  # sess1 has 'login button' content
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.run_session_search("login button")
+        results = app.query_one("#search-results", DataTable)
+        for _ in range(40):
+            if results.row_count > 0:
+                break
+            await pilot.pause(0.1)
+        assert results.row_count >= 1
+        # Simulate selecting the first hit.
+        first_key = list(app._search_hits.keys())[0]
+
+        class _Evt:
+            data_table = results
+            row_key = first_key
+        app.on_data_table_row_selected(_Evt())
+        await pilot.pause()
+    assert app.selected_session_id == "sess1"
+
+
+@pytest.mark.anyio
+async def test_tui_filter_runs(tui_db, tmp_path, monkeypatch):
+    """Phase 5: the filter modal invokes cli_filter with the chosen input/scope/model."""
+    from ocman_tui.app import FilterModal
+    import ocman_tui.app as app_mod
+
+    src = tmp_path / "doc.restart.md"
+    src.write_text("# a document about the auth refactor and other things")
+    captured = {}
+
+    def fake_filter(input_path, project, scope, model_spec, out_path, verbosity, **kw):
+        captured.update(dict(input_path=str(input_path), scope=scope, model=model_spec))
+        result = tmp_path / "doc.scoped.compacted.md"
+        result.write_text("scoped")
+        return result
+    # The worker imports cli_filter from .core at call time, so patch it there.
+    import ocman_tui.core as core_mod
+    monkeypatch.setattr(core_mod, "cli_filter", fake_filter)
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        modal = FilterModal()
+        await app.push_screen(modal)
+        await pilot.pause()
+        modal._do_filter_worker(src, "only the auth refactor", "uri/test/model")
+        for _ in range(40):
+            if captured:
+                break
+            await pilot.pause(0.1)
+    assert captured.get("scope") == "only the auth refactor"
+    assert captured.get("model") == "uri/test/model"
+
+

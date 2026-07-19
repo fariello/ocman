@@ -273,11 +273,16 @@ class DatabaseAdminWidget(Static):
                         Label("Backup Target:", classes="info-label"),
                         Static("", id="lbl-backup-target-dir", classes="info-value"),
                     ),
+                    Horizontal(
+                        Label("Prune backups older than (days):", classes="info-label"),
+                        Input("30", id="input-backup-clean-days", placeholder="e.g. 30"),
+                    ),
                     id="backup-fields"
                 )
                 with Horizontal():
                     yield Button("Create Backup", id="btn-create-backup", variant="success")
                     yield Button("Restore Backup", id="btn-restore-backup", variant="primary")
+                    yield Button("Prune Old Backups", id="btn-clean-backups", variant="error")
 
         # Bottom section: Logs Output Console
         yield Label("LIVE OPERATIONS LOG OUTPUT:", classes="info-label")
@@ -349,6 +354,8 @@ class DatabaseAdminWidget(Static):
             self.run_prune_operation()
         elif event.button.id == "btn-create-backup":
             self.run_backup_operation()
+        elif event.button.id == "btn-clean-backups":
+            self.run_clean_backups_operation()
         elif event.button.id == "btn-restore-backup":
             from ..app import RestoreBackupModal
             self.app.push_screen(RestoreBackupModal(), self.handle_restore_result)
@@ -461,6 +468,38 @@ class DatabaseAdminWidget(Static):
                 self.app._safe_call_from_thread(self.refresh_metrics)
 
         self.run_worker(do_backup, thread=True)
+
+    def run_clean_backups_operation(self) -> None:
+        """Prune backup archives older than the given age (days), reusing cli_clean_backups."""
+        from ..core import cli_clean_backups
+        log_widget = self.query_one("#live-log-output", RichLog)
+        log_widget.clear()
+        try:
+            days = float(self.query_one("#input-backup-clean-days", Input).value.strip())
+        except ValueError:
+            self.app.notify("Backup age (days) must be a number.", severity="error")
+            return
+
+        self.app.notify("Pruning old backups in background...", severity="information")
+
+        def do_clean():
+            import builtins
+            original_input = builtins.input
+            builtins.input = lambda *a, **k: "yes"
+            try:
+                with contextlib.redirect_stdout(TextualLogRedirector(log_widget)):
+                    cli_clean_backups(days=days, dry_run=False, verbosity=0, assume_yes=True)
+                self.app._safe_call_from_thread(
+                    self.app.notify, "Backup prune finished.", severity="information")
+            except Exception as e:  # noqa: BLE001
+                log_widget.app._safe_call_from_thread(log_widget.write, f"ERROR: {e}")
+                self.app._safe_call_from_thread(
+                    self.app.notify, f"Backup prune failed: {e}", severity="error")
+            finally:
+                builtins.input = original_input
+                self.app._safe_call_from_thread(self.refresh_metrics)
+
+        self.run_worker(do_clean, thread=True)
 
     def handle_restore_result(self, path: Optional[str]) -> None:
         """Handle the path input from the RestoreBackupModal dialog."""

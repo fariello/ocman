@@ -5,7 +5,7 @@
 - Scope: the Textual TUI package `ocman_tui/` (app + widgets + modals), measured
   against the current CLI feature set in `ocman/cli.py`. The CLI itself is NOT in scope
   (it is the reference implementation).
-- Status: roadmap (umbrella; the executable work lives in the per-phase IPDs below)
+- Status: executed (umbrella; all 5 per-phase IPDs are executed)
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## What this document is
@@ -29,7 +29,7 @@ top-level tabs (maintainer decision, OQ-6).
 | 2 | Storage checkup (read-only doctor view) + guarded reclaim | `executed/20260718-1648-03-tui-p2-doctor-reclaim-ipd.md` | EXECUTED |
 | 3 | Reporting: spend + running views (read-only) | `executed/20260718-1648-04-tui-p3-spend-running-ipd.md` | EXECUTED |
 | 4 | Bulk + large sessions: multi-select batch, db clean duration/scope, chunk | `executed/20260718-1648-05-tui-p4-bulk-and-chunk-ipd.md` | EXECUTED |
-| 5 | Breadth: project bundles, local move, backup clean, content search, filter | `pending/20260718-1648-06-tui-p5-breadth-ipd.md` | reviewed (awaiting approval) |
+| 5 | Breadth: project bundles, local move, backup clean, content search, filter | `executed/20260718-1648-06-tui-p5-breadth-ipd.md` | EXECUTED |
 
 The one hard exclusion across all phases: the reclaim snapshot-force mode stays CLI-only
 (OQ-2); the TUI shows a note pointing to `ocman reclaim --force-snapshots` / `ocman doctor`.
@@ -45,6 +45,19 @@ The one hard exclusion across all phases: the reclaim snapshot-force mode stays 
   scope fence. Recommend a small corrective IPD: either have `save_tui_config` load-merge
   the current config before saving, or have `save_ocman_config` merge over the existing file
   rather than over `DEFAULT_CONFIG`. Data-loss-of-config severity: Medium.
+- FU-02 (found in P5, FIXED in P5's commit): the transcript `export_worker` error path called
+  `self.query_one("#transcript-md")` directly in the worker thread; with a modal active (or
+  during teardown) the widget is absent and it raised an unhandled thread exception. Fixed by
+  marshalling the error render onto the UI thread and guarding the lookup. Noted here for the
+  record; no further action needed.
+
+## Status: ALL PHASES EXECUTED
+
+Phases 1-5 are all executed (commits 45eb8c4, 79f5818, 2fde996, 6e6286a, and the P5 commit).
+The TUI now has parity with the CLI for the in-scope features; the only deliberate CLI-only
+exclusions are the reclaim snapshot-force mode (OQ-2) and remote/git-aware move + `db rebase`
+(OQ-3 / T-15). Remaining non-phase follow-ups: FU-01 (config-save key reset) and the
+consolidated README/ARCHITECTURE TUI-docs update.
 
 ## Workflow history
 
