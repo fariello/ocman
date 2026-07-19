@@ -7,3 +7,6 @@
 
 ## Section 2 (quality/security/edge) - complete
 - Secret scan run (gitleaks, full history). 6 hits = synthetic test fixtures (S2-S1: baseline in .gitleaksignore). LIVE/MEM/security surfaces traced; no new defect. Committed.
+
+## Section 3 (tests/regression) - complete
+- Full suite green (407 passed, 2 skipped). New-feature coverage confirmed. Committed.

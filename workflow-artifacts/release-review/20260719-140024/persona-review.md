@@ -18,3 +18,6 @@
   secret scan) before any send; API key refused to non-HTTPS endpoints. The only security
   item is the CI secret-scan baseline (S2-S1), and it is a confirmed false positive (test
   fixtures), not a live secret.
+
+## Section 3 (tests/regression)
+- Testing expert (2): 276 tests; full suite 407 passed / 2 skipped; every release-cycle feature has dedicated coverage incl. the fail-loud and negative-path tests. No untested critical path.
