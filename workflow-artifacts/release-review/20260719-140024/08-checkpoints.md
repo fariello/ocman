@@ -22,3 +22,6 @@
 
 ## Section 7 (implementation) - complete
 - A1 version bump 1.2.0 + CHANGELOG cut; A2 gitleaks baseline (6 fps); A3 wheel rebuild verify. Product commit 2554395. Re-validated: -V=1.2.0, gitleaks clean, 407 passed, wheel 1.2.0. Committed.
+
+## Section 8 (final ship review) - complete
+- Final audit clean; eight-persona sign-off ACCEPTABLE; gates pass (no LIVE/High, no pending plans); validation cited (407 passed, -V 1.2.0, gitleaks clean, wheel 1.2.0). Recommendation: GO. Committed.

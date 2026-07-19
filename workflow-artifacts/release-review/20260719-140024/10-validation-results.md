@@ -23,3 +23,8 @@ Each shipped feature carries dedicated tests (43 matched by name):
 - Full suite re-run: **407 passed, 2 skipped** (unchanged; bump/CHANGELOG/baseline are
   non-behavioral).
 - `python -m build --wheel` -> **ocman-1.2.0-py3-none-any.whl** built cleanly.
+
+## Section 8 (final) - evidence gate
+All recommendation-relevant checks were actually run this session (not self-reported):
+test suite (twice), ocman -V, gitleaks detect, and the wheel build. Evidence is the pasted
+command output recorded above. No relevant check was left unverified.

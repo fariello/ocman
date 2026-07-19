@@ -52,3 +52,14 @@ No F/U/M/GP/KD findings filed in Section 5.
   --list-projects flags predate v1.1.0); minor bump 1.1.0 -> 1.2.0 is correct; PyPI latest
   is 1.1.0 so 1.2.0 is a valid publish. The one packaging-adjacent item is the secret-scan
   baseline (S2-S1) so CI stays green.
+
+## Section 8 - eight-persona final sign-off
+1. QA/QC: ACCEPTABLE. Destructive paths guarded + tested; suite green.
+2. Testing/regression: ACCEPTABLE. 276 tests; every release feature covered; green post-change.
+3. UI/UX: ACCEPTABLE. TUI consistent (9 tabs, empty states, typed-yes confirms, security banner).
+4. Architect: ACCEPTABLE. CLI/TUI single-implementation; guards centralized; KISS honored.
+5. Software engineer: ACCEPTABLE. Clean tree; version bumped consistently; wheel builds 1.2.0.
+6. Power user: ACCEPTABLE. Full scriptability (--json, -y, durations, batch, chunk).
+7. Novice: ACCEPTABLE. No-args onboarding; errors that teach; help discoverable; self-doc pass shipped.
+8. Stakeholder: ACCEPTABLE. Delivers CLI<->TUI parity + storage repair tooling per the stated purpose.
+No blocking concern from any persona.
