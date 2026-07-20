@@ -727,31 +727,38 @@ def test_project_import_rollback_no_orphan(temp_db, tmp_path, monkeypatch):
     conn.close()
 
 
-@pytest.mark.skipif(
-    os.name == "nt",
-    reason="simulates POSIX firmlink canonicalization; the seeded POSIX worktree "
-    "(/home/me/proj) is not absolute on Windows, and Windows has no such firmlink.",
-)
 def test_project_import_rebases_when_worktree_canonicalizes(temp_db, tmp_path, monkeypatch):
-    """Rebase must survive a worktree that the OS canonicalizes to a different path.
+    """Rebase must survive a worktree the OS canonicalizes to a different string.
 
     On macOS, /home, /var, /tmp are firmlinks, so Path("/home/me/proj").resolve()
     yields "/System/Volumes/Data/home/me/proj". _validate_worktree_path resolves the
     bundle worktree, so if the rebase then compared that RESOLVED prefix against the
-    RAW stored session.directory ("/home/me/proj"), the prefix would not match and the
-    session directory would be left un-rebased under the old worktree. This is the
-    macOS-only CI failure of test_project_import_new_project_path_rebases; it is
-    reproduced here on any OS by simulating the firmlink, and guards the fix (rebase
-    now resolves the stored directory before matching, via _rebased_dir).
+    RAW stored session.directory, the prefix would not match and the session directory
+    would be left un-rebased under the old worktree (the macOS-only CI failure of
+    test_project_import_new_project_path_rebases).
+
+    This is a general property, not a POSIX-only one, so it runs on every OS: the
+    seeded worktree is drive-anchored on Windows via abs_path, and canonicalization is
+    simulated by mapping that seeded prefix to a DIFFERENT canonical prefix in both
+    Path.resolve and os.path.realpath. It guards the fix (rebase now resolves the
+    stored directory before matching, via _rebased_dir).
     """
     import pathlib
+
+    seeded = abs_path("/home/me/proj")  # absolute on every OS (drive-anchored on Windows)
+
+    def _canon(s: str) -> str:
+        # Map the seeded worktree (and anything under it) to a DIFFERENT canonical
+        # path, mimicking a firmlink/symlink prefix rewrite, using native separators.
+        head = str(Path("/canon"))  # "/canon" on POSIX, "\\canon" on Windows
+        return head + s
 
     real_resolve = pathlib.Path.resolve
 
     def fake_resolve(self, *a, **k):
         s = str(self)
-        if s == "/home/me/proj" or s.startswith("/home/me/proj/"):
-            return pathlib.PurePosixPath("/System/Volumes/Data" + s)
+        if s == seeded or s.startswith(seeded + os.sep):
+            return Path(_canon(s))
         return real_resolve(self, *a, **k)
 
     monkeypatch.setattr(pathlib.Path, "resolve", fake_resolve)
@@ -760,13 +767,13 @@ def test_project_import_rebases_when_worktree_canonicalizes(temp_db, tmp_path, m
 
     def fake_realpath(p, *a, **k):
         p = os.fspath(p)
-        if p == "/home/me/proj" or p.startswith("/home/me/proj/"):
-            return "/System/Volumes/Data" + p
+        if p == seeded or p.startswith(seeded + os.sep):
+            return _canon(p)
         return real_realpath(p, *a, **k)
 
     monkeypatch.setattr(os.path, "realpath", fake_realpath)
 
-    _seed_project(temp_db, worktree="/home/me/proj")
+    _seed_project(temp_db, worktree=seeded)
     box = tmp_path / "p.ocbox"
     bundle_project_data("p1", box)
     new_root = tmp_path / "copy"
@@ -778,5 +785,5 @@ def test_project_import_rebases_when_worktree_canonicalizes(temp_db, tmp_path, m
     assert rows, "new-project sessions missing"
     for (d,) in rows:
         # The rebased dir must live under the NEW root, never still under the old worktree.
-        assert not d.startswith("/home/me/proj"), ("session left un-rebased", d)
+        assert not d.startswith(seeded), ("session left un-rebased", d)
         assert os.path.commonpath([real_realpath(d), expected]) == expected, (d, expected)

@@ -226,11 +226,17 @@ async def test_tui_clear_history(tui_db):
     async with app.run_test() as pilot:
         app.query_one("#btn-clear-history-log", Button).press()
         await pilot.pause()
+        # Wait for the modal to actually become the active screen. On slower
+        # runners (notably Windows CI on Python 3.10) push_screen takes more than
+        # one frame, so a bare pause() + immediate isinstance check races the
+        # mount. Poll until the modal is on top. Extra pauses are harmless where
+        # it is already active (e.g. Linux).
+        for _ in range(50):
+            if isinstance(app.screen, ClearHistoryModal):
+                break
+            await pilot.pause(0.1)
         assert isinstance(app.screen, ClearHistoryModal)
-        # Wait for the modal's widgets to actually mount before querying them.
-        # On slower runners (notably Windows CI) the push/mount takes more than
-        # one frame; poll until the confirm Input exists. Extra pauses are
-        # harmless where it is already mounted (e.g. Linux).
+        # Then wait for the modal's widgets to actually mount before querying them.
         for _ in range(50):
             if app.screen.query("#input-clear-history-yes"):
                 break
