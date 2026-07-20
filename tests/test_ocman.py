@@ -3494,6 +3494,10 @@ def test_compact_batch_mid_failure_and_estimates(temp_db, tmp_path, monkeypatch,
         return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
 
     monkeypatch.setattr(ocman.subprocess, "run", fake_subprocess_run)
+    # The `opencode` CLI is not installed on every CI runner (e.g. macOS/Windows). This
+    # test drives a mocked export/compaction flow, so neutralize the PATH precheck rather
+    # than depend on the binary being present.
+    monkeypatch.setattr(ocman, "require_opencode", lambda *a, **k: None)
     monkeypatch.setattr(ocman, "call_compaction_api", fake_call_api)
     monkeypatch.setattr(ocman, "load_opencode_config", lambda verbosity=0: {})
     monkeypatch.setattr(ocman, "extract_models_from_config", lambda c: [FakeModel()])
@@ -4180,6 +4184,8 @@ def test_reclaim_temp_report_only_without_flag(doctor_db, monkeypatch, tmp_path)
     assert wal.exists()
 
 
+@pytest.mark.skipif(not _sys.platform.startswith("linux"),
+                    reason="Linux-only: /tmp/*.so reap + /proc holder check are Linux-specific")
 def test_reclaim_temp_deletes_old_unheld(doctor_db, monkeypatch, tmp_path):
     _tmp, db_path = doctor_db
     _seed_doctor_db(db_path)

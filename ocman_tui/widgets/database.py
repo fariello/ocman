@@ -293,6 +293,11 @@ class DatabaseAdminWidget(Static):
 
     def refresh_metrics(self) -> None:
         """Update system statistics dynamically."""
+        # A background worker (e.g. prune / backup-clean) calls this on completion; if the
+        # app is tearing down or this widget is no longer mounted, its child widgets are
+        # gone and query_one would raise NoMatches. Skip safely in that case.
+        if not self.is_mounted:
+            return
         db_path = get_db_path()
         history = _load_history()
         cum = history.get("cumulative", {})

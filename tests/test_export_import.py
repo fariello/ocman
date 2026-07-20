@@ -597,15 +597,19 @@ def test_project_import_new_project_path_rebases(temp_db, tmp_path):
     _seed_project(temp_db)
     box = tmp_path / "p.ocbox"
     bundle_project_data("p1", box)
-    # original project stays; import as a new project at a new worktree
-    dest = extract_and_import_project(box, new_project_path="/home/me/copy", interactive=False)
+    # original project stays; import as a new project at a new worktree.
+    # Use a real path under tmp_path (portable) rather than a hardcoded /home/me path,
+    # and compare against its resolved form since the importer normalizes the worktree.
+    new_root = tmp_path / "copy"
+    expected = str(Path(new_root).expanduser().resolve())
+    dest = extract_and_import_project(box, new_project_path=str(new_root), interactive=False)
     assert dest != "p1"
     conn = sqlite3.connect(str(temp_db))
     c = conn.cursor()
     # sessions collided -> rewritten under the new project, directory rebased
     rows = c.execute("SELECT project_id, directory FROM session WHERE project_id = ?", (dest,)).fetchall()
     assert rows, "new-project sessions missing"
-    assert all(d.startswith("/home/me/copy") for _, d in rows)
+    assert all(d.startswith(expected) for _, d in rows)
     conn.close()
 
 
