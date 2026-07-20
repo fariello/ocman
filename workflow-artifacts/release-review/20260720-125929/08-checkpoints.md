@@ -35,3 +35,10 @@
 - Eight personas run against the delta + standing state. No new F/U/M/GP/KD finding.
 - Principles: PASS (all 4 fallback). Cold-start: STRONG (DECISIONS.md new). TODO: clean.
 - Deprecation candidate: CI fail-fast diagnostic (= S1-CI1).
+
+## Section 6 checkpoint
+
+- vistab>=1.3.0 verified (clean import + methods present). Clean build (sdist+wheel) OK.
+- PyPI published 1.1.0 < proposed 1.2.0 (valid bump). No PKG issue.
+- CI green 15/15; fail-fast restore pending (S1-CI1/S6-CI1). Schema: no drift from delta.
+- Findings: S6-P1 (completed), S6-CI1 (identified). Sections 1-6 complete; ready for implementation plan.

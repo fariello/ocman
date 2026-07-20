@@ -49,3 +49,11 @@ sign-off in Section 8. This is a delta re-review; personas focus on the changed 
 - Stakeholder (8): The release goal (a trustworthy cross-platform OpenCode admin tool) is
   better served: macOS import correctness was a real fitness-for-purpose gap, now closed, and
   the whole CI matrix is green. No stakeholder-level F finding.
+
+## Section 6 lead-persona notes
+
+- Operator (8): `pip install ocman` on Python 3.12 is now unbroken (vistab floor). Clean build
+  + valid version bump (1.1.0 -> 1.2.0) mean a first-time installer can install and run. The
+  linux-only pysqlite3-binary marker keeps macOS/Windows installs clean.
+- Software engineer (5): Build is hermetic (hatchling isolated env), wheel carries both
+  packages + the migrate script. The only packaging change is the dependency floor. No P risk.
