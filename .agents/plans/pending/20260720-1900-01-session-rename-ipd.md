@@ -5,7 +5,7 @@
 - Scope: `ocman/cli.py` (new `session rename` action + top-level `rename` sugar +
   `db_rename_session` helper + preprocess sugar + help), tests, README, CHANGELOG. No TUI in
   this IPD (a TUI retitle modal is deferred). No DB schema change.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (not yet executed; awaiting human approval)
 - Target version: part of the in-flight 1.3.0 line (candidate `v1.3.0-rc1` already cut; this
   adds to it, so the next candidate is `v1.3.0-rc2`; final `1.3.0` still gated on a
   release-review and explicit maintainer GO, per the standing "not promoting yet" decision).
@@ -81,6 +81,7 @@ capability.
 | ID | Requirement | Evidence |
 |----|-------------|----------|
 | RN-01 | `session rename <S> --to "title"` updates `session.title` | no writer exists; move template cli.py:9834 |
+| RN-07 | handler needs the OLD title (for `old -> new` preview + unchanged no-op), but `db_find_session` returns only `(id, directory, project_id)` (cli.py:9739-9751), NO title | `db_find_session` cli.py:9739; title read paths cli.py:4152/4176 |
 | RN-02 | top-level `rename <S> [to] "title"` sugar, positional-aware `to` strip | move/export blanket strip unsafe for titles (cli.py:5861-5863) |
 | RN-03 | resolve `<S>` via the standard resolver (number/id/title-substring) | resolve_session_spec cli.py:5003 |
 | RN-04 | guard-while-running + honest "no per-session tracking" note; typed-yes only via the guard | require_safe_to_mutate cli.py:7821 (already prompts while-running) |
@@ -91,10 +92,10 @@ capability.
 
 | Step | Source | Change | Files | Rem.Risk | Validation |
 |------|--------|--------|-------|----------|------------|
-| 1 | RN-01 | Add `db_rename_session(session_id: str, new_title: str) -> None`: open conn, `require`-checked by caller; `BEGIN`; `UPDATE session SET title = ? WHERE id = ?`; if `cursor.rowcount == 0` rollback + `RecoveryError("session not found")`; commit; rollback+raise on error; close in finally. Template: `db_move_session_metadata` (cli.py:9834). | cli.py | Low | unit test: title changes; missing id raises; existing rows untouched |
+| 1 | RN-01,RN-07 | Add `db_rename_session(session_id: str, new_title: str) -> str` that RETURNS THE OLD TITLE (resolving RN-07, since `db_find_session` lacks title): open conn; `BEGIN`; `SELECT title FROM session WHERE id = ?` (fetch old title; if no row, rollback + `RecoveryError("session not found: <id>")`); `UPDATE session SET title = ? WHERE id = ?` (title is a BOUND `?` parameter, NEVER string-formatted, RN-04-sql); commit; return the old title. On error rollback + raise `RecoveryError`; close in finally. Read-then-update in ONE connection/transaction so the reported old title is the value actually replaced (no race). Template: `db_move_session_metadata` (cli.py:9834). | cli.py | Low | unit test: returns old title + new title persisted; missing id raises; other rows untouched; title bound not interpolated |
 | 2 | RN-01,RN-03,RN-06 | Register `session rename` action (near cli.py:6291): positional `session` (required), positional `dst` (nargs="?", the new title), `--to` (dest `to_flag`, hidden or shown), `--dry-run`, `--force`, `--while-running`, `-y/--yes`. Normalize (near cli.py:6735) to `out["rename_session"]=g("session")`, `out["rename_to"]=g("to_flag") or g("dst")`. | cli.py | Low | argparse accepts `session rename S --to T` and `S T` |
-| 3 | RN-02 | Top-level `rename` sugar: `new_sub("rename")` with `spec` + `dst` (nargs="?") + hidden `--to`; normalize to the same `rename_session`/`rename_to`. In `preprocess_argv`, add a POSITIONAL-AWARE `to` strip for `rename` ONLY (drop a single standalone `to` token immediately AFTER the spec and BEFORE the title; never strip `to` inside the title). Model on the `backup create` block (cli.py:5864-5874), NOT the blanket move/export strip. | cli.py | Medium | `rename S to "a to b"` keeps title "a to b"; `rename S "x"` works; `rename S to x` works |
-| 4 | RN-01,RN-03,RN-04,RN-05,RN-06 | Handler: resolve `<S>` (via `db_find_session` / `resolve_and_expand_targets`, single target); read current title; validate new title (strip; reject empty -> RecoveryError with usage hint); if unchanged, say so and exit 0 (no write); `require_safe_to_mutate("rename session", while_running=force_or_flag, ...)`; print the honest per-session-tracking caveat; if `--dry-run` print intended change and return; else `db_rename_session(...)`; print `Renamed: "<old>" -> "<new>" (<id>)`. | cli.py | Medium | rename by id/number/title; dry-run writes nothing; empty title rejected; unchanged no-ops |
+| 3 | RN-02 | Top-level `rename` sugar: `new_sub("rename")` with `spec` + `dst` (nargs="?") + hidden `--to`; normalize to the same `rename_session`/`rename_to`. In `preprocess_argv`, REUSE THE EXACT `backup create` idiom (cli.py:5864-5874) for `rename`: walk tokens and convert a standalone `to <next>` (where `<next>` is not a flag) into `--to <next>`. Because the title is always a SINGLE argv token (a shell-quoted `dst`), this converts only the keyword `to` that precedes the title and never touches a `to` INSIDE the title. Do NOT use the blanket move/export strip (cli.py:5861-5863). | cli.py | Medium | `rename S to "a to b"` -> title "a to b"; `rename S "x"` works; `rename S to x` works; the `to` inside a quoted title survives |
+| 4 | RN-01,RN-03,RN-04,RN-05,RN-06,RN-07 | Handler: resolve `<S>` to a single session id (via `resolve_and_expand_targets`/`db_find_session`); validate new title (`.strip()`; reject empty/whitespace-only -> `RecoveryError` with a usage hint); `require_safe_to_mutate("rename session", while_running=force_or_flag, interactive=..., verbosity=...)`; print the honest caveat that ocman CANNOT tell if THIS session specifically is open (OpenCode does not track process<->session; the guard covers the DB as a whole); if `--dry-run`, print the intended `"<old>" -> "<new>"` and return WITHOUT writing (get old title via a read, or via a dry `db`-less SELECT); else call `old = db_rename_session(id, new)`; if `old == new` (exact, case- and whitespace-sensitive) print "unchanged" (still exit 0); print `Renamed: "<old>" -> "<new>" (<id>)`. Note: the unchanged check is exact so a capitalization-only rename (e.g. "fix" -> "Fix") DOES write. | cli.py | Medium | rename by id/number/title; dry-run writes nothing; empty title rejected; capitalization-only rename writes; success prints old->new |
 | 5 | RN-01..06 | Help text: add `session rename` to the reference/help lists and a top-level `rename` example in the browse overview; document `--to`, `--dry-run`, `--force`. | cli.py | Low | `ocman help` shows rename |
 | 6 | all | CHANGELOG `[1.3.0]` Added entry (rename); README command reference. | CHANGELOG.md, README.md | Low | docs accurate |
 
@@ -117,12 +118,15 @@ capability.
 ## Required tests / validation
 
 - `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
-- New tests: `db_rename_session` (updates title; missing id raises; other rows untouched);
+- New tests: `db_rename_session` (RETURNS the old title; persists the new title; missing id
+  raises `RecoveryError`; other rows untouched; title passed as a bound `?` param, e.g. a title
+  containing a quote or `;` is stored verbatim, proving no string interpolation);
   `session rename S --to T` end-to-end (by id, by list number, by title substring); top-level
   `rename S to "a to b"` PRESERVES the literal title "a to b" (the positional-aware-strip
   regression test); `rename S "x"` and `rename S to x`; empty/whitespace title rejected;
-  `--dry-run` makes no DB change; unchanged-title no-ops (exit 0, no write); running-guard
-  path is exercised (mocked running state) and the honesty caveat text is present.
+  capitalization-only rename ("fix" -> "Fix") DOES write; `--dry-run` makes no DB change;
+  running-guard path is exercised (mocked running state) and the honest "cannot tell if this
+  session specifically is in use" caveat text is present in output.
 - Cross-platform: no path seeding needed here (title-only); no new skips. Use `abs_path` only
   if a test seeds a project/session directory.
 
@@ -134,8 +138,20 @@ capability.
 
 ## Open questions
 
-None (syntax, validation, and safety settled with maintainer; the per-session-tracking honesty
-requirement is captured as RN-04).
+None. Syntax, validation, and safety settled with maintainer; the per-session-tracking honesty
+requirement is captured as RN-04. The one /plan-review finding-driven question (how the handler
+obtains the OLD title, since `db_find_session` lacks it) was resolved from repository evidence:
+`db_rename_session` returns the old title from an atomic read-then-update (RN-07), not the human.
+
+## Workflow history
+
+- 2026-07-20 created (its_direct/pt3-claude-opus-4.8): authored from maintainer request.
+- 2026-07-20 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED.
+  PR-001/RN-07 (db_find_session returns no title -> db_rename_session now returns the old title
+  via atomic read-then-update), PR-002 (reuse the exact `backup create` positional `to`->`--to`
+  idiom rather than a bespoke strip), PR-003 (rowcount==0 is a defensive not-found guard;
+  transaction-safe), PR-004 (title is a bound `?` param, never interpolated; + a stored-verbatim
+  test). No open questions; no unfixed BLOCKER/HIGH. GO - PENDING HUMAN APPROVAL.
 
 ## Approval and execution gate
 
