@@ -25,3 +25,11 @@ sign-off in Section 8. This is a delta re-review; personas focus on the changed 
   (real_process_detection ps/ss//proc; one skipif-not-linux). No coverage was quietly removed.
 - QA/QC (1): Suite is green locally (408 passed / 2 skipped) and across the full CI matrix
   (15/15). The 2 local skips are perf benchmarks gated on OCMAN_BENCHMARK=1.
+
+## Section 4 lead-persona notes
+
+- Complete novice (7): CHANGELOG entries for the delta are written in plain language with the
+  "why" (what broke, what fixed it), understandable without reading the code. DECISIONS.md
+  gives a no-context reader the rationale for the cross-platform and dependency decisions.
+- UI/UX (3): No user-facing CLI/TUI text changed in the delta (the fix is internal path
+  logic), so no help/error-text doc drift. README/ARCHITECTURE remain consistent with behavior.

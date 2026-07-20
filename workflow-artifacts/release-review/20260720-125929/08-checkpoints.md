@@ -23,3 +23,9 @@
 - Delta tests: portability substitutions only; assertions intact; no hidden blanket skips.
 - S2-B1 regression coverage present (mutation-checked, OS-agnostic).
 - Finding: S3-T1 (completed). No release-blocking test gap.
+
+## Section 4 checkpoint
+
+- CHANGELOG [1.2.0] + DECISIONS.md honestly reflect the delta; dash convention respected.
+- Findings: S4-D1 (completed), S4-D2 (changelog date stale, Low, fix at tag time or S7).
+- No user-facing doc drift (delta is internal path logic only).

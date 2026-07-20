@@ -9,3 +9,4 @@
 | git diff 2554395..HEAD -- ocman/ pyproject.toml | isolate product-code delta | exactly the rebase fix + vistab>=1.3.0 |
 | pytest -q (full suite) | authoritative test evidence | 408 passed, 2 skipped |
 | git diff 2554395..HEAD -- tests/ | verify no weakened assertions / hidden skips | portability substitutions only; assertions intact; no new blanket skip |
+| sed/grep CHANGELOG + DECISIONS review | verify docs match delta + dash convention | honest; dashes only in sanctioned exceptions; changelog date slightly stale (S4-D2) |
