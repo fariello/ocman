@@ -15,3 +15,14 @@
 | `ses_XXXX` / `[XXXXX]` | cli.py | stale/obsolete=no | false positives, not real markers |
 
 No `must-before-release` or `should-before-release` TODO items found. Full confirmation in Section 5.
+
+## Section 5 feature-view triage (final)
+
+Re-confirmed the Section 1 triage from a feature/usability standpoint:
+- No `must-before-release` or `should-before-release` TODO items.
+- `forked/shared-spend de-dup`: legitimately out-of-scope-for-release (explicit deferral in TODO.md).
+- The delta introduced no new TODO/FIXME markers.
+- One outstanding release-close-out item is tracked OUTSIDE TODO.md: restore CI fail-fast
+  (finding S1-CI1); addressed in Section 7.
+
+No TODO.md edits required this run (it is already honest).

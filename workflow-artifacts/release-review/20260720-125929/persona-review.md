@@ -33,3 +33,19 @@ sign-off in Section 8. This is a delta re-review; personas focus on the changed 
   gives a no-context reader the rationale for the cross-platform and dependency decisions.
 - UI/UX (3): No user-facing CLI/TUI text changed in the delta (the fix is internal path
   logic), so no help/error-text doc drift. README/ARCHITECTURE remain consistent with behavior.
+
+## Section 5 eight-persona notes (delta re-review)
+
+- Novice (7): The macOS fix is transparent; a novice on macOS who imports a project now gets
+  correct session paths with no new step to learn. No new U finding.
+- Power user (6): `import --new-project-path` now behaves identically across OSes; scripting a
+  cross-machine project move no longer silently mis-rebases on macOS. Improvement, no friction.
+- UI/UX (3): No CLI/TUI surface changed in the delta. No new UX finding.
+- Architect (4): The fix chose the general case (resolve-then-match via shared _rebased_dir)
+  over a macOS special-case branch. Good separation, no bloat. No M finding.
+- Software engineer (5): Minimal, well-commented change; fallback preserves prior semantics.
+- QA/QC (1): Covered by S2/S3.
+- Testing (2): Covered by S3 (mutation-checked regression test).
+- Stakeholder (8): The release goal (a trustworthy cross-platform OpenCode admin tool) is
+  better served: macOS import correctness was a real fitness-for-purpose gap, now closed, and
+  the whole CI matrix is green. No stakeholder-level F finding.

@@ -29,3 +29,9 @@
 - CHANGELOG [1.2.0] + DECISIONS.md honestly reflect the delta; dash convention respected.
 - Findings: S4-D1 (completed), S4-D2 (changelog date stale, Low, fix at tag time or S7).
 - No user-facing doc drift (delta is internal path logic only).
+
+## Section 5 checkpoint
+
+- Eight personas run against the delta + standing state. No new F/U/M/GP/KD finding.
+- Principles: PASS (all 4 fallback). Cold-start: STRONG (DECISIONS.md new). TODO: clean.
+- Deprecation candidate: CI fail-fast diagnostic (= S1-CI1).
