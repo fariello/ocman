@@ -8,3 +8,11 @@
 - CI matrix at HEAD bebb520: all 15 cells GREEN (ubuntu/macos/windows x py3.10-3.14),
   verified earlier this session via `gh run watch` (exit 0). Off-Linux: real_process_detection
   detector tests skip (Linux-only path); the firmlink regression test runs everywhere.
+
+## Section 7 validation
+
+- After A1 (ci.yml fail-fast restore) + A2 (CHANGELOG date): full suite re-run
+  `PYTHONPATH=. pytest -q` = **408 passed, 2 skipped** (Linux py3.14). VERIFIED.
+- ci.yml YAML: pyyaml not installed locally; edit is a clean comment+key removal leaving
+  standard `strategy: -> matrix:` structure. Authoritative validation = CI run on push (S9).
+- No product code touched by S7; regression risk nil.

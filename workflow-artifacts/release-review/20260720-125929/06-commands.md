@@ -13,3 +13,5 @@
 | python -m build | clean sdist+wheel build | Successfully built ocman-1.2.0 sdist+wheel |
 | import ocman / vistab introspection | verify vistab 1.3.0 methods + clean import | set_color/set_header_style are Vistab instance methods; import clean on py3.14 |
 | PyPI json lookup | published-version check | published 1.1.0 < proposed 1.2.0 (valid bump) |
+| pytest -q (post-edit regression) | S7 validation | 408 passed, 2 skipped |
+| edit ci.yml + CHANGELOG | A1 restore fail-fast; A2 changelog date | applied; dash-clean |

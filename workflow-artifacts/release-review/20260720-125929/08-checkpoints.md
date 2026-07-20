@@ -42,3 +42,10 @@
 - PyPI published 1.1.0 < proposed 1.2.0 (valid bump). No PKG issue.
 - CI green 15/15; fail-fast restore pending (S1-CI1/S6-CI1). Schema: no drift from delta.
 - Findings: S6-P1 (completed), S6-CI1 (identified). Sections 1-6 complete; ready for implementation plan.
+
+## Section 7 checkpoint
+
+- Implemented A1 (fail-fast restore) + A2 (changelog date) in commit 4ee6928 (product code untouched).
+- Suite re-run: 408 passed, 2 skipped. Findings S1-CI1/S6-CI1/S4-D2 -> completed.
+- No LIVE/High finding to escalate; no deferrals. TODO.md unchanged (already honest).
+- Push held per policy; CI re-validation of A1 = Section 9 on approval.
