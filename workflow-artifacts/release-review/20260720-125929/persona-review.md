@@ -57,3 +57,16 @@ sign-off in Section 8. This is a delta re-review; personas focus on the changed 
   linux-only pysqlite3-binary marker keeps macOS/Windows installs clean.
 - Software engineer (5): Build is hermetic (hatchling isolated env), wheel carries both
   packages + the migrate script. The only packaging change is the dependency floor. No P risk.
+
+## Section 8 eight-persona sign-off (v1.2.0)
+
+1. QA/QC: ACCEPTABLE. Delta correct; suite 408 passed; no open defect.
+2. Testing/regression: ACCEPTABLE. Mutation-checked OS-agnostic regression test for the fix; no weakened assertions.
+3. UI/UX: ACCEPTABLE. No user-facing surface changed in the delta.
+4. Architect: ACCEPTABLE. Fix uses the general-case shared helper; no bloat.
+5. Software engineer: ACCEPTABLE. Minimal, well-commented change; resource handling intact.
+6. Power user: ACCEPTABLE. Cross-OS import parity improved; no friction.
+7. Novice: ACCEPTABLE. Fix is transparent; docs plain-language.
+8. Stakeholder: ACCEPTABLE. macOS import correctness closed; full CI matrix green; valid version bump.
+
+No persona raises a blocking concern. Sign-off: GO.

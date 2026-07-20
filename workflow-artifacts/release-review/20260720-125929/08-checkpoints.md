@@ -49,3 +49,10 @@
 - Suite re-run: 408 passed, 2 skipped. Findings S1-CI1/S6-CI1/S4-D2 -> completed.
 - No LIVE/High finding to escalate; no deferrals. TODO.md unchanged (already honest).
 - Push held per policy; CI re-validation of A1 = Section 9 on approval.
+
+## Section 8 checkpoint
+
+- Final validation: 408 passed/2 skipped. Sanity audit: no new risk.
+- Eight-persona sign-off: all ACCEPTABLE. Pending plans: none. LIVE/High: none.
+- Verdict: GO for v1.2.0. Push held for user consent rung.
+- Restart: not recommended (loop guard; delta small/clean).

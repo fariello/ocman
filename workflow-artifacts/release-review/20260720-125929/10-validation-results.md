@@ -16,3 +16,10 @@
 - ci.yml YAML: pyyaml not installed locally; edit is a clean comment+key removal leaving
   standard `strategy: -> matrix:` structure. Authoritative validation = CI run on push (S9).
 - No product code touched by S7; regression risk nil.
+
+## Section 8 final validation
+
+- Full suite (final): 408 passed, 2 skipped (Linux py3.14). VERIFIED.
+- CI matrix @ bebb520: 15/15 green (pre-S7-A1). S7-A1 re-validation on push.
+- Evidence gate: GO is backed by verified local suite + verified CI matrix + clean build +
+  clean gitleaks. The only unverified-until-push item is S7-A1's effect on CI (trivial edit).
