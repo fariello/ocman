@@ -64,7 +64,7 @@ def test_symlink_skipped(tmp_path, monkeypatch):
     real = tmp_path / "notrecovery.txt"
     real.write_text("d", encoding="utf-8")
     # A real symlink where the OS allows it; a faithfully simulated one on
-    # unprivileged Windows. See the decision record in conftest.make_symlink (why
+    # unprivileged Windows. See DECISIONS.md and conftest.make_symlink (why
     # real+simulate, vs skip-on-Windows / vs monkeypatch-everywhere).
     make_symlink(tmp_path / "opencode-20260404-010101-ses_link.restart.md", real, monkeypatch)
     renames = mig.plan_migration(tmp_path)
@@ -99,8 +99,8 @@ def test_symlink_introduced_before_apply_not_renamed(tmp_path, monkeypatch):
     # Simulate: the path is (or becomes) a symlink before apply. migrate_dir
     # re-checks is_symlink() just before os.rename, so it must skip. make_symlink
     # plants a real link where possible, or a simulated one on unprivileged
-    # Windows. See the decision record in conftest.make_symlink (why real+simulate,
-    # vs skip-on-Windows / vs monkeypatch-everywhere).
+    # Windows. See DECISIONS.md and conftest.make_symlink (why real+simulate, vs
+    # skip-on-Windows / vs monkeypatch-everywhere).
     real = tmp_path / "target.txt"; real.write_text("x", encoding="utf-8")
     make_symlink(src, real, monkeypatch)
     res = mig.migrate_dir(tmp_path, apply=True, force=False, log=lambda *a, **k: None)

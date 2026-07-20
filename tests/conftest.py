@@ -90,8 +90,8 @@ def make_symlink(link: Path, target: Path, monkeypatch) -> Path:
       symlink it did not (and could not) create, and it keeps the guard under test
       on Windows instead of skipping it.
 
-    Decision record (why this route; see also the executed-IPD trail, which is
-    this project's decision-log convention instead of a DECISIONS.md file). The
+    Decision record (see DECISIONS.md, "Symlink guard tests run on unprivileged
+    Windows", for the full write-up). The
     guards under test are real ocman security behavior: cli.py refuses to write
     through a symlink at the output path, and scripts/migrate_recovery_names.py
     skips symlinks when planning/applying renames (with a TOCTOU re-check). Only
