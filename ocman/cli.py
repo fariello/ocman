@@ -205,7 +205,7 @@ LONG_SESSION_INTERACTION_THRESHOLD: int = 100
 
 # Rough token estimation: ~4 characters per token for English text.
 CHARS_PER_TOKEN_ESTIMATE: float = 4.0
-__version__: str = "1.2.0"
+__version__: str = "1.3.0"
 
 # OpenAI-compatible provider npm packages.
 OPENAI_COMPATIBLE_PACKAGES: set[str] = {
@@ -5536,7 +5536,7 @@ def build_help(topic: str | None = None) -> str:
         return out
 
     browse = [
-        (f"{prog} list projects", "List all known opencode projects (alias: 'lp')"),
+        (f"{prog} list projects [PATTERN]", "List projects; PATTERN filters by dir/name (alias: 'lp')"),
         (f"{prog} list sessions [NAME]", "List sessions (aliases: 'ls [NAME]', 'session list')"),
         (f'{prog} search "some text"', "Search content + title (up to 10 lines/session)"),
         (f'{prog} search "text" in NAME', "Search within a project or session (-n = lines/session)"),
@@ -5544,7 +5544,7 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
         (f"{prog} spend", "LLM spend by project (--sessions, --historical)"),
-        (f"{prog} list running", "List running OpenCode instances; flag insecure servers"),
+        (f"{prog} list running [PATTERN]", "Running OpenCode instances; PATTERN filters by project/session (alias: 'lr')"),
         (f"{prog} logs", "Show historical cleanup/recovery activity"),
         (f"{prog} ui", "Launch the interactive terminal dashboard"),
     ]
@@ -5694,7 +5694,7 @@ def build_help_reference() -> str:
         ("spend / running", [
             ("spend [PROJECT] [--sessions]", "LLM spend by project, or per-session for one project"),
             ("spend --historical [--json]", "Include spend + tokens on since-deleted sessions"),
-            ("list running [--long --all-users --probe --json]", "Running OpenCode instances; flag insecure control servers"),
+            ("list running [PATTERN] [--long --all-users --probe --json]", "Running OpenCode instances; PATTERN filters by project/session; flag insecure control servers"),
         ]),
         ("history / config", [
             ("history show", "Historical activity (alias: 'ocman logs')"),
@@ -5721,7 +5721,7 @@ def build_help_reference() -> str:
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
-            ("lp | ls [NAME]", "Short aliases for 'list projects' / 'list sessions'"),
+            ("lp | ls | lr [PATTERN]", "Short aliases for 'list projects' / 'list sessions' / 'list running'; optional PATTERN filters"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
             ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
@@ -5810,11 +5810,14 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     if len(rest) >= 2 and any(t.lower() == "help" for t in rest[1:]):
         rest = [rest[0]] + [t for t in rest[1:] if t.lower() != "help"] + ["--help"]
 
-    # (0) short aliases: "ls [NAME]" -> "session list [NAME]"; "lp" -> "project list".
+    # (0) short aliases: "ls [PATTERN]" -> "session list [PATTERN]"; "lp [PATTERN]" ->
+    # "project list [PATTERN]"; "lr [PATTERN]" -> "running [PATTERN]".
     if rest and rest[0].lower() == "ls":
         rest = ["session", "list", *rest[1:]]
     elif rest and rest[0].lower() == "lp":
         rest = ["project", "list", *rest[1:]]
+    elif rest and rest[0].lower() == "lr":
+        rest = ["running", *rest[1:]]
 
     # (1) word-order: "list projects|sessions ..."
     if rest and rest[0].lower() == "list" and len(rest) >= 2:
@@ -6303,6 +6306,9 @@ def build_parser() -> argparse.ArgumentParser:
     pr_sub = p_project.add_subparsers(dest="_action", metavar="<action>")
 
     sp = new_action(p_project, pr_sub, "list", help="List all projects.")
+    sp.add_argument("pattern", nargs="?", default=None,
+                    help="Optional case-insensitive filter: keep only projects whose directory "
+                         "or name matches.")
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N projects (a truncation note reports the rest).")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
@@ -6449,6 +6455,9 @@ def build_parser() -> argparse.ArgumentParser:
     new_sub("models", help="List available LLM models (was --show-models).")
 
     sp = new_sub("running", help="List running OpenCode instances; flag insecure servers.")
+    sp.add_argument("pattern", nargs="?", default=None,
+                    help="Optional case-insensitive filter: keep only instances whose project/"
+                         "working directory or attributed session (id/title/directory) matches.")
     sp.add_argument("--all-users", action="store_true",
                     help="Include all users' instances (auth shown as 'unknown' without root).")
     sp.add_argument("--probe", action="store_true",
@@ -6738,6 +6747,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["list_projects"] = True
             out["limit"] = g("limit", None)
             out["json_output"] = bool(g("json", False))
+            out["projects_filter"] = g("pattern", None)
         elif action == "delete":
             out["delete_project"] = True
             out["project"] = g("name")
@@ -6879,6 +6889,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["probe"] = bool(g("probe", False))
         out["json_output"] = bool(g("json", False))
         out["running_long"] = bool(g("running_long", False))
+        out["running_filter"] = g("pattern", None)
 
     elif group == "doctor":
         out["run_doctor"] = True
@@ -11835,10 +11846,15 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
 
 def cli_list_running(*, all_users: bool = False, probe: bool = False,
                      json_output: bool = False, long_output: bool = False,
+                     pattern: str | None = None,
                      verbosity: int = 0) -> None:
     """`ocman list running`: list running OpenCode instances and flag insecure servers.
 
     Observe-only. FAILS LOUD if detection is unreliable (never implies "all clear").
+    An optional case-insensitive ``pattern`` keeps only instances whose working directory,
+    project, or attributed session (id/ids/title/directory/project_id) matches. Session
+    attribution is present on every instance (``detect_running_instances`` always calls
+    ``_attribute_session``), so filtering by session info does NOT require ``--long``.
     """
     try:
         instances = detect_running_instances(all_users=all_users, probe=probe, verbosity=verbosity)
@@ -11852,6 +11868,24 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
             print(color_yellow(
                 "NOT an all-clear: detection was incomplete. Re-run on Linux with 'ss' available."))
         die("running-instance detection unavailable")
+
+    # Optional case-insensitive filter over working dir, project, and attributed session.
+    _total_before_filter = len(instances)
+    if pattern:
+        _rf = pattern.lower()
+
+        def _inst_matches(it: dict) -> bool:
+            hay = [it.get("cwd") or "", it.get("project") or ""]
+            sess = it.get("session") or {}
+            hay.append(sess.get("id") or "")
+            hay.append(sess.get("title") or "")
+            hay.append(sess.get("directory") or "")
+            hay.append(sess.get("project_id") or "")
+            for sid in (sess.get("ids") or []):
+                hay.append(sid or "")
+            return any(_rf in h.lower() for h in hay)
+
+        instances = [it for it in instances if _inst_matches(it)]
 
     def _auth_cell(auth: str) -> str:
         """Map the raw auth enum to a colored YES/NO/???/n/a cell for the 'Auth?' column
@@ -11883,7 +11917,12 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
 
     scope = "all users" if all_users else "current user"
     if not instances:
-        print(color_bold(f"No running OpenCode instances found ({scope})."))
+        if pattern:
+            print(color_bold(
+                f"No running OpenCode instances match filter {pattern!r} "
+                f"({_total_before_filter} running, {scope})."))
+        else:
+            print(color_bold(f"No running OpenCode instances found ({scope})."))
         return
 
     print(color_bold(f"Running OpenCode instances ({len(instances)}, {scope}):"))
@@ -15148,6 +15187,7 @@ def _run_main() -> None:
             probe=getattr(args, "probe", False),
             json_output=getattr(args, "json_output", False),
             long_output=getattr(args, "running_long", False),
+            pattern=getattr(args, "running_filter", None),
             verbosity=verbosity,
         )
         return
@@ -15227,6 +15267,20 @@ def _run_main() -> None:
         projects = db_list_projects()
         if not projects:
             die("No projects found. Is opencode installed and has it been used?")
+        # Optional case-insensitive filter on directory OR name (applied before --limit).
+        _proj_filter = getattr(args, "projects_filter", None)
+        if _proj_filter:
+            _pf = _proj_filter.lower()
+            projects = [
+                p for p in projects
+                if _pf in (p.get("directory") or "").lower()
+                or _pf in (p.get("name") or "").lower()
+            ]
+            if not projects:
+                if getattr(args, "json_output", False):
+                    emit_json("projects", {"count": 0, "withheld": 0, "projects": []})
+                    return
+                die(f"No projects match filter: {_proj_filter!r}")
         if getattr(args, "json_output", False):
             withheld = 0
             rows = projects
@@ -15262,12 +15316,27 @@ def _run_main() -> None:
     # ran in/under it (e.g. home-directory sessions filed under the global "/"
     # project). Scoping then keys off session.directory instead of project_id.
     _dir_scope: str | None = None
+    # Session-list text filter: set only for `list sessions <ARG>` when ARG does NOT
+    # resolve to a project (project-scope precedence). Then we list all sessions and
+    # keep those whose title/directory/project match ARG (case-insensitive).
+    _session_filter: str | None = None
 
     if args.project:
-        res = resolve_and_expand_targets([args.project], kinds={"project"})
-        proj = res.projects[0]
-        _project_id = proj["id"]
-        _project_dir = proj["directory"]
+        # For `list sessions <ARG>`, apply project-scope PRECEDENCE non-fatally: if ARG
+        # resolves to exactly one project use it (unchanged behavior); otherwise fall
+        # back to a case-insensitive session filter instead of the fatal "no match" exit.
+        if args.list_sessions:
+            _matched_proj = resolve_project(args.project)
+            if _matched_proj:
+                _project_id = _matched_proj["id"]
+                _project_dir = _matched_proj["directory"]
+            else:
+                _session_filter = args.project
+        else:
+            res = resolve_and_expand_targets([args.project], kinds={"project"})
+            proj = res.projects[0]
+            _project_id = proj["id"]
+            _project_dir = proj["directory"]
     else:
         # Auto-detect: check if CWD matches a known project (or is a subdirectory of one).
         cwd_path = Path.cwd()
@@ -15343,6 +15412,22 @@ def _run_main() -> None:
                 all_sessions = db_list_sessions()
                 if not all_sessions:
                     die("No sessions found.")
+
+        # Optional text filter (project-scope precedence fallback): keep sessions whose
+        # title, directory, or project directory contains the pattern (case-insensitive).
+        if _session_filter:
+            _sf = _session_filter.lower()
+            all_sessions = [
+                s for s in all_sessions
+                if _sf in (s.get("title") or "").lower()
+                or _sf in (s.get("directory") or "").lower()
+                or _sf in (s.get("project_dir") or "").lower()
+            ]
+            if not all_sessions:
+                if getattr(args, "json_output", False):
+                    emit_json("sessions", {"count": 0, "withheld": 0, "sessions": []})
+                    return
+                die(f"No sessions match filter: {_session_filter!r}")
 
         # Filter child sessions unless --all-sessions.
         show_all = args.all_sessions

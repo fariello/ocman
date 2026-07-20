@@ -5,7 +5,7 @@
 - Scope: `ocman/cli.py` argv preprocessing (`preprocess_argv`), the three list handlers
   (`list projects`, `list sessions`, `list running`), help text, and tests. No DB schema
   change, no TUI change.
-- Status: reviewed (not yet executed; awaiting human approval)
+- Status: executed (2026-07-20)
 - Target version: 1.3.0 (cut 1.3.0-rc1 first, promote to 1.3.0 after validation)
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -153,6 +153,34 @@ were resolved from repository evidence, not from the human:
   PR-003 (`--long` dest is `running_long`; Step 5 must read it), PR-004 (`--json` empty-match
   must be a well-formed empty payload, exit 0). No open questions; no unfixed BLOCKER/HIGH.
   GO - PENDING HUMAN APPROVAL.
+- 2026-07-20 approved by maintainer; executed (its_direct/pt3-claude-opus-4.8). All 7 steps done.
+
+## Post-execution summary
+
+- Step 1: `lr` -> `running` added to `preprocess_argv` short-alias block (cli.py:5813-5822).
+- Step 2: `running` subparser gained a `pattern` positional (nargs="?"); `_normalize` carries
+  it as `running_filter`; call site passes `pattern=` into `cli_list_running`.
+- Step 3: `project list` gained a `pattern` positional -> `projects_filter`; handler filters by
+  directory OR name (ci) before `--limit`, in text + `--json`; empty match under `--json` emits
+  a well-formed empty payload and returns.
+- Step 4: `session list` reuses the `name` positional. Handler now resolves it NON-fatally via
+  `resolve_project` (no `sys.exit`): unique project match -> scope (unchanged); otherwise sets
+  `_session_filter` and filters all sessions by title/directory/project_dir (ci). Empty match
+  under `--json` emits an empty payload.
+- Step 5: `cli_list_running` gained a `pattern` param; filters instances by cwd/project and by
+  the always-attributed `session` dict (id/ids/title/directory/project_id) WITHOUT needing
+  `--long` (verified `_attribute_session` runs unconditionally at cli.py:8034). Empty-match
+  message names the pattern + total-before-filter.
+- Step 6: help text updated (overview browse list, maintain/reference lists) to add `lr` and the
+  `[PATTERN]` filter on all three.
+- Step 7: version bumped to 1.3.0 (`pyproject.toml`, `ocman/cli.py __version__`); CHANGELOG
+  `[1.3.0]` Added (lr alias, filters) + Changed (ls fallback) entries; README alias list +
+  command-reference table updated.
+- Tests: added `test_preprocess_lr_short_alias` and 6 e2e filter tests (lp dir+name, lp empty
+  json, ls fallback, ls project-scope-precedence preserved, ls empty json, lr cwd+session match
+  without --long + empty). Full suite: **415 passed, 2 skipped** (was 408; +7 new).
+- Release: 1.3.0 not yet tagged; cut `1.3.0-rc1` after green CI, then promote to `1.3.0` via the
+  release-execution discipline (each externally-visible action separately confirmed).
 
 ## Approval and execution gate
 

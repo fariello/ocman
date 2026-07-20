@@ -2,6 +2,29 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-20
+
+### Added
+- **`lr` short alias for `list running`.** Parity with the existing `lp` (`list projects`)
+  and `ls` (`list sessions`) short aliases.
+- **Optional case-insensitive filter on the list commands.** `list projects` / `lp`,
+  `list sessions` / `ls`, and `list running` / `lr` now accept an optional trailing
+  `PATTERN` that narrows the output by a case-insensitive substring match:
+  - `lp <PATTERN>` keeps projects whose directory OR name matches.
+  - `lr <PATTERN>` keeps running instances whose working directory, project, OR attributed
+    session (id / title / directory) matches. Session matching does not require `--long`.
+  - The filter is applied before `--limit`, and `--json` reflects the filtered set (an
+    empty match emits a well-formed empty payload and exits 0, so it stays scriptable).
+
+### Changed
+- **`ls <ARG>` now falls back to a session filter instead of erroring.** Previously,
+  `list sessions <ARG>` where `<ARG>` did not resolve to a project printed "No matches
+  found" and exited non-zero. Now it keeps the existing project-scope PRECEDENCE (if
+  `<ARG>` uniquely resolves to a project, it scopes to that project's sessions, exactly as
+  before) and otherwise treats `<ARG>` as a case-insensitive filter over session title,
+  directory, and project. This is additive: every previously-working `ls <project>`
+  invocation behaves identically; only the previously-fatal case becomes a useful filter.
+
 ## [1.2.0] - 2026-07-20
 
 ### Changed

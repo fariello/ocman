@@ -204,8 +204,15 @@ A handful of top-level verbs are kept as convenient aliases for the most common 
 
 **Word-order aliases.** The `list` verb accepts either word order, so you can read it whichever way
 feels natural:
-*   `ocman list projects` = `ocman project list` (short: `ocman lp`)
+*   `ocman list projects [PATTERN]` = `ocman project list [PATTERN]` (short: `ocman lp [PATTERN]`)
 *   `ocman list sessions [NAME]` = `ocman session list [NAME]` (short: `ocman ls [NAME]`)
+*   `ocman list running [PATTERN]` = `ocman running [PATTERN]` (short: `ocman lr [PATTERN]`)
+
+The optional trailing `PATTERN` is a case-insensitive substring filter: `lp` matches a project's
+directory or name; `lr` matches a running instance's working directory, project, or attributed
+session (id/title/directory). For `ls [NAME]`, `NAME` keeps its project-scope meaning when it
+resolves to a single project; otherwise it acts as a case-insensitive filter over session title,
+directory, and project (so `ls sometext` filters instead of erroring).
 
 **Auto-detecting `move` and `export` verbs.** Two top-level verbs figure out whether you gave them a
 project or a session, so you rarely need to say which:
@@ -427,8 +434,8 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | Command | Description |
 |:---|:---|
 | `ocman search QUERY [NAME]` | Alias of `ocman session search`. Scope with a trailing `NAME` positional or `in [project\|session] NAME` (auto-detects; disambiguate with `in project NAME` / `in session NAME`). `-n N`/`--limit N` sets the max matching lines shown per session (default: 10). |
-| `ocman list projects` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list` / `ocman session list [NAME]`. Short forms: `ocman lp` / `ocman ls [NAME]`. |
-| `ocman list running` | List running OpenCode instances (pid/user/uptime/kind/dir/project/session) and flag insecure control servers (unauthenticated or non-loopback listeners) in bold red. Observe-only; current user by default (`--all-users` opt-in). `--probe` confirms auth via a read-only `GET /app` on your own loopback listeners; `--json` for machine output. Fails loud if it cannot reliably enumerate (never a false "all clear"). Linux-focused. |
+| `ocman list projects [PATTERN]` / `ocman list sessions [NAME]` | Word-order aliases of `ocman project list [PATTERN]` / `ocman session list [NAME]`. Short forms: `ocman lp [PATTERN]` / `ocman ls [NAME]`. Optional `PATTERN` filters projects by directory/name (case-insensitive); `NAME` for sessions keeps project-scope precedence and otherwise filters sessions by title/directory/project. |
+| `ocman list running [PATTERN]` (short: `ocman lr [PATTERN]`) | List running OpenCode instances (pid/user/uptime/kind/dir/project/session) and flag insecure control servers (unauthenticated or non-loopback listeners) in bold red. Optional `PATTERN` filters (case-insensitive) by working directory, project, or attributed session (id/title/directory); no `--long` required to match session info. Observe-only; current user by default (`--all-users` opt-in). `--probe` confirms auth via a read-only `GET /app` on your own loopback listeners; `--json` for machine output. Fails loud if it cannot reliably enumerate (never a false "all clear"). Linux-focused. |
 | `ocman doctor` | Read-only health checkup of your OpenCode storage (safe to run any time, even while OpenCode is running). Reports DB/WAL size, integrity, event-log bloat, compacted-part output, orphaned rows/diff files, old sessions, ocman + foreign backup inventory, temp leftovers, and snapshots; each row names the `ocman` command that fixes it and links the upstream issue where the cause is an OpenCode bug. `--json` for machine output; `-v` for per-table/per-project detail. Never modifies anything. |
 | `ocman reclaim` | Guarded disk reclamation. A bare run does only the safe offline `wal_checkpoint(TRUNCATE)` + `VACUUM` (refused while any process holds the DB open, unless `--while-running`; a backup is taken first). Opt in to more: `--reclaim-temp` (delete leaked `opencode-wal-*.db` / `/tmp/*.so` not held by a live process), `--reclaim-parts` (empty compacted tool-part output; verify-or-skip, never touches the event log), `--backups-dir PATH` (prune a named backup dir), `--force-snapshots PATH` (dangerous; can break undo/revert). `--tmp-min-age-hours N` sets how old a temp artifact must be to be reclaimed (default from config). `--dry-run` previews; `--force` bypasses the process-lock check; `-y` skips the ordinary confirm (not the snapshot confirm). |
 | `ocman move SPEC to DST` | Auto-detects whether `SPEC` is a project or a session and relocates it. `to` is optional (`--to DST` also works); `--metadata-only` supported. Equivalent to `ocman project move` / `ocman session move`. Disambiguate an ambiguous or numeric `SPEC` with `ocman move project\|session SPEC to DST`. |

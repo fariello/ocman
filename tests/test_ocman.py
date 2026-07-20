@@ -1799,6 +1799,17 @@ def test_preprocess_ls_lp_short_aliases():
     assert preprocess_argv(["ocman", "lp", "--foo"]) == ["ocman", "project", "list", "--foo"]
 
 
+def test_preprocess_lr_short_alias():
+    """`lr` is a short alias for `list running` (parity with lp/ls)."""
+    from ocman import preprocess_argv
+    assert preprocess_argv(["ocman", "lr"]) == ["ocman", "running"]
+    assert preprocess_argv(["ocman", "lr", "myproj"]) == ["ocman", "running", "myproj"]
+    # `list running [PATTERN]` word-order form also carries the pattern.
+    assert preprocess_argv(["ocman", "list", "running", "foo"]) == ["ocman", "running", "foo"]
+    # Leading globals preserved.
+    assert preprocess_argv(["ocman", "--db", "/x", "lr"]) == ["ocman", "--db", "/x", "running"]
+
+
 def test_preprocess_move_export_to_keyword():
     from ocman import preprocess_argv
     assert preprocess_argv(["ocman", "move", "X", "to", "Y"]) == ["ocman", "move", "X", "Y"]
@@ -4479,3 +4490,109 @@ def test_preprocess_argv_leading_help_command_untouched():
     # The top-level `help [topic]` command is NOT rewritten.
     assert ocman.preprocess_argv(["ocman", "help"]) == ["ocman", "help"]
     assert ocman.preprocess_argv(["ocman", "help", "all"]) == ["ocman", "help", "all"]
+
+
+# --- list-command filtering (lp / ls / lr) + lr alias -------------------------
+
+def _seed_two_projects(temp_db):
+    """Seed two distinct projects with one session each for filter tests."""
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    c.execute("INSERT INTO project (id, worktree, name) VALUES ('pa', ?, 'Alpha')",
+              (abs_path("/home/me/alpha"),))
+    c.execute("INSERT INTO project (id, worktree, name) VALUES ('pb', ?, 'Beta')",
+              (abs_path("/home/me/beta"),))
+    c.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+              "VALUES ('sa', 'pa', 'Fix the widget', 1000, 2000, ?)", (abs_path("/home/me/alpha"),))
+    c.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+              "VALUES ('sb', 'pb', 'Refactor parser', 1100, 2100, ?)", (abs_path("/home/me/beta"),))
+    conn.commit()
+    conn.close()
+
+
+def test_list_projects_filter_by_dir_and_name(temp_db, monkeypatch, capsys):
+    import sys, json
+    _seed_two_projects(temp_db)
+    # Filter by directory substring.
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "lp", "alpha", "--json"])
+    ocman.main()
+    data = json.loads(capsys.readouterr().out)["projects"]
+    assert data["count"] == 1
+    assert data["projects"][0]["id"] == "pa"
+    # Filter by name substring (case-insensitive), different project.
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "lp", "BETA", "--json"])
+    ocman.main()
+    data = json.loads(capsys.readouterr().out)["projects"]
+    assert data["count"] == 1
+    assert data["projects"][0]["id"] == "pb"
+
+
+def test_list_projects_filter_no_match_json_is_empty(temp_db, monkeypatch, capsys):
+    import sys, json
+    _seed_two_projects(temp_db)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "lp", "zzz-nomatch", "--json"])
+    ocman.main()  # must NOT exit non-zero on empty filter under --json
+    data = json.loads(capsys.readouterr().out)["projects"]
+    assert data["count"] == 0 and data["projects"] == []
+
+
+def test_list_sessions_filter_fallback_when_not_a_project(temp_db, monkeypatch, capsys):
+    import sys, json
+    _seed_two_projects(temp_db)
+    # "widget" matches no project, so it falls back to a session filter on title.
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "ls", "widget", "--json"])
+    ocman.main()
+    data = json.loads(capsys.readouterr().out)["sessions"]
+    assert data["count"] == 1
+    assert data["sessions"][0]["id"] == "sa"
+
+
+def test_list_sessions_project_scope_precedence_preserved(temp_db, monkeypatch, capsys):
+    import sys, json
+    _seed_two_projects(temp_db)
+    # "beta" uniquely substring-matches project pb's directory -> project SCOPE (old behavior),
+    # returning that project's sessions (sb), NOT a title filter.
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "ls", "beta", "--json"])
+    ocman.main()
+    data = json.loads(capsys.readouterr().out)["sessions"]
+    assert {s["id"] for s in data["sessions"]} == {"sb"}
+
+
+def test_list_sessions_filter_no_match_json_is_empty(temp_db, monkeypatch, capsys):
+    import sys, json
+    _seed_two_projects(temp_db)
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "ls", "zzz-nomatch", "--json"])
+    ocman.main()  # empty filter under --json must be a clean empty payload, exit 0
+    data = json.loads(capsys.readouterr().out)["sessions"]
+    assert data["count"] == 0 and data["sessions"] == []
+
+
+def test_list_running_filter_matches_cwd_and_session(monkeypatch, capsys):
+    import json
+    from ocman import cli_list_running
+    # Two fake running instances; filter should keep only the matching one.
+    instances = [
+        {"pid": 1, "user": "me", "elapsed": "1:00", "kind": "serve", "listeners": [],
+         "auth": "n/a", "exposed": False, "vulnerable": False,
+         "cwd": "/home/me/alpha", "project": "pa",
+         "session": {"id": "ses_aaa", "title": "Fix the widget", "directory": "/home/me/alpha",
+                     "project_id": "pa", "provenance": "argv"}},
+        {"pid": 2, "user": "me", "elapsed": "2:00", "kind": "serve", "listeners": [],
+         "auth": "n/a", "exposed": False, "vulnerable": False,
+         "cwd": "/home/me/beta", "project": "pb",
+         "session": {"id": "ses_bbb", "title": "Refactor parser", "directory": "/home/me/beta",
+                     "project_id": "pb", "provenance": "argv"}},
+    ]
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: list(instances))
+    # Match by cwd/project substring (no --long needed).
+    cli_list_running(json_output=True, pattern="alpha")
+    data = json.loads(capsys.readouterr().out)["running"]
+    assert data["count"] == 1 and data["instances"][0]["pid"] == 1
+    # Match by SESSION title substring, WITHOUT --long (session data is always attributed).
+    cli_list_running(json_output=True, pattern="parser")
+    data = json.loads(capsys.readouterr().out)["running"]
+    assert data["count"] == 1 and data["instances"][0]["pid"] == 2
+    # No match -> empty, reliable.
+    cli_list_running(json_output=True, pattern="zzz-nomatch")
+    data = json.loads(capsys.readouterr().out)["running"]
+    assert data["count"] == 0 and data["instances"] == []
