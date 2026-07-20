@@ -4596,3 +4596,131 @@ def test_list_running_filter_matches_cwd_and_session(monkeypatch, capsys):
     cli_list_running(json_output=True, pattern="zzz-nomatch")
     data = json.loads(capsys.readouterr().out)["running"]
     assert data["count"] == 0 and data["instances"] == []
+
+
+# --- session rename (session rename / top-level rename) -----------------------
+
+def _seed_one_session(temp_db, sid="ses_r1", title="Old Title"):
+    conn = sqlite3.connect(str(temp_db))
+    c = conn.cursor()
+    c.execute("INSERT INTO project (id, worktree, name) VALUES ('pr', ?, 'Proj')",
+              (abs_path("/home/me/proj"),))
+    c.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+              "VALUES (?, 'pr', ?, 1000, 2000, ?)", (sid, title, abs_path("/home/me/proj")))
+    conn.commit()
+    conn.close()
+
+
+def test_db_rename_session_returns_old_and_persists_new(temp_db, monkeypatch):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    old = ocman.db_rename_session("ses_r1", "New Title")
+    assert old == "Old Title"
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "New Title"
+    conn.close()
+
+
+def test_db_rename_session_missing_id_raises(temp_db):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    with pytest.raises(ocman.RecoveryError, match="not found"):
+        ocman.db_rename_session("ses_nope", "x")
+
+
+def test_db_rename_session_title_is_bound_not_interpolated(temp_db):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    evil = "weird'; DROP TABLE session;--"
+    ocman.db_rename_session("ses_r1", evil)
+    conn = sqlite3.connect(str(temp_db))
+    # Stored verbatim, and the table still exists (no injection).
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == evil
+    assert conn.execute("SELECT COUNT(*) FROM session").fetchone()[0] == 1
+    conn.close()
+
+
+def _run(monkeypatch, temp_db, argv):
+    import sys
+    monkeypatch.setattr(ocman, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), *argv])
+    ocman.main()
+
+
+def test_rename_by_id_end_to_end(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    _run(monkeypatch, temp_db, ["session", "rename", "ses_r1", "--to", "Brand New"])
+    out = capsys.readouterr().out
+    assert "Renamed:" in out and "Old Title" in out and "Brand New" in out
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Brand New"
+    conn.close()
+
+
+def test_rename_top_level_preserves_to_inside_title(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    # The 'to' keyword precedes the title; the 'to' INSIDE the quoted title must survive.
+    _run(monkeypatch, temp_db, ["rename", "ses_r1", "to", "migrate auth to tokens"])
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "migrate auth to tokens"
+    conn.close()
+
+
+def test_rename_positional_title_without_to(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    _run(monkeypatch, temp_db, ["rename", "ses_r1", "Just A Title"])
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Just A Title"
+    conn.close()
+
+
+def test_rename_by_title_substring(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Unique Widget Session")
+    _run(monkeypatch, temp_db, ["rename", "widget", "to", "Renamed Via Substring"])
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Renamed Via Substring"
+    conn.close()
+
+
+def test_rename_empty_title_rejected(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    import sys
+    monkeypatch.setattr(ocman, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "session", "rename", "ses_r1", "--to", "   "])
+    with pytest.raises(SystemExit):
+        ocman.main()
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Old Title"
+    conn.close()
+
+
+def test_rename_capitalization_only_writes(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "fix")
+    _run(monkeypatch, temp_db, ["session", "rename", "ses_r1", "--to", "Fix"])
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Fix"
+    conn.close()
+
+
+def test_rename_dry_run_writes_nothing(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    _run(monkeypatch, temp_db, ["session", "rename", "ses_r1", "--to", "New", "--dry-run"])
+    out = capsys.readouterr().out
+    assert "Dry run" in out
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "Old Title"
+    conn.close()
+
+
+def test_rename_running_guard_caveat_shown(temp_db, monkeypatch, capsys):
+    _seed_one_session(temp_db, "ses_r1", "Old Title")
+    import sys
+    # The rename must ALWAYS print the honest "cannot tell if this session is in use" caveat.
+    # We stub the guard itself (its internals are tested elsewhere) and assert the caveat +
+    # that the rename proceeds.
+    monkeypatch.setattr(ocman, "require_safe_to_mutate", lambda *a, **k: None)
+    monkeypatch.setattr(sys, "argv",
+                        ["ocman", "--db", str(temp_db), "session", "rename", "ses_r1", "--to", "New"])
+    ocman.main()
+    out = capsys.readouterr().out
+    assert "does not track which process uses which session" in out
+    conn = sqlite3.connect(str(temp_db))
+    assert conn.execute("SELECT title FROM session WHERE id='ses_r1'").fetchone()[0] == "New"
+    conn.close()

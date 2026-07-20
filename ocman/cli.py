@@ -5580,6 +5580,7 @@ def build_help(topic: str | None = None) -> str:
     ]
 
     move = [
+        (f'{prog} rename SPEC to "New title"', "Rename a session (change its title)"),
         (f"{prog} move SPEC to DST", "Move a project or session (auto-detects which)"),
         (f"{prog} move project SRC to DST", "Force project (disambiguate / use a number)"),
         (f"{prog} db rebase --from A --to B", "Bulk rebase path prefixes in the DB"),
@@ -5665,6 +5666,7 @@ def build_help_reference() -> str:
             ("export ID --to FILE", "Export a session bundle (.ocbox)"),
             ("import FILE [--to-project ID]", "Import a session or project bundle (auto-detects)"),
             ("move ID --to DST [--metadata-only]", "Relocate a session"),
+            ('rename ID [to] "New title" [--dry-run]', "Change a session's title"),
         ]),
         ("project <action>", [
             ("list", "List all projects"),
@@ -5719,6 +5721,7 @@ def build_help_reference() -> str:
         ("other verbs", [
             ("search QUERY [in [project|session] NAME]", "Alias of 'session search'"),
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
+            ('rename SPEC to "New title"', "Rename a session (alias of 'session rename')"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
             ("lp | ls | lr [PATTERN]", "Short aliases for 'list projects' / 'list sessions' / 'list running'; optional PATTERN filters"),
@@ -5861,7 +5864,16 @@ def preprocess_argv(argv: list[str]) -> list[str]:
     # (2) "to" keyword for move/export (drop a standalone 'to' before the dst).
     if rest and rest[0].lower() in ("move", "export"):
         rest = [tok for tok in rest if tok.lower() != "to"]
-    elif len(rest) >= 2 and rest[0].lower() == "backup" and rest[1].lower() == "create":
+    elif (
+        (len(rest) >= 2 and rest[0].lower() == "backup" and rest[1].lower() == "create")
+        or (rest and rest[0].lower() == "rename")
+        or (len(rest) >= 2 and rest[0].lower() == "session" and rest[1].lower() == "rename")
+    ):
+        # Positional-aware: convert a standalone 'to <next>' into '--to <next>' (where
+        # <next> is not a flag). Unlike move/export's blanket strip, this preserves a 'to'
+        # INSIDE a quoted title (e.g. rename S to "a to b" keeps the title "a to b"), since
+        # the title is a single argv token. Shared by 'backup create', 'rename', and
+        # 'session rename'.
         new_rest = []
         i = 0
         while i < len(rest):
@@ -6301,6 +6313,19 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
 
+    sp = new_action(p_session, s_sub, "rename", help="Change a session's title.")
+    sp.add_argument("session", help="Session ID, list number, or unique title substring.")
+    sp.add_argument("dst", nargs="?", default=None, metavar="TITLE",
+                    help="New title (may be preceded by the word 'to').")
+    sp.add_argument("--to", dest="to_flag", default=None, metavar="TITLE",
+                    help="New title (alternative to the positional).")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show the intended rename without writing.")
+    sp.add_argument("--while-running", dest="while_running", action="store_true",
+                    help="Proceed even if OpenCode is running (can corrupt state).")
+    sp.add_argument("--force", action="store_true", help="Alias for --while-running.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
+
     # ---- project -----------------------------------------------------------
     p_project = new_sub("project", help="Work with projects.")
     pr_sub = p_project.add_subparsers(dest="_action", metavar="<action>")
@@ -6409,6 +6434,20 @@ def build_parser() -> argparse.ArgumentParser:
                     help="After verifying a remote move, delete the local copy.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
+
+    # 'ocman rename SPEC to "New title"' (top-level sugar for 'session rename').
+    sp = new_sub("rename", help="Rename a session (change its title).")
+    sp.add_argument("spec", help="Session ID, list number, or unique title substring.")
+    sp.add_argument("dst", nargs="?", default=None, metavar="TITLE",
+                    help="New title (may be preceded by the word 'to').")
+    sp.add_argument("--to", dest="to_flag", default=None, metavar="TITLE",
+                    help=argparse.SUPPRESS)  # 'to TITLE' is the preferred form
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show the intended rename without writing.")
+    sp.add_argument("--while-running", dest="while_running", action="store_true",
+                    help="Proceed even if OpenCode is running (can corrupt state).")
+    sp.add_argument("--force", action="store_true", help="Alias for --while-running.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
 
     # 'ocman export [session] SPEC to FILE' (session-scope for now).
     sp = new_sub("export", help="Export a session or project bundle (.ocbox); auto-detects the kind.")
@@ -6739,6 +6778,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["confirm_remote_delete"] = bool(g("confirm_remote_delete", False))
             out["yes"] = bool(g("yes", False))
             out["force"] = bool(g("force", False))
+        elif action == "rename":
+            out["rename_session"] = g("session")
+            out["rename_to"] = g("to_flag") or g("dst")
+            out["dry_run"] = bool(g("dry_run", False))
+            out["while_running"] = bool(g("while_running", False))
+            out["force"] = bool(g("force", False))
+            out["yes"] = bool(g("yes", False))
         else:
             _no_action_error("session")
 
@@ -6848,6 +6894,14 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
 
     elif group == "export":
         _apply_move_or_export(out, ns, g, "export")
+
+    elif group == "rename":
+        out["rename_session"] = g("spec")
+        out["rename_to"] = g("to_flag") or g("dst")
+        out["dry_run"] = bool(g("dry_run", False))
+        out["while_running"] = bool(g("while_running", False))
+        out["force"] = bool(g("force", False))
+        out["yes"] = bool(g("yes", False))
 
     elif group == "info":
         out["info"] = True
@@ -9872,6 +9926,52 @@ def db_move_session_metadata(session_id: str, old_dir: str, new_dir: str) -> Non
             except Exception:
                 pass
         raise RecoveryError(f"Failed to update session metadata: {e}")
+    finally:
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
+def db_rename_session(session_id: str, new_title: str) -> str:
+    """Set a session's display title. Returns the OLD title (the value replaced).
+
+    Atomic read-then-update in one transaction: the returned old title is exactly the
+    value that was overwritten (no race with a concurrent writer). ``new_title`` is passed
+    as a BOUND parameter, never string-formatted, so a title containing quotes/semicolons
+    is stored verbatim and cannot inject SQL. Raises RecoveryError if the session does not
+    exist. Callers must apply the running-guard (require_safe_to_mutate) themselves.
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None:
+        raise RecoveryError("sqlite3 module not available.")
+    if not OPENCODE_DB_PATH.exists():
+        raise _db_not_found_error()
+
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        conn.execute("BEGIN TRANSACTION")
+        cursor.execute("SELECT title FROM session WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        if row is None:
+            conn.rollback()
+            raise RecoveryError(f"Session not found: {session_id}")
+        old_title = row[0] or ""
+        cursor.execute("UPDATE session SET title = ? WHERE id = ?", (new_title, session_id))
+        conn.commit()
+        return old_title
+    except RecoveryError:
+        raise
+    except Exception as e:
+        if conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise RecoveryError(f"Failed to rename session: {e}")
     finally:
         if conn:
             try:
@@ -15160,6 +15260,40 @@ def _run_main() -> None:
             assume_yes=getattr(args, "yes", False), force=getattr(args, "force", False),
             verbosity=verbosity, dry_run=getattr(args, "dry_run", False),
         )
+        return
+
+    if getattr(args, "rename_session", None) is not None:
+        # Validate the new title first (trim; reject empty/whitespace-only).
+        raw_title = getattr(args, "rename_to", None)
+        new_title = (raw_title or "").strip()
+        if not new_title:
+            die("Error: 'ocman rename' requires a non-empty new title, e.g. "
+                "'ocman rename <session> to \"New title\"'.")
+        # Resolve the session spec (id / list number / unique title substring).
+        res = resolve_and_expand_targets([args.rename_session], kinds={"session"})
+        resolved = res.sessions[0] if res.sessions else None
+        if not resolved:
+            die(f"Error: Session '{args.rename_session}' not found.")
+        sess_id = resolved["id"]
+        cur_title = resolved.get("title") or ""
+        # Guard against a running OpenCode (whole-DB concern). --while-running / --force escape.
+        while_running = getattr(args, "while_running", False) or getattr(args, "force", False)
+        require_safe_to_mutate("rename this session", while_running=while_running,
+                               verbosity=verbosity)
+        # Honest caveat: OpenCode does not record which process uses which session, so ocman
+        # cannot tell whether THIS session specifically is open; the guard is DB-wide.
+        print(color_dim(
+            "  (Note: OpenCode does not track which process uses which session, so ocman "
+            "cannot tell if this particular session is currently open; the running check "
+            "above is for the database as a whole.)"))
+        if getattr(args, "dry_run", False):
+            print(f'{info_prefix()} Dry run: would rename "{cur_title}" -> "{new_title}" ({sess_id}). No change made.')
+            return
+        old_title = db_rename_session(sess_id, new_title)
+        if old_title == new_title:
+            print(f'{info_prefix()} Title unchanged (already "{new_title}"); nothing to do. ({sess_id})')
+            return
+        print(f'{info_prefix()} Renamed: "{old_title}" -> "{new_title}" ({sess_id})')
         return
 
     # Bridge --compact to --use-model for backward compatibility.

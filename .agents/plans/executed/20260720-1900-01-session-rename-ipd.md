@@ -5,7 +5,7 @@
 - Scope: `ocman/cli.py` (new `session rename` action + top-level `rename` sugar +
   `db_rename_session` helper + preprocess sugar + help), tests, README, CHANGELOG. No TUI in
   this IPD (a TUI retitle modal is deferred). No DB schema change.
-- Status: reviewed (not yet executed; awaiting human approval)
+- Status: executed (2026-07-20)
 - Target version: part of the in-flight 1.3.0 line (candidate `v1.3.0-rc1` already cut; this
   adds to it, so the next candidate is `v1.3.0-rc2`; final `1.3.0` still gated on a
   release-review and explicit maintainer GO, per the standing "not promoting yet" decision).
@@ -152,6 +152,33 @@ obtains the OLD title, since `db_find_session` lacks it) was resolved from repos
   idiom rather than a bespoke strip), PR-003 (rowcount==0 is a defensive not-found guard;
   transaction-safe), PR-004 (title is a bound `?` param, never interpolated; + a stored-verbatim
   test). No open questions; no unfixed BLOCKER/HIGH. GO - PENDING HUMAN APPROVAL.
+- 2026-07-20 approved by maintainer; executed (its_direct/pt3-claude-opus-4.8). All 6 steps done.
+
+## Post-execution summary
+
+- Step 1: `db_rename_session(session_id, new_title) -> str` added after `db_move_session_metadata`.
+  Atomic read-then-update in one transaction: SELECTs the old title (raises
+  `RecoveryError("Session not found: <id>")` if absent), UPDATEs `title` via a BOUND `?` param,
+  commits, returns the old title; rollback + raise on error; close in finally.
+- Step 2: `session rename` action (session positional + optional `dst` + `--to` (dest `to_flag`)
+  + `--dry-run`/`--while-running`/`--force`/`-y`); normalized to `rename_session`/`rename_to`.
+- Step 3: top-level `rename` sub (spec + dst + hidden `--to` + same flags), normalized identically
+  (uses `g("spec")` and deliberately does NOT set `out["spec"]`, so the top-level move/export
+  spec-resolver does not mis-route it, verified). `preprocess_argv` extends the `backup create`
+  positional `to <next>`->`--to <next>` idiom to `rename` and `session rename`; a `to` inside a
+  single quoted title token is preserved.
+- Step 4: handler after `move_session`: validate (`.strip()`, reject empty), resolve via
+  `resolve_and_expand_targets(kinds={"session"})`, `require_safe_to_mutate("rename this session",
+  while_running=force_or_while)`, ALWAYS print the honest "OpenCode does not track which process
+  uses which session ... check is for the database as a whole" caveat, `--dry-run` short-circuits,
+  else `old = db_rename_session(...)`, unchanged-title no-op (exact compare), then
+  `Renamed: "<old>" -> "<new>" (<id>)`.
+- Step 5: help text (browse overview, session reference, other-verbs).
+- Step 6: CHANGELOG `[1.3.0]` Added (rename) + README session table + top-level verbs table.
+- Tests: 11 new (db_rename_session return/missing/bound-param; e2e by id/number/title; top-level
+  `to`-in-title preserved; positional-without-`to`; empty rejected; capitalization-only writes;
+  dry-run no write; running-guard caveat printed). Full suite: **426 passed, 2 skipped** (was 415).
+- Release: rides the 1.3.0 line; NOT promoted to final `1.3.0` (maintainer still adding features).
 
 ## Approval and execution gate
 

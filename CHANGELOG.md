@@ -5,6 +5,14 @@
 ## [1.3.0] - 2026-07-20
 
 ### Added
+- **Rename a session from the CLI.** `ocman session rename <SESSION> --to "New title"`, with a
+  natural top-level alias `ocman rename <SESSION> to "New title"` (the word `to` is optional).
+  `<SESSION>` is resolved the usual way (list number from `ocman ls`, `ses_...` id, or a unique
+  title substring). The change is a single guarded `session.title` update in a transaction:
+  it refuses while OpenCode is running (with `--force` / `--while-running` to override) and
+  prints an honest note that OpenCode does not track which process uses which session, so ocman
+  cannot tell whether that specific session is open (the running check is for the database as a
+  whole). Supports `--dry-run`; a `to` inside a quoted title is preserved.
 - **`lr` short alias for `list running`.** Parity with the existing `lp` (`list projects`)
   and `ls` (`list sessions`) short aliases.
 - **Optional case-insensitive filter on the list commands.** `list projects` / `lp`,
