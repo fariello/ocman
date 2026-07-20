@@ -727,6 +727,11 @@ def test_project_import_rollback_no_orphan(temp_db, tmp_path, monkeypatch):
     conn.close()
 
 
+@pytest.mark.skipif(
+    os.name == "nt",
+    reason="simulates POSIX firmlink canonicalization; the seeded POSIX worktree "
+    "(/home/me/proj) is not absolute on Windows, and Windows has no such firmlink.",
+)
 def test_project_import_rebases_when_worktree_canonicalizes(temp_db, tmp_path, monkeypatch):
     """Rebase must survive a worktree that the OS canonicalizes to a different path.
 
