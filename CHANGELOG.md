@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-07-19
+## [1.2.0] - 2026-07-20
 
 ### Changed
 - **Unified, richer session listings.** `session list` (and `ls` / `list sessions`),

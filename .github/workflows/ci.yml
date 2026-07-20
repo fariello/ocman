@@ -10,10 +10,6 @@ jobs:
   test:
     runs-on: ${{ matrix.os }}
     strategy:
-      # Temporarily disabled so a red run shows EVERY failing cell instead of GitHub
-      # cancelling the rest on the first failure (cancelled shows as red, masking the
-      # true per-cell result). Restore to the default (true) once the matrix is green.
-      fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
