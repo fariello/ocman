@@ -725,3 +725,53 @@ def test_project_import_rollback_no_orphan(temp_db, tmp_path, monkeypatch):
     # Pre-existing unrelated project/session survive untouched.
     assert c.execute("SELECT COUNT(*) FROM project WHERE id='z'").fetchone()[0] == 1
     conn.close()
+
+
+def test_project_import_rebases_when_worktree_canonicalizes(temp_db, tmp_path, monkeypatch):
+    """Rebase must survive a worktree that the OS canonicalizes to a different path.
+
+    On macOS, /home, /var, /tmp are firmlinks, so Path("/home/me/proj").resolve()
+    yields "/System/Volumes/Data/home/me/proj". _validate_worktree_path resolves the
+    bundle worktree, so if the rebase then compared that RESOLVED prefix against the
+    RAW stored session.directory ("/home/me/proj"), the prefix would not match and the
+    session directory would be left un-rebased under the old worktree. This is the
+    macOS-only CI failure of test_project_import_new_project_path_rebases; it is
+    reproduced here on any OS by simulating the firmlink, and guards the fix (rebase
+    now resolves the stored directory before matching, via _rebased_dir).
+    """
+    import pathlib
+
+    real_resolve = pathlib.Path.resolve
+
+    def fake_resolve(self, *a, **k):
+        s = str(self)
+        if s == "/home/me/proj" or s.startswith("/home/me/proj/"):
+            return pathlib.PurePosixPath("/System/Volumes/Data" + s)
+        return real_resolve(self, *a, **k)
+
+    monkeypatch.setattr(pathlib.Path, "resolve", fake_resolve)
+
+    real_realpath = os.path.realpath
+
+    def fake_realpath(p, *a, **k):
+        p = os.fspath(p)
+        if p == "/home/me/proj" or p.startswith("/home/me/proj/"):
+            return "/System/Volumes/Data" + p
+        return real_realpath(p, *a, **k)
+
+    monkeypatch.setattr(os.path, "realpath", fake_realpath)
+
+    _seed_project(temp_db, worktree="/home/me/proj")
+    box = tmp_path / "p.ocbox"
+    bundle_project_data("p1", box)
+    new_root = tmp_path / "copy"
+    expected = real_realpath(str(new_root))
+    dest = extract_and_import_project(box, new_project_path=str(new_root), interactive=False)
+    conn = sqlite3.connect(str(temp_db))
+    rows = conn.execute("SELECT directory FROM session WHERE project_id=?", (dest,)).fetchall()
+    conn.close()
+    assert rows, "new-project sessions missing"
+    for (d,) in rows:
+        # The rebased dir must live under the NEW root, never still under the old worktree.
+        assert not d.startswith("/home/me/proj"), ("session left un-rebased", d)
+        assert os.path.commonpath([real_realpath(d), expected]) == expected, (d, expected)

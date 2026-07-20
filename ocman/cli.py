@@ -10755,13 +10755,27 @@ def extract_and_import_project(
             if table == "session":
                 row["project_id"] = dest_proj_id
                 if row.get("directory") and orig_worktree and target_worktree:
+                    # Rebase via _rebased_dir, which RESOLVES the stored directory
+                    # before comparing it to the (already-resolved) old worktree.
+                    # This matters on platforms that canonicalize paths (macOS maps
+                    # /home, /var, /tmp through firmlinks, e.g. /home/x ->
+                    # /System/Volumes/Data/home/x): orig_worktree is resolved by
+                    # _validate_worktree_path, so a raw prefix match against the
+                    # unresolved stored directory would miss and leave the session
+                    # un-rebased. A lexical fallback covers the case where the
+                    # stored dir cannot be resolved (e.g. a bundle worktree that
+                    # does not exist on this machine).
                     old_dir = row["directory"]
-                    try:
-                        rel = Path(old_dir).relative_to(Path(orig_worktree))
-                        row["directory"] = str(Path(target_worktree) / rel)
-                    except ValueError:
-                        if old_dir.startswith(orig_worktree):
-                            row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
+                    rebased = _rebased_dir(old_dir, orig_worktree, target_worktree)
+                    if rebased is not None:
+                        row["directory"] = rebased
+                    else:
+                        try:
+                            rel = Path(old_dir).relative_to(Path(orig_worktree))
+                            row["directory"] = str(Path(target_worktree) / rel)
+                        except ValueError:
+                            if old_dir.startswith(orig_worktree):
+                                row["directory"] = old_dir.replace(orig_worktree, target_worktree, 1)
             _valid_cols(row, table)
             cols = ", ".join(row.keys())
             ph = ", ".join("?" for _ in row.values())

@@ -96,6 +96,14 @@
   and sums all parts in the pre-run cost table. Export (.ocbox) is not chunked.
 
 ### Fixed
+- **Project import rebases session directories even when the OS canonicalizes the
+  worktree.** On macOS, paths like `/home`, `/var`, and `/tmp` are firmlinks, so resolving a
+  bundle worktree (e.g. `/home/me/proj`) yields a different canonical path
+  (`/System/Volumes/Data/home/me/proj`). Because the resolved worktree was compared against
+  the raw stored `session.directory`, the prefix did not match and the imported sessions were
+  left pointing at the old worktree instead of the new project root. The rebase now resolves
+  the stored directory before matching (via the shared `_rebased_dir` helper), so
+  `import --new-project-path` rebases correctly on macOS as it already did on Linux/Windows.
 - **Require `vistab>=1.3.0` so a clean install works on Python 3.12.** The dependency floor
   was `>=1.1.3`, which allowed the published `vistab 1.2.0`; that release fails to import on
   Python 3.12 (`NameError: name 'Set'` from an un-imported annotation), so a fresh
