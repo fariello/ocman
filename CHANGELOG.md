@@ -96,6 +96,11 @@
   and sums all parts in the pre-run cost table. Export (.ocbox) is not chunked.
 
 ### Fixed
+- **Require `vistab>=1.3.0` so a clean install works on Python 3.12.** The dependency floor
+  was `>=1.1.3`, which allowed the published `vistab 1.2.0`; that release fails to import on
+  Python 3.12 (`NameError: name 'Set'` from an un-imported annotation), so a fresh
+  `pip install ocman` was broken on 3.12. `vistab 1.3.0` fixes the import and provides the
+  table styling ocman uses (`set_color`/`set_header_style`); the floor is now `>=1.3.0`.
 - **Self-documentation: errors that teach, and no leaked tracebacks.** Two error messages
   advertised removed flags (`--show-models` / `--list-projects`); they now name the real
   commands (`ocman models` / `ocman list projects`). An unexpected (non-RecoveryError)
