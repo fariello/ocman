@@ -15,3 +15,13 @@ sign-off in Section 8. This is a delta re-review; personas focus on the changed 
 - Security-minded architect (4): Import remains guarded by _validate_worktree_path (absolute,
   no `..` traversal). The fix resolves the stored dir but does not relax the traversal guard.
   Secret scan (gitleaks authoritative) clean; built-in highs are known synthetic fixtures.
+
+## Section 3 lead-persona notes
+
+- Testing/regression expert (2): The macOS firmlink fix has a dedicated, mutation-checked
+  regression test that runs on every OS (not skipped). Portability edits preserved exact
+  assertions (verified line-by-line on test_move.py: rebased-dir equality + unrelated-dir
+  untouched negative both intact). Skips are limited to genuinely platform-specific paths
+  (real_process_detection ps/ss//proc; one skipif-not-linux). No coverage was quietly removed.
+- QA/QC (1): Suite is green locally (408 passed / 2 skipped) and across the full CI matrix
+  (15/15). The 2 local skips are perf benchmarks gated on OCMAN_BENCHMARK=1.

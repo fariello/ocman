@@ -7,3 +7,5 @@
 | gitleaks detect --source . | authoritative secret scan (tree+history, 372 commits) | no leaks found |
 | scan_secrets.py --repo . | built-in safety-net scan | 893 candidates; 22 high all = synthetic test fixtures (FP) |
 | git diff 2554395..HEAD -- ocman/ pyproject.toml | isolate product-code delta | exactly the rebase fix + vistab>=1.3.0 |
+| pytest -q (full suite) | authoritative test evidence | 408 passed, 2 skipped |
+| git diff 2554395..HEAD -- tests/ | verify no weakened assertions / hidden skips | portability substitutions only; assertions intact; no new blanket skip |

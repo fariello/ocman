@@ -16,3 +16,10 @@
 - Secret scan: gitleaks authoritative = no leaks (372 commits); built-in highs = synthetic fixtures.
 - MEM/LIVE: no new resource/data-integrity risk introduced by the delta.
 - Reconciled with registers; no LIVE/High finding outstanding.
+
+## Section 3 checkpoint
+
+- Suite: 408 passed, 2 skipped (VERIFIED). CI 15/15 green.
+- Delta tests: portability substitutions only; assertions intact; no hidden blanket skips.
+- S2-B1 regression coverage present (mutation-checked, OS-agnostic).
+- Finding: S3-T1 (completed). No release-blocking test gap.
