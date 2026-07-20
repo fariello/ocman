@@ -24,3 +24,19 @@ Rung: C (FULL RELEASE), maintainer-approved.
 ## Required handoff
 - Publish vistab 1.2.1 to PyPI (maintainer owns vistab), then bump ocman's dep to
   `vistab>=1.2.1` and re-run CI. Resume Section 9 (tag/release) once CI is green.
+
+## Resume after vistab 1.3.0 (2026-07-19, later)
+- S9-REL2 RESOLVED: vistab 1.3.0 published to PyPI. Verified on a clean Python 3.12 venv:
+  `import vistab` OK, has set_color/set_header_style; ocman's table tests pass (49); full
+  suite 407 passed / 2 skipped on py3.12 + vistab 1.3.0 and locally on py3.14 + 1.3.0.
+  (NOTE: the fixed version is 1.3.0; there is no 1.2.1.)
+- Bumped ocman dep floor to `vistab>=1.3.0` + CHANGELOG Fixed note. Commit 58399fe.
+- Pushed main (1f0467c..58399fe).
+
+## Step 3 (re-verify CI): BLOCKED on a GitHub outage
+- `gh run list` / `gh api /rate_limit` return HTTP 503; githubstatus.com reports
+  "Minor Service Outage". The Actions API is unavailable, so CI cannot be verified now.
+- Per the runbook (evidence gate + gh graceful-degradation): do NOT tag/publish on an
+  unverified CI run. HALTED before tag/GitHub-Release/publish. Nothing tagged/released.
+- Resume when GitHub recovers: `gh run watch <run-for-58399fe> --exit-status`; on green,
+  proceed to tag v1.2.0 -> push -> draft GitHub Release -> PyPI twine handoff.

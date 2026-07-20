@@ -31,3 +31,5 @@
 
 ## Section 9 (release execution, rung C) - HALTED
 - main pushed (1f0467c). CI red: S9-REL2 (published vistab 1.2.0 NameError on py3.12; ocman needs set_color from 1.2.x; fixed 1.2.1 not on PyPI). No tag/release/publish. Handoff: publish vistab 1.2.1, bump dep, re-verify CI.
+
+## Section 9 resume - dep fixed (58399fe), CI verify BLOCKED by GitHub outage (503). No tag/release. Awaiting CI verification when GitHub recovers.
