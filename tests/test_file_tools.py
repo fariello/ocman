@@ -7,6 +7,7 @@ import pytest
 
 import ocman
 from ocman import cli_filter, SessionInfo
+from conftest import make_symlink
 
 
 class _Model:
@@ -90,13 +91,17 @@ def test_filter_collision_backs_up(tmp_path, mock_llm):
     assert bu.exists()
 
 
-def test_filter_rejects_symlink_output(tmp_path, mock_llm):
+def test_filter_rejects_symlink_output(tmp_path, mock_llm, monkeypatch):
     src = _src(tmp_path)
-    # Point -oc at a symlink; must refuse to write through it.
+    # Point -oc at a symlink; must refuse to write through it. make_symlink uses a
+    # real on-disk symlink where the OS allows it (Linux/macOS/privileged Windows)
+    # and a faithfully simulated one on unprivileged Windows. See the decision
+    # record in conftest.make_symlink (why real+simulate, vs skip-on-Windows / vs
+    # monkeypatch-everywhere).
     real = tmp_path / "real.compacted.md"
     real.write_text("x", encoding="utf-8")
     link = tmp_path / "link.compacted.md"
-    link.symlink_to(real)
+    make_symlink(link, real, monkeypatch)
     with pytest.raises(ocman.RecoveryError, match="symlink"):
         cli_filter(src, project=None, scope="ocman", model_spec="", out_path=link, verbosity=0)
 

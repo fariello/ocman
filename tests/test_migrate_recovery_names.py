@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 
+from conftest import make_symlink
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "migrate_recovery_names.py"
 
 
@@ -58,10 +60,13 @@ def test_collision_skipped_without_force(tmp_path):
     assert (tmp_path / "20260101-2359-ses_x.restart.md").read_text() == "existing"
 
 
-def test_symlink_skipped(tmp_path):
+def test_symlink_skipped(tmp_path, monkeypatch):
     real = tmp_path / "notrecovery.txt"
     real.write_text("d", encoding="utf-8")
-    os.symlink(real, tmp_path / "opencode-20260404-010101-ses_link.restart.md")
+    # A real symlink where the OS allows it; a faithfully simulated one on
+    # unprivileged Windows. See the decision record in conftest.make_symlink (why
+    # real+simulate, vs skip-on-Windows / vs monkeypatch-everywhere).
+    make_symlink(tmp_path / "opencode-20260404-010101-ses_link.restart.md", real, monkeypatch)
     renames = mig.plan_migration(tmp_path)
     assert renames == []  # the symlink is not planned for rename
 
@@ -88,15 +93,16 @@ def test_in_plan_duplicate_targets_surfaced(tmp_path):
     assert "opencode-20260101-120059-ses_x.restart.md" in names  # loser preserved
 
 
-def test_symlink_introduced_before_apply_not_renamed(tmp_path):
+def test_symlink_introduced_before_apply_not_renamed(tmp_path, monkeypatch):
     # A legacy file that plan_migration accepts, then becomes a symlink before apply.
     src = tmp_path / "opencode-20260101-120000-ses_z.restart.md"
-    src.write_text("A", encoding="utf-8")
-    # Simulate: plan first, then replace with a symlink, then apply the stale plan.
-    # migrate_dir re-checks is_symlink() just before os.rename.
-    import os as _os
+    # Simulate: the path is (or becomes) a symlink before apply. migrate_dir
+    # re-checks is_symlink() just before os.rename, so it must skip. make_symlink
+    # plants a real link where possible, or a simulated one on unprivileged
+    # Windows. See the decision record in conftest.make_symlink (why real+simulate,
+    # vs skip-on-Windows / vs monkeypatch-everywhere).
     real = tmp_path / "target.txt"; real.write_text("x", encoding="utf-8")
-    src.unlink(); _os.symlink(real, src)
+    make_symlink(src, real, monkeypatch)
     res = mig.migrate_dir(tmp_path, apply=True, force=False, log=lambda *a, **k: None)
     # The symlink is skipped by plan_migration (is_symlink) so nothing renamed.
     assert res["renamed"] == 0
