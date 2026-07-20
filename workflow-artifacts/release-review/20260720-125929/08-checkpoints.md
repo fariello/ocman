@@ -8,3 +8,11 @@
 - Parallel lanes: not engaged (delta re-review, <2 surfaces).
 - Registers, decisions, TODO/principles/persona seeds initialized.
 - Reconciled: inventory matches git delta (16 commits since 2554395); version 1.2.0 consistent.
+
+## Section 2 checkpoint
+
+- Product-code delta since prior GO = ONLY the macOS firmlink rebase fix + vistab floor.
+- Findings: S2-B1 (fix correct, completed), S2-S1 (secret FPs, n/a).
+- Secret scan: gitleaks authoritative = no leaks (372 commits); built-in highs = synthetic fixtures.
+- MEM/LIVE: no new resource/data-integrity risk introduced by the delta.
+- Reconciled with registers; no LIVE/High finding outstanding.
