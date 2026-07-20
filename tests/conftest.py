@@ -1,10 +1,54 @@
 """Shared pytest fixtures for the ocman test suite."""
 
+import os
 import sys
+from pathlib import Path
+
 import pytest
 import ocman
 
 _IS_LINUX = sys.platform.startswith("linux")
+_IS_WINDOWS = os.name == "nt"
+
+# Drive letter used to anchor POSIX-looking test paths on Windows so that
+# Path(...).is_absolute() is True (ocman refuses non-absolute worktrees).
+_WIN_TEST_DRIVE = "C:"
+
+
+def abs_path(posix_like: str) -> str:
+    """Return an OS-appropriate ABSOLUTE path from a POSIX-looking string.
+
+    Many tests seed worktrees / session directories with POSIX-absolute
+    strings like "/home/me/proj" or "/new/path". On Windows those are NOT
+    absolute (Path("/home/me/proj").is_absolute() is False), so ocman's
+    importer correctly refuses them. This helper keeps such a path unchanged
+    on POSIX and drive-anchors it on Windows so it stays absolute and uses the
+    native separator (so it matches the value ocman stores/derives via
+    str(Path(...))).
+
+    Examples:
+      POSIX:   abs_path("/home/me/proj") -> "/home/me/proj"
+      Windows: abs_path("/home/me/proj") -> "C:\\home\\me\\proj"
+    """
+    if not posix_like:
+        return posix_like
+    if not _IS_WINDOWS:
+        return posix_like
+    if not posix_like.startswith("/"):
+        # Not a POSIX-absolute segment; leave as-is (e.g. already drive-anchored).
+        return posix_like
+    return str(Path(_WIN_TEST_DRIVE + posix_like))
+
+
+def norm_real(path: str) -> str:
+    """Case- and separator-normalized realpath, for cross-platform comparisons."""
+    return os.path.normcase(os.path.realpath(path))
+
+
+@pytest.fixture
+def abspath():
+    """Fixture exposing abs_path() to tests that prefer fixtures over imports."""
+    return abs_path
 
 
 def pytest_configure(config):

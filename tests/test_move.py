@@ -15,6 +15,7 @@ from ocman import (
     db_rebase_paths,
     RecoveryError,
 )
+from conftest import abs_path
 
 @pytest.fixture
 def temp_db(tmp_path):
@@ -66,87 +67,98 @@ def temp_db(tmp_path):
 
 
 def test_db_find_project_and_session(temp_db):
+    # OS-appropriate absolute paths (Windows: drive-anchored) so the stored
+    # values are genuine absolute paths on every platform.
+    proj_wt = abs_path("/path/to/project1")
+    sess_dir = abs_path("/path/to/project1/session1")
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/path/to/project1', 'Project 1')")
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', '/path/to/project1/session1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', ?, 'Project 1')", (proj_wt,))
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', ?)", (sess_dir,))
     conn.commit()
     conn.close()
 
     proj = db_find_project("proj-1")
     assert proj is not None
     assert proj[0] == "proj-1"
-    assert proj[1] == "/path/to/project1"
+    assert proj[1] == proj_wt
 
     # Find project by path
-    proj_by_path = db_find_project("/path/to/project1")
+    proj_by_path = db_find_project(proj_wt)
     assert proj_by_path is not None
     assert proj_by_path[0] == "proj-1"
 
     sess = db_find_session("sess-1")
     assert sess is not None
     assert sess[0] == "sess-1"
-    assert sess[1] == "/path/to/project1/session1"
+    assert sess[1] == sess_dir
     assert sess[2] == "proj-1"
 
 
 def test_db_move_project_metadata(temp_db):
+    old_wt = abs_path("/path/to/project1")
+    new_wt = abs_path("/new/path/project1")
+    other = abs_path("/other/path")
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/path/to/project1', 'Project 1')")
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', '/path/to/project1/session1')")
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-2', 'proj-1', 'Session 2', '/path/to/project1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', ?, 'Project 1')", (old_wt,))
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', ?)", (abs_path("/path/to/project1/session1"),))
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-2', 'proj-1', 'Session 2', ?)", (old_wt,))
     # A session outside the project path that should not be touched
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-3', 'proj-1', 'Session 3', '/other/path')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-3', 'proj-1', 'Session 3', ?)", (other,))
     conn.commit()
     conn.close()
 
-    db_move_project_metadata("proj-1", "/path/to/project1", "/new/path/project1")
+    db_move_project_metadata("proj-1", old_wt, new_wt)
 
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     
     cursor.execute("SELECT worktree FROM project WHERE id = 'proj-1'")
-    assert cursor.fetchone()[0] == str(Path("/new/path/project1").resolve())
+    assert cursor.fetchone()[0] == str(Path(new_wt).resolve())
 
     cursor.execute("SELECT id, directory FROM session ORDER BY id")
     rows = cursor.fetchall()
-    assert rows[0] == ("sess-1", str(Path("/new/path/project1/session1").resolve()))
-    assert rows[1] == ("sess-2", str(Path("/new/path/project1").resolve()))
-    assert rows[2] == ("sess-3", "/other/path")
+    assert rows[0] == ("sess-1", str(Path(abs_path("/new/path/project1/session1")).resolve()))
+    assert rows[1] == ("sess-2", str(Path(new_wt).resolve()))
+    # Unrelated session directory is left untouched (stored verbatim).
+    assert rows[2] == ("sess-3", other)
     conn.close()
 
 
 def test_db_move_session_metadata(temp_db):
+    old_dir = abs_path("/path/to/sess1")
+    new_dir = abs_path("/new/path/sess1")
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', '/path/to/sess1')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', ?)", (old_dir,))
     # Nested session
-    cursor.execute("INSERT INTO session (id, project_id, title, directory, parent_id) VALUES ('sess-2', 'proj-1', 'Session 2', '/path/to/sess1/nested', 'sess-1')")
+    cursor.execute("INSERT INTO session (id, project_id, title, directory, parent_id) VALUES ('sess-2', 'proj-1', 'Session 2', ?, 'sess-1')", (abs_path("/path/to/sess1/nested"),))
     conn.commit()
     conn.close()
 
-    db_move_session_metadata("sess-1", "/path/to/sess1", "/new/path/sess1")
+    db_move_session_metadata("sess-1", old_dir, new_dir)
 
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT id, directory FROM session ORDER BY id")
     rows = cursor.fetchall()
-    assert rows[0] == ("sess-1", str(Path("/new/path/sess1").resolve()))
-    assert rows[1] == ("sess-2", str(Path("/new/path/sess1/nested").resolve()))
+    assert rows[0] == ("sess-1", str(Path(new_dir).resolve()))
+    assert rows[1] == ("sess-2", str(Path(abs_path("/new/path/sess1/nested")).resolve()))
     conn.close()
 
 
 def test_db_rebase_paths(temp_db):
+    other_wt = abs_path("/other/prefix/project2")
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/old/prefix/project1', 'Project 1')")
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-2', '/other/prefix/project2', 'Project 2')")
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', '/old/prefix/project1/session1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', ?, 'Project 1')", (abs_path("/old/prefix/project1"),))
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-2', ?, 'Project 2')", (other_wt,))
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'Session 1', ?)", (abs_path("/old/prefix/project1/session1"),))
     conn.commit()
     conn.close()
 
-    stats = db_rebase_paths("/old/prefix", "/new/prefix")
+    stats = db_rebase_paths(abs_path("/old/prefix"), abs_path("/new/prefix"))
     assert stats["projects_updated"] == 1
     assert stats["sessions_updated"] == 1
 
@@ -154,12 +166,13 @@ def test_db_rebase_paths(temp_db):
     cursor = conn.cursor()
     cursor.execute("SELECT id, worktree FROM project ORDER BY id")
     proj_rows = cursor.fetchall()
-    assert proj_rows[0] == ("proj-1", str(Path("/new/prefix/project1").resolve()))
-    assert proj_rows[1] == ("proj-2", "/other/prefix/project2")
+    assert proj_rows[0] == ("proj-1", str(Path(abs_path("/new/prefix/project1")).resolve()))
+    # Unrelated project worktree is left untouched (stored verbatim).
+    assert proj_rows[1] == ("proj-2", other_wt)
 
     cursor.execute("SELECT id, directory FROM session ORDER BY id")
     sess_rows = cursor.fetchall()
-    assert sess_rows[0] == ("sess-1", str(Path("/new/prefix/project1/session1").resolve()))
+    assert sess_rows[0] == ("sess-1", str(Path(abs_path("/new/prefix/project1/session1")).resolve()))
     conn.close()
 
 
@@ -167,21 +180,23 @@ def test_db_move_project_metadata_non_canonical_path(temp_db):
     """Characterization (PERF-3): a stored directory with non-canonical components
     (`..`) still matches/rebases because comparison resolves the path. Guards the
     shared-helper refactor against silently switching to raw-string matching."""
+    old_wt = abs_path("/path/to/project1")
+    new_wt = abs_path("/new/path/project1")
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', '/path/to/project1', 'Project 1')")
-    # Non-canonical stored dir that resolves to /path/to/project1/session1
-    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'S1', '/path/to/project1/sub/../session1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj-1', ?, 'Project 1')", (old_wt,))
+    # Non-canonical stored dir that resolves to .../project1/session1
+    cursor.execute("INSERT INTO session (id, project_id, title, directory) VALUES ('sess-1', 'proj-1', 'S1', ?)", (abs_path("/path/to/project1/sub/../session1"),))
     conn.commit()
     conn.close()
 
-    db_move_project_metadata("proj-1", "/path/to/project1", "/new/path/project1")
+    db_move_project_metadata("proj-1", old_wt, new_wt)
 
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT directory FROM session WHERE id = 'sess-1'")
     # Resolves to .../session1 and is rebased under the new prefix.
-    assert cursor.fetchone()[0] == str(Path("/new/path/project1/session1").resolve())
+    assert cursor.fetchone()[0] == str(Path(abs_path("/new/path/project1/session1")).resolve())
     conn.close()
 
 
@@ -237,15 +252,17 @@ def test_db_rollback_backup(temp_db):
 
 
 def test_cli_move_project_metadata_only(temp_db, monkeypatch):
+    old_wt = abs_path("/nonexistent/old")
+    new_wt = abs_path("/nonexistent/new")
     # Setup some test data
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/nonexistent/old', 'n1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', ?, 'n1')", (old_wt,))
     conn.commit()
     conn.close()
 
     # Call main with 'project move ... --metadata-only'
-    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", "/nonexistent/new", "--metadata-only"])
+    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", new_wt, "--metadata-only"])
     
     # Run main, should not raise SystemExit with failure code
     try:
@@ -257,22 +274,24 @@ def test_cli_move_project_metadata_only(temp_db, monkeypatch):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
-    assert cursor.fetchone()[0] == str(Path("/nonexistent/new").resolve())
+    assert cursor.fetchone()[0] == str(Path(new_wt).resolve())
     conn.close()
 
 
 def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
+    old_wt = abs_path("/nonexistent/old")
+    new_wt = abs_path("/nonexistent/new")
     # Setup some test data
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
-    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/nonexistent/old', 'n1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', ?, 'n1')", (old_wt,))
     conn.commit()
     conn.close()
 
     # Call main without --metadata-only, mock isatty and input.
     # New UX: a missing source shows a menu (1 = metadata-only), then a final
     # typed-'yes' confirm. Route each input by prompt text.
-    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", "/nonexistent/new"])
+    monkeypatch.setattr("sys.argv", ["ocman", "project", "move", "p1", "--to", new_wt])
     monkeypatch.setattr("sys.stdout.isatty", lambda: True)
 
     def fake_input(prompt):
@@ -288,7 +307,7 @@ def test_cli_move_project_missing_directory_prompt(temp_db, monkeypatch):
     conn = sqlite3.connect(str(temp_db))
     cursor = conn.cursor()
     cursor.execute("SELECT worktree FROM project WHERE id = 'p1'")
-    assert cursor.fetchone()[0] == str(Path("/nonexistent/new").resolve())
+    assert cursor.fetchone()[0] == str(Path(new_wt).resolve())
     conn.close()
 
 

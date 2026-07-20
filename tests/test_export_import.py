@@ -14,6 +14,7 @@ from ocman import (
     extract_and_import_project,
     RecoveryError,
 )
+from conftest import abs_path
 
 @pytest.fixture
 def temp_db(tmp_path):
@@ -491,10 +492,14 @@ def test_import_session_path_traversal_rejection(temp_db, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-def _seed_project(db_path, *, proj_id="p1", worktree="/home/me/proj",
+def _seed_project(db_path, *, proj_id="p1", worktree=None,
                   sessions=(("sroot", None), ("ssub", "sroot")),
                   with_scoped=True, full_project=True):
     """Insert a project with sessions (+ a part row + a diff file) into temp_db."""
+    # Default worktree must be OS-appropriate absolute (Windows: drive-anchored),
+    # since ocman refuses a non-absolute bundle worktree on import.
+    if worktree is None:
+        worktree = abs_path("/home/me/proj")
     conn = sqlite3.connect(str(db_path))
     c = conn.cursor()
     if full_project:
@@ -594,7 +599,8 @@ def test_project_import_refuses_collision_non_interactive(temp_db, tmp_path):
 
 
 def test_project_import_new_project_path_rebases(temp_db, tmp_path):
-    _seed_project(temp_db)
+    seeded_worktree = abs_path("/home/me/proj")
+    _seed_project(temp_db, worktree=seeded_worktree)
     box = tmp_path / "p.ocbox"
     bundle_project_data("p1", box)
     # original project stays; import as a new project at a new worktree.
@@ -603,6 +609,7 @@ def test_project_import_new_project_path_rebases(temp_db, tmp_path):
     # /var -> /private/var) does not cause a spurious prefix mismatch.
     new_root = tmp_path / "copy"
     expected = os.path.realpath(str(new_root))
+    old_root = os.path.realpath(str(Path(seeded_worktree).expanduser()))
     dest = extract_and_import_project(box, new_project_path=str(new_root), interactive=False)
     assert dest != "p1"
     conn = sqlite3.connect(str(temp_db))
@@ -610,7 +617,16 @@ def test_project_import_new_project_path_rebases(temp_db, tmp_path):
     # sessions collided -> rewritten under the new project, directory rebased
     rows = c.execute("SELECT project_id, directory FROM session WHERE project_id = ?", (dest,)).fetchall()
     assert rows, "new-project sessions missing"
-    assert all(os.path.realpath(d).startswith(expected) for _, d in rows)
+    for _, d in rows:
+        real_d = os.path.realpath(d)
+        # Every rebased session dir must live at or under the NEW project root.
+        # os.path.commonpath compares whole components, so it will not be fooled
+        # by a sibling like ".../copy2". This proves the rebase happened, and it
+        # is portable (macOS resolves /var -> /private/var identically on both
+        # sides via realpath).
+        assert os.path.commonpath([real_d, expected]) == expected, (real_d, expected)
+        # And none may still sit under the OLD worktree (not left un-rebased).
+        assert not real_d.startswith(old_root + os.sep) and real_d != old_root, real_d
     conn.close()
 
 
@@ -648,7 +664,8 @@ def test_project_import_back_compat_session_bundle(temp_db, tmp_path):
     _wipe_all(temp_db)
     # session importer path: reuse existing project id via source_project
     conn = sqlite3.connect(str(temp_db))
-    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('p1','/home/me/proj','P')")
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('p1',?,'P')",
+                 (abs_path("/home/me/proj"),))
     conn.commit()
     conn.close()
     imported = extract_and_import_session(box, target_project_id="p1")
@@ -689,9 +706,10 @@ def test_project_import_rollback_no_orphan(temp_db, tmp_path, monkeypatch):
     # No collision (project wiped), but make session ids collide to trigger the
     # remap path we just sabotaged: re-seed a colliding session id.
     conn = sqlite3.connect(str(temp_db))
-    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('z','/z','Z')")
+    z_wt = abs_path("/z")
+    conn.execute("INSERT INTO project (id, worktree, name) VALUES ('z',?,'Z')", (z_wt,))
     conn.execute("INSERT INTO session (id, project_id, parent_id, title, directory) "
-                 "VALUES ('sroot','z',NULL,'x','/z')")
+                 "VALUES ('sroot','z',NULL,'x',?)", (z_wt,))
     conn.commit()
     conn.close()
 

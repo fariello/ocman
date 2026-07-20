@@ -227,6 +227,14 @@ async def test_tui_clear_history(tui_db):
         app.query_one("#btn-clear-history-log", Button).press()
         await pilot.pause()
         assert isinstance(app.screen, ClearHistoryModal)
+        # Wait for the modal's widgets to actually mount before querying them.
+        # On slower runners (notably Windows CI) the push/mount takes more than
+        # one frame; poll until the confirm Input exists. Extra pauses are
+        # harmless where it is already mounted (e.g. Linux).
+        for _ in range(50):
+            if app.screen.query("#input-clear-history-yes"):
+                break
+            await pilot.pause(0.1)
         await pilot.click("#input-clear-history-yes")
         await pilot.press(*"yes")
         await pilot.pause()
@@ -719,6 +727,12 @@ async def test_tui_storage_checkpoint_vacuum(tui_db):
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
         assert isinstance(app.screen, ReclaimConfirmModal)
+        # Wait for the confirm button to mount before pressing (Windows CI is
+        # slower to mount the modal); harmless where already mounted.
+        for _ in range(50):
+            if app.screen.query("#btn-confirm-reclaim"):
+                break
+            await pilot.pause(0.1)
         app.screen.query_one("#btn-confirm-reclaim", Button).press()
         for _ in range(60):
             await pilot.pause(0.1)
@@ -757,6 +771,12 @@ async def test_tui_storage_reclaim_refuses_while_running(tui_db, monkeypatch):
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
         assert isinstance(app.screen, ReclaimConfirmModal)
+        # Wait for the confirm button to mount before pressing (Windows CI is
+        # slower to mount the modal); harmless where already mounted.
+        for _ in range(50):
+            if app.screen.query("#btn-confirm-reclaim"):
+                break
+            await pilot.pause(0.1)
         app.screen.query_one("#btn-confirm-reclaim", Button).press()
         for _ in range(60):
             await pilot.pause(0.1)
@@ -1088,24 +1108,34 @@ async def test_tui_import_autodetect_routes_by_kind(tui_db, tmp_path, monkeypatc
 async def test_tui_local_session_move(tui_db):
     """Phase 5: the local session-move modal updates the session's directory in the DB."""
     from ocman_tui.app import MoveSessionModal
+    from conftest import abs_path, norm_real
+    # OS-appropriate absolute source/dest (drive-anchored on Windows) so the
+    # move actually resolves to an absolute path on every platform.
+    src_dir = abs_path("/path/to/proj")
+    new_dir = abs_path("/new/location")
+    expected = norm_real(new_dir)
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        modal = MoveSessionModal("sess1", "S1", "/path/to/proj")
+        modal = MoveSessionModal("sess1", "S1", src_dir)
         await app.push_screen(modal)
         await pilot.pause()
-        modal._do_move_worker("/new/location")
+        modal._do_move_worker(new_dir)
         for _ in range(40):
             conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
             cur.execute("SELECT directory FROM session WHERE id='sess1'")
             d = cur.fetchone()[0]; conn.close()
-            if d and d.endswith("/new/location"):
+            # The stored dir is db_move_session_metadata's resolved new dir; compare
+            # normalized realpaths so backslashes/drive/symlinks do not break it.
+            if d and norm_real(d) == expected:
                 break
             await pilot.pause(0.1)
     conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
     cur.execute("SELECT directory FROM session WHERE id='sess1'")
-    assert cur.fetchone()[0].endswith("/new/location")
+    stored = cur.fetchone()[0]
     conn.close()
+    # Proves the move updated the directory to the new location.
+    assert norm_real(stored) == expected
 
 
 @pytest.mark.anyio

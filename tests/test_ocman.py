@@ -12,6 +12,7 @@ from ocman import (
     db_show_info,
     RecoveryError,
 )
+from conftest import abs_path
 
 @pytest.fixture
 def temp_db(tmp_path, monkeypatch):
@@ -2562,16 +2563,23 @@ def test_fmt_int_and_fmt_cost():
     assert fmt_cost(12.5, decimals=4) == "$12.5000"
 
 
+# OS-appropriate absolute home dir for the global-mapping tests (Windows:
+# drive-anchored so str(Path.cwd()) matches the stored session directory).
+_HOME_DIR = abs_path("/home/gfariello")
+
+
 def _seed_global_and_project(temp_db):
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
     cur.execute("INSERT INTO project (id, worktree, name) VALUES ('g', '/', '')")
-    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/x/proj', 'Proj1')")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', ?, 'Proj1')",
+                (abs_path("/home/x/proj"),))
     cur.execute(
         "INSERT INTO session (id, project_id, title, time_created, time_updated, directory, "
         "cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
-        "VALUES ('ses_home', 'g', 'Home task', 1715000000000, 1715500000000, '/home/gfariello', "
-        "0.42, 500, 200, 0, '')"
+        "VALUES ('ses_home', 'g', 'Home task', 1715000000000, 1715500000000, ?, "
+        "0.42, 500, 200, 0, '')",
+        (_HOME_DIR,)
     )
     conn.commit(); conn.close()
 
@@ -2580,7 +2588,8 @@ def test_global_mapping_notice_on_dir_scope(temp_db, capsys, monkeypatch):
     """A dir-scoped listing whose sessions map to global (/) prints the loud NOTICE once."""
     import ocman, sys
     _seed_global_and_project(temp_db)
-    monkeypatch.setattr(ocman.Path, "cwd", staticmethod(lambda: Path("/home/gfariello")))
+    # cwd must match the seeded session directory (drive-anchored on Windows).
+    monkeypatch.setattr(ocman.Path, "cwd", staticmethod(lambda: Path(_HOME_DIR)))
     monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "list", "sessions"])
     try:
         ocman.main()
