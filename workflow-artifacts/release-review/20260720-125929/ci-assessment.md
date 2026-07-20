@@ -16,3 +16,10 @@
 ## Published-version check
 
 - PyPI published latest: **1.1.0**. Proposed: **1.2.0**. Valid bump (1.2.0 >= 1.1.0). No PKG finding.
+
+## Section 9 push+verify
+
+- Ref pushed: main -> 039951c (bebb520..039951c). Run: 29764588646.
+- Initial: 1 genuine failure (ubuntu 3.12, transient sqlite3 disk I/O error) + 6 cancelled
+  (fail-fast:true). Rerun of failed jobs -> ALL 15 GREEN. Fail-fast restore validated.
+- Tag v1.2.0 pushed; draft GitHub Release created.

@@ -15,3 +15,7 @@
 | PyPI json lookup | published-version check | published 1.1.0 < proposed 1.2.0 (valid bump) |
 | pytest -q (post-edit regression) | S7 validation | 408 passed, 2 skipped |
 | edit ci.yml + CHANGELOG | A1 restore fail-fast; A2 changelog date | applied; dash-clean |
+| git tag -a v1.2.0 039951c | annotated release tag | created, points at 039951c |
+| git push origin v1.2.0 | push tag | confirmed refs/tags/v1.2.0 on remote |
+| gh release create v1.2.0 --draft | draft GitHub Release from CHANGELOG [1.2.0] | draft created (isDraft:true) + artifacts attached |
+| git push origin main (039951c) + gh run rerun --failed | CI verify | 15/15 green after rerun of transient flake |
