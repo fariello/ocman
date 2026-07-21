@@ -14,3 +14,11 @@ signalling SAFETY model, a significant cross-cutting decision, is only in IPDs, 
 Fixing both in Section 7 makes the cold-start posture complete. No principles doc is "missing"
 (principles live in ARCHITECTURE, an accepted convention). VERDICT (interim): PASS, strengthened
 by A01+KD01 fixes.
+
+## Section 8 FINAL cold-start verdict
+Four knowledge areas scored:
+- Intent/overview: ADEQUATE (README top + ARCHITECTURE "What ocman is").
+- Principles: ADEQUATE (ARCHITECTURE "Design principles", 4 principles).
+- Architecture/approach: ADEQUATE (ARCHITECTURE components/entry points; verb list now complete after A-05).
+- Decision rationale: ADEQUATE (DECISIONS ADR log + 58 executed IPDs; signalling-safety entry added A-06).
+VERDICT: PASS. A no-context engineer or LLM can orient from the repo's own docs. No passage marked "inferred, needs confirmation" (the DECISIONS entry is verifiable against code). No remaining KD blocker.

@@ -50,3 +50,10 @@
 - Validation: pytest 473 pass; ocman --version 1.3.0; build ocman-1.3.0 + twine PASS; gitleaks no leaks; no new dashes.
 - TODO.md unchanged (honest; SHIPPED-stanza pruning is a separate user convention decision).
 - Next: Section 8 (final ship review + 8-persona sign-off + Go/No-Go).
+
+## Section 8 checkpoint - RUN COMPLETE
+- Final validation: pytest 473 pass, build ocman-1.3.0, twine PASS, gitleaks clean, ocman --version 1.3.0.
+- 8-persona sign-off: unanimous ACCEPT. Cold-start: PASS. Principles: full adherence.
+- Gates: no LIVE/High unaddressed (none existed); NO pending plans/prompts.
+- Recommendation: GO (REL01). No restart.
+- Push: none (awaiting per-run permission).

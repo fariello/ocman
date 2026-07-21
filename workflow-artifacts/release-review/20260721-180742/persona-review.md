@@ -32,3 +32,15 @@ Lead-persona notes appended per section (2-6); full eight-persona sign-off in Se
 ## Section 6 (compatibility/packaging/release)
 - Operator (8): a first-time installer runs `pip install ocman` (PyPI 1.2.0 -> will be 1.3.0) or `pip install .` from source; README install steps are accurate; console script works; build+twine pass. No O finding beyond the version-string finalization (PKG01/DR01).
 - Software engineer (5): additive change set, no serialized-format drift, dynamic re-export keeps `from ocman import X` working for new symbols. Clean.
+
+## Section 8 - Eight-persona final sign-off
+1. QA/QC: ACCEPT. 473 pass; no defect; destructive commands confirm-by-default + dry-run.
+2. Testing/regression: ACCEPT. Every LIVE/security path has a dedicated regression test; known TUI flakes fixed with deterministic waits.
+3. UI/UX: ACCEPT. Consistent grammar/terminology across new commands; actionable errors; no user-facing U blocker.
+4. Architect: ACCEPT. Reuses seams, shared matcher, no new dep, KISS preserved; no GP violation.
+5. Software engineer: ACCEPT. Injection-safe rename, resource-clean, additive change set; version now consistent.
+6. Power user: ACCEPT. --json, -y, --dry-run, --force escape hatches; foreground-exec reconnect.
+7. Novice: ACCEPT. README teaches all commands; Linux-only caveat stated; recovery guidance in errors.
+8. Stakeholder: ACCEPT. 1.3.0 delivers safer/more-ergonomic local opencode administration matching the CHANGELOG; valid PyPI bump; fit for purpose.
+
+No persona raises a blocking concern. Unanimous ACCEPT.
