@@ -1024,10 +1024,14 @@ class OrsessionApp(App):
     CSS_PATH = "css/style.css"
 
     BINDINGS = [
-        Binding("ctrl+q", "quit", "Quit", show=True),
-        Binding("ctrl+s", "toggle_sidebar", "Toggle Sidebar", show=True),
-        Binding("ctrl+r", "refresh_data", "Refresh", show=True),
-        Binding("space", "toggle_select", "Select/Deselect session", show=True),
+        Binding("space", "toggle_select", "Select session", show=False),
+        Binding("ctrl+q", "quit", "Quit", show=False),
+        Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
+        Binding("ctrl+u", "refresh_data", "Update", show=False),
+        Binding("ctrl+s", "focus_search", "Search", show=False),
+        Binding("ctrl+d", "show_doctor", "Doctor", show=False),
+        Binding("ctrl+r", "show_running", "Running", show=False),
+        Binding("ctrl+c", "show_config", "Config", show=False),
     ]
 
     # Custom messages
@@ -1188,7 +1192,15 @@ class OrsessionApp(App):
                             with Horizontal(id="config-buttons-container"):
                                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
                                 yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
-        yield Footer()
+        with Horizontal(id="footer-bar"):
+            yield Static("[b]␣[/b] Select", classes="footer-key")
+            yield Static("[b]^q[/b] Quit", classes="footer-key")
+            yield Button(self._sidebar_footer_label(), id="foot-sidebar", classes="footer-btn")
+            yield Button("[b]^u[/b] ↻ Update", id="foot-update", classes="footer-btn")
+            yield Button("[b]^s[/b] 🔎 Search", id="foot-search", classes="footer-btn")
+            yield Button("[b]^d[/b] 🩺 Doctor", id="foot-doctor", classes="footer-btn")
+            yield Button("[b]^r[/b] ▶ Running", id="foot-running", classes="footer-btn")
+            yield Button("[b]^c[/b] ⚙ Config", id="foot-config", classes="footer-btn")
 
     def on_mount(self) -> None:
         import asyncio
@@ -1373,9 +1385,48 @@ class OrsessionApp(App):
         )
         audit_log.write(grand_totals_str)
 
+    def _sidebar_footer_label(self, visible: bool = True) -> str:
+        """Footer label for the sidebar toggle: a checked box when the sidebar is visible.
+
+        The letter 'b' (the ^b hotkey target) is bold so the accelerator is discoverable.
+        """
+        box = "🗹" if visible else "☐"
+        return f"[b]^b[/b] {box} Side[b]b[/b]ar"
+
     def action_toggle_sidebar(self) -> None:
-        sidebar = self.query_one("#sidebar", SidebarWidget)
-        sidebar.display = not sidebar.display
+        # Toggle the whole sidebar PANE (search box + tree + search-results), not just the
+        # tree: the search Input and #search-results are siblings of #sidebar inside
+        # #sidebar-pane, so toggling only #sidebar would leave the search box floating.
+        pane = self.query_one("#sidebar-pane", Vertical)
+        pane.display = not pane.display
+        with contextlib.suppress(Exception):
+            self.query_one("#foot-sidebar", Button).label = self._sidebar_footer_label(pane.display)
+
+    def _activate_tab(self, tab_id: str) -> None:
+        """Switch the workspace TabbedContent to ``tab_id`` (best-effort)."""
+        with contextlib.suppress(Exception):
+            self.query_one(TabbedContent).active = tab_id
+
+    def action_focus_search(self) -> None:
+        """Ensure the sidebar pane is visible and focus the session-search field."""
+        with contextlib.suppress(Exception):
+            pane = self.query_one("#sidebar-pane", Vertical)
+            if not pane.display:
+                self.action_toggle_sidebar()
+        with contextlib.suppress(Exception):
+            self.query_one("#input-session-search", Input).focus()
+
+    def action_show_doctor(self) -> None:
+        """Jump to the Storage tab (the read-only doctor checkup lives there)."""
+        self._activate_tab("tab-storage")
+
+    def action_show_running(self) -> None:
+        """Jump to the Running instances tab."""
+        self._activate_tab("tab-running")
+
+    def action_show_config(self) -> None:
+        """Jump to the Configuration Settings tab."""
+        self._activate_tab("tab-config")
 
     def action_refresh_data(self) -> None:
         self.query_one("#sidebar", SidebarWidget).load_data()
@@ -1599,6 +1650,26 @@ class OrsessionApp(App):
             )
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        # Footer bar (clickable equivalents of the ^-key bindings)
+        if event.button.id == "foot-sidebar":
+            self.action_toggle_sidebar()
+            return
+        elif event.button.id == "foot-update":
+            self.action_refresh_data()
+            return
+        elif event.button.id == "foot-search":
+            self.action_focus_search()
+            return
+        elif event.button.id == "foot-doctor":
+            self.action_show_doctor()
+            return
+        elif event.button.id == "foot-running":
+            self.action_show_running()
+            return
+        elif event.button.id == "foot-config":
+            self.action_show_config()
+            return
+
         # Transcript reload controls
         if event.button.id == "btn-refresh-transcript":
             self.render_current_transcript()
