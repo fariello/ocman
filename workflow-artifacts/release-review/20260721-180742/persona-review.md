@@ -14,3 +14,7 @@ Lead-persona notes appended per section (2-6); full eight-persona sign-off in Se
 ## Section 3 (tests/regression)
 - Testing/regression expert (2): each S2 LIVE path (signal-wrong-process, survivor-no-exec, PID-reuse, zombie-gone) has a dedicated regression test using real child processes and SIGTERM-ignorers, not just mocks. The batch-delete VACUUM flake and Storage-worker race were fixed with deterministic waits this cycle. No brittle-test or coverage-gap finding.
 - QA/QC (1): acceptance paths for all 5 new commands (happy + refuse + dry-run + no-match) are covered; the doctor server check covers all four verdict states plus the never-fail UNKNOWN degrade.
+
+## Section 4 (docs/specs/examples)
+- Complete novice (7): README command reference documents all 5 new commands thoroughly, each with safety notes, defaults, and the Linux-only caveat; a novice can learn reconnect/kill/rename from README alone without reading code. Good self-documenting posture. The broken AGENTS.md refs (DR03) only bite a contributor, not an end user.
+- UI/UX (3): the new commands' help text and the doctor server-check remediation strings mirror the existing lr guidance (consistent terminology). No jargon/onboarding gap in the user-facing surface. Gaps are in maintainer/cold-start docs (ARCHITECTURE verb list A01, DECISIONS entry KD01), not user docs.

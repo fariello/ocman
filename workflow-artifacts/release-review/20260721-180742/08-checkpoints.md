@@ -22,3 +22,9 @@
 - Every S2 LIVE/security finding has a matching regression test (verified by name in test_ocman.py). T01 = no gap.
 - No brittle/misleading tests found; the two known TUI flakes were fixed with deterministic waits this cycle.
 - Next: Section 4 (docs/specs/examples).
+
+## Section 4 checkpoint
+- README user docs: accurate, all 5 new commands documented. No user-facing doc gap.
+- Cold-start docs: strong (README/ARCHITECTURE/DECISIONS/58 IPDs). Gaps: A01 (ARCH verb list), KD01 (DECISIONS signalling-safety entry), D01 (changelog date), DR03 (broken AGENTS refs). All Low/Low.
+- TODO-vs-docs reconciled: no contradiction.
+- Next: Section 5 (usability/maintainability + full TODO triage + principles + cold-start verdict + 8 personas).
