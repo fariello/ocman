@@ -43,3 +43,10 @@
 - Compatibility: additive only, ls<ARG> precedence preserved (regression-tested), no schema/format drift (R01).
 - CI: no change recommended (16/16 green); note S2-S01 gitleaks baseline (.gitleaksignore, not a workflow change).
 - Sections 1-6 COMPLETE. Ready to build implementation-plan.md.
+
+## Section 7 checkpoint
+- All 7 actions (A-01..A-07) implemented, all Low sev / Low RR, none deferred.
+- 2 product/doc commits: 4f05e1d (docs/metadata), b94eb95 (version bump). Path-scoped.
+- Validation: pytest 473 pass; ocman --version 1.3.0; build ocman-1.3.0 + twine PASS; gitleaks no leaks; no new dashes.
+- TODO.md unchanged (honest; SHIPPED-stanza pruning is a separate user convention decision).
+- Next: Section 8 (final ship review + 8-persona sign-off + Go/No-Go).
