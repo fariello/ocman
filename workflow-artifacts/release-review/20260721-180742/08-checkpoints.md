@@ -16,3 +16,9 @@
 - Secrets scan run (built-in + gitleaks full history). 3 gitleaks hits = synthetic fixtures echoed into PRIOR run artifacts (out of scope, not live). Filed S2-S01 (Low/Low) to baseline the 3 fingerprints. CI secret-scan currently green.
 - No MEM findings; no in-code TODO/FIXME markers.
 - Next: Section 3 (tests/regression).
+
+## Section 3 checkpoint
+- Baseline: 473 passed, 2 skipped (benchmark-gated). No new tests needed.
+- Every S2 LIVE/security finding has a matching regression test (verified by name in test_ocman.py). T01 = no gap.
+- No brittle/misleading tests found; the two known TUI flakes were fixed with deterministic waits this cycle.
+- Next: Section 4 (docs/specs/examples).
