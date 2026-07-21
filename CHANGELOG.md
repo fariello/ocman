@@ -5,6 +5,14 @@
 ## [1.3.0] - 2026-07-20
 
 ### Added
+- **`ocman kill [PATTERN]`: stop the opencode running here (or matching PATTERN) without
+  relaunching.** The no-relaunch counterpart to `reconnect`: with no argument it targets the
+  opencode running at/under the current directory; `ocman kill <PATTERN>` matches by the same
+  fields as `list running` (working dir / project / attributed session, case-insensitive). One
+  match is killed; several prompt you to choose (including "all"). Own-user processes only
+  (verified via `/proc/<pid>` owner), with the same PID-reuse guard as reconnect. SIGTERM by
+  default with a short wait; `--force` (`-9`) escalates a survivor to SIGKILL. Confirms by
+  default (`-y` to skip, `--dry-run` to preview); exits non-zero if anything survived. Linux-only.
 - **`ocman reconnect`: recover an orphaned opencode after an SSH/network drop.** When a dropped
   connection leaves `opencode` running detached in your project, reconnect (from that directory)
   finds the opencode running at/under the current dir, kills it, and foreground-relaunches

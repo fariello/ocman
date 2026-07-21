@@ -5001,3 +5001,113 @@ def test_reconnect_user_says_no_zero_side_effects(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *a: "no")   # decline the typed-yes
     ocman.cli.cli_reconnect(assume_yes=False, dry_run=False)  # returns cleanly
     assert "killed" not in calls and "exec" not in calls
+
+
+# --- kill (standalone: stop opencode, no relaunch) ----------------------------
+
+def test_kill_parse_and_dispatch_flags():
+    import sys
+    from ocman import parse_args
+    for argv, pat, dry, force, yes in (
+        (["kill"], None, False, False, False),
+        (["kill", "myproj"], "myproj", False, False, False),
+        (["kill", "--dry-run"], None, True, False, False),
+        (["kill", "-9", "-y"], None, False, True, True),
+    ):
+        sys.argv = ["ocman", *argv]
+        d = vars(parse_args())
+        assert d.get("run_kill") is True
+        assert d.get("kill_pattern") == pat
+        assert d.get("dry_run") is dry
+        assert d.get("force") is force
+        assert d.get("yes") is yes
+
+
+def test_instance_matches_pattern_shared_helper():
+    inst = {"cwd": "/home/me/alpha", "project": "pa",
+            "session": {"id": "ses_x", "title": "Fix widget", "directory": "/home/me/alpha", "project_id": "pa"}}
+    assert ocman.cli._instance_matches_pattern(inst, "alpha") is True     # cwd
+    assert ocman.cli._instance_matches_pattern(inst, "WIDGET") is True    # session title, ci
+    assert ocman.cli._instance_matches_pattern(inst, "ses_x") is True     # session id
+    assert ocman.cli._instance_matches_pattern(inst, "nope") is False
+
+
+@_linux_only
+def test_kill_pid_gracefully_force_sigkills_sigterm_ignorer(monkeypatch):
+    import subprocess, time
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: True)
+    p = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 30"])
+    time.sleep(0.3)
+    try:
+        # force=True must escalate to SIGKILL and reap it.
+        assert ocman.cli._kill_pid_gracefully(p.pid, timeout=1.0, force=True) is True
+    finally:
+        try:
+            p.wait(timeout=2)
+        except Exception:
+            p.kill()
+
+
+@_linux_only
+def test_kill_targets_no_pattern_delegates(monkeypatch):
+    called = {}
+    def fake_candidates(cwd, **k):
+        called["cwd"] = cwd
+        return [{"pid": 1}]
+    monkeypatch.setattr(ocman.cli, "_reconnect_candidates", fake_candidates)
+    got = ocman.cli._kill_targets("/home/me/proj", None)
+    assert called["cwd"] == "/home/me/proj"
+    assert got == [{"pid": 1}]
+
+
+@_linux_only
+def test_kill_targets_pattern_filters_own_user(monkeypatch):
+    import os
+    fake = [{"pid": os.getpid(), "cwd": "/x/alpha", "project": "pa", "session": {}},
+            {"pid": os.getpid(), "cwd": "/x/beta", "project": "pb", "session": {}},
+            {"pid": 999999, "cwd": "/x/alpha", "project": "pa", "session": {}}]  # foreign uid
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: [dict(x) for x in fake])
+    got = ocman.cli._kill_targets("/ignored", "alpha")
+    # foreign pid excluded (stat raises); beta filtered out by pattern; own alpha kept.
+    assert [i["cwd"] for i in got] == ["/x/alpha"]
+
+
+@_linux_only
+def test_kill_e2e_one_match(monkeypatch, capsys):
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_kill_targets",
+                        lambda cwd, pattern, **k: [{"pid": 555, "cwd": cwd, "kind": "tui", "cmdline": "opencode", "session": {}}])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append((pid, k.get("force"))) or True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    assert calls["killed"] == [(555, False)]
+    assert "Killed: 555" in capsys.readouterr().out
+
+
+@_linux_only
+def test_kill_dry_run_and_no_kill_nothing(monkeypatch, capsys):
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_kill_targets",
+                        lambda cwd, pattern, **k: [{"pid": 555, "cwd": cwd, "kind": "tui", "cmdline": "opencode", "session": {}}])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=False, dry_run=True, force=False)  # dry-run
+    assert "killed" not in calls
+
+
+@_linux_only
+def test_kill_zero_match_returns_clean(monkeypatch, capsys):
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: [])
+    ocman.cli.cli_kill(pattern="nope", assume_yes=True, dry_run=False, force=False)  # no exception
+    assert "No opencode instance" in capsys.readouterr().out
+
+
+@_linux_only
+def test_kill_survivor_exits_nonzero(monkeypatch, capsys):
+    monkeypatch.setattr(ocman.cli, "_kill_targets",
+                        lambda cwd, pattern, **k: [{"pid": 777, "cwd": cwd, "kind": "serve", "cmdline": "opencode serve", "session": {}}])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: False)  # survives
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    err = capsys.readouterr()
+    assert "777" in (err.out + err.err)

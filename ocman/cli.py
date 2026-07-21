@@ -5581,6 +5581,7 @@ def build_help(topic: str | None = None) -> str:
 
     move = [
         (f"{prog} reconnect", "Kill the opencode running here and relaunch it on its session (Linux)"),
+        (f"{prog} kill [PATTERN]", "Kill the opencode running here (or matching PATTERN); no relaunch (Linux)"),
         (f'{prog} rename SPEC to "New title"', "Rename a session (change its title)"),
         (f"{prog} move SPEC to DST", "Move a project or session (auto-detects which)"),
         (f"{prog} move project SRC to DST", "Force project (disambiguate / use a number)"),
@@ -5724,6 +5725,7 @@ def build_help_reference() -> str:
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
             ('rename SPEC to "New title"', "Rename a session (alias of 'session rename')"),
             ("reconnect [--dry-run -y]", "Kill the opencode in this dir + relaunch on its session (Linux; foreground exec)"),
+            ("kill [PATTERN] [--force -y --dry-run]", "Kill opencode here / matching PATTERN; no relaunch (Linux, own-user; SIGTERM, --force=SIGKILL)"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
             ("lp | ls | lr [PATTERN]", "Short aliases for 'list projects' / 'list sessions' / 'list running'; optional PATTERN filters"),
@@ -5990,6 +5992,8 @@ def _legacy_defaults(config: dict) -> dict:
         "show_models": False,
         "show_running": False,
         "run_reconnect": False,
+        "run_kill": False,
+        "kill_pattern": None,
         "all_users": False,
         "probe": False,
         "while_running": False,
@@ -6443,6 +6447,17 @@ def build_parser() -> argparse.ArgumentParser:
                  help="Kill the opencode running in this dir and relaunch it on its session (Linux).")
     sp.add_argument("--dry-run", action="store_true",
                     help="Show the reconnect plan (kill + launch) without acting.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+
+    # 'ocman kill [PATTERN]' (stop opencode here or matching PATTERN; no relaunch).
+    sp = new_sub("kill",
+                 help="Kill the opencode running in this dir (or matching PATTERN); no relaunch (Linux).")
+    sp.add_argument("pattern", nargs="?", default=None,
+                    help="Optional case-insensitive filter (cwd/project/session); default: this dir.")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show what would be killed without acting.")
+    sp.add_argument("-9", "--force", dest="force", action="store_true",
+                    help="Escalate to SIGKILL if SIGTERM does not stop it.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
     # 'ocman rename SPEC to "New title"' (top-level sugar for 'session rename').
@@ -6916,6 +6931,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     elif group == "reconnect":
         out["run_reconnect"] = True
         out["dry_run"] = bool(g("dry_run", False))
+        out["yes"] = bool(g("yes", False))
+
+    elif group == "kill":
+        out["run_kill"] = True
+        out["kill_pattern"] = g("pattern", None)
+        out["dry_run"] = bool(g("dry_run", False))
+        out["force"] = bool(g("force", False))
         out["yes"] = bool(g("yes", False))
 
     elif group == "info":
@@ -12026,22 +12048,19 @@ def _pid_is_gone(pid: int) -> bool:
     return False
 
 
-def _kill_pid_gracefully(pid: int, *, timeout: float = 5.0, verbosity: int = 0) -> bool:
-    """Send SIGTERM to ``pid`` and wait up to ``timeout`` for it to exit.
+def _reuse_guard_ok(pid: int) -> bool | None:
+    """PID-reuse guard before signalling ``pid``.
 
-    Returns True if the process is gone by the deadline, False if still alive (the caller
-    then STOPS and does not relaunch). Ownership + still-an-opencode are re-validated
-    IMMEDIATELY before signalling (PID-reuse guard). NOTE: this guard is best-effort; a
-    narrow TOCTOU window remains between the re-check and os.kill, so it reduces but cannot
-    fully eliminate the risk of signalling a recycled PID. No SIGKILL escalation here.
+    Returns True to proceed, or None if the process is already gone (caller treats as
+    exited). Raises RecoveryError if the pid is still live but is no longer ours / no longer
+    an opencode process (possible PID reuse). Best-effort: a narrow TOCTOU window remains
+    between this check and the subsequent os.kill.
     """
     my_uid = os.getuid() if hasattr(os, "getuid") else None
-    # Preflight: exists + signalable.
     try:
         os.kill(pid, 0)
     except OSError:
-        return True  # already gone -> treat as exited
-    # PID-reuse guard: same owner AND still an opencode process.
+        return None  # already gone
     if my_uid is not None:
         try:
             if os.stat(f"/proc/{pid}").st_uid != my_uid:
@@ -12049,11 +12068,28 @@ def _kill_pid_gracefully(pid: int, *, timeout: float = 5.0, verbosity: int = 0) 
                     f"Refusing to signal PID {pid}: it is no longer owned by the current user "
                     "(possible PID reuse).")
         except OSError:
-            return True
+            return None
     if not _pid_looks_like_opencode(pid):
         raise RecoveryError(
             f"Refusing to signal PID {pid}: it no longer looks like an opencode process "
             "(possible PID reuse).")
+    return True
+
+
+def _kill_pid_gracefully(pid: int, *, timeout: float = 5.0, force: bool = False,
+                         verbosity: int = 0) -> bool:
+    """Send SIGTERM to ``pid`` and wait up to ``timeout`` for it to exit.
+
+    Returns True if the process is gone by the deadline, False if still alive. Ownership +
+    still-an-opencode are re-validated IMMEDIATELY before EACH signal (PID-reuse guard,
+    best-effort; a narrow TOCTOU window remains). When ``force`` and the process is STILL
+    alive after the SIGTERM wait, escalate to SIGKILL: first re-check `_pid_is_gone` (skip
+    if it exited during the wait, to avoid signalling a recycled PID), then re-run the guard,
+    then SIGKILL and re-poll. ``force`` defaults False; the reconnect caller never passes it,
+    so reconnect behavior is unchanged.
+    """
+    if _reuse_guard_ok(pid) is None:
+        return True  # already gone
     try:
         os.kill(pid, signal.SIGTERM)
     except OSError as e:
@@ -12063,6 +12099,22 @@ def _kill_pid_gracefully(pid: int, *, timeout: float = 5.0, verbosity: int = 0) 
         if _pid_is_gone(pid):
             return True
         time.sleep(0.1)
+    if _pid_is_gone(pid):
+        return True
+    if not force:
+        return False
+    # Escalate to SIGKILL: re-guard against PID reuse during the SIGTERM wait.
+    if _reuse_guard_ok(pid) is None:
+        return True
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError as e:
+        raise RecoveryError(f"Failed to send SIGKILL to PID {pid}: {e}")
+    kdeadline = time.monotonic() + 2.0
+    while time.monotonic() < kdeadline:
+        if _pid_is_gone(pid):
+            return True
+        time.sleep(0.05)
     return _pid_is_gone(pid)
 
 
@@ -12210,6 +12262,120 @@ def cli_reconnect(*, assume_yes: bool = False, dry_run: bool = False,
     os.execvp("opencode", argv)
 
 
+def _instance_matches_pattern(inst: dict, pattern: str) -> bool:
+    """Case-insensitive match of a running-instance dict against ``pattern``.
+
+    Matches over the working dir, project, and attributed session (id/ids/title/directory/
+    project_id). Single source of truth shared by `list running`/`lr` and `kill`.
+    """
+    p = pattern.lower()
+    hay = [inst.get("cwd") or "", inst.get("project") or ""]
+    sess = inst.get("session") or {}
+    hay.append(sess.get("id") or "")
+    hay.append(sess.get("title") or "")
+    hay.append(sess.get("directory") or "")
+    hay.append(sess.get("project_id") or "")
+    for sid in (sess.get("ids") or []):
+        hay.append(sid or "")
+    return any(p in h.lower() for h in hay)
+
+
+def _kill_targets(cwd: str, pattern: str | None, *, verbosity: int = 0) -> list[dict]:
+    """Own-user opencode instances to consider killing.
+
+    No pattern -> the current-dir candidates (`_reconnect_candidates`). With a pattern ->
+    own-user instances matching it (same fields as `lr`). Linux-guarded via the underlying
+    detection (raises RunningDetectionError on non-Linux / unreliable enumeration).
+    """
+    if pattern is None:
+        return _reconnect_candidates(cwd, verbosity=verbosity)
+    instances = detect_running_instances(all_users=False, verbosity=verbosity)
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    out: list[dict] = []
+    for it in instances:
+        pid = it.get("pid")
+        if my_uid is not None and pid is not None:
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                    continue
+            except OSError:
+                continue
+        if _instance_matches_pattern(it, pattern):
+            out.append(it)
+    return out
+
+
+def cli_kill(*, pattern: str | None = None, assume_yes: bool = False,
+             dry_run: bool = False, force: bool = False, verbosity: int = 0) -> None:
+    """`ocman kill [PATTERN]`: stop the opencode running in this dir (or matching PATTERN)
+    WITHOUT relaunching. Own-user only, Linux-only. SIGTERM by default; --force adds SIGKILL.
+    """
+    interactive = sys.stdout.isatty()
+    cwd = str(Path.cwd())
+    try:
+        targets = _kill_targets(cwd, pattern, verbosity=verbosity)
+    except RunningDetectionError as e:
+        die(f"Cannot kill: {e} (kill is Linux-only).")
+
+    if not targets:
+        where = f"matching {pattern!r}" if pattern else f"running under {cwd}"
+        print(color_yellow(f"{info_prefix()} No opencode instance {where}."))
+        return
+
+    if len(targets) == 1:
+        to_kill = targets
+    else:
+        print(color_bold("Multiple opencode instances:"))
+        for i, it in enumerate(targets, 1):
+            print(f"  {i}. PID {it['pid']}  {it.get('kind','?')}  {it.get('cmdline','')[:80]}")
+        print("  a. all of them")
+        if not interactive:
+            die("Multiple instances found and no TTY to choose; aborting (run interactively).")
+        try:
+            ans = input(f"Kill which? [1-{len(targets)}, 'a' for all]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            die("Aborted; nothing killed.")
+        if ans == "a":
+            to_kill = list(targets)
+        else:
+            try:
+                idx = int(ans) - 1
+                if not (0 <= idx < len(targets)):
+                    raise ValueError
+                to_kill = [targets[idx]]
+            except ValueError:
+                die("Invalid choice; nothing killed.")
+
+    sig = "SIGKILL" if force else "SIGTERM"
+    print()
+    print(color_bold(f"Will {sig} {len(to_kill)} opencode instance(s):"))
+    for it in to_kill:
+        print(f"  PID {it['pid']}  ({it.get('cmdline','')[:80]})")
+
+    verb = f"kill {len(to_kill)} opencode instance(s)" + (" (SIGKILL)" if force else "")
+    if not confirm_destructive(None, render=False, action_verb=verb,
+                               dry_run=dry_run, assume_yes=assume_yes,
+                               interactive=interactive):
+        return  # dry-run note printed, or user cancelled; ZERO side effects.
+
+    died: list[int] = []
+    survived: list[int] = []
+    for it in to_kill:
+        pid = it["pid"]
+        if _kill_pid_gracefully(pid, force=force, verbosity=verbosity):
+            died.append(pid)
+        else:
+            survived.append(pid)
+    if died:
+        print(f"{info_prefix()} Killed: {', '.join(map(str, died))}.")
+    if survived:
+        hint = ("" if force
+                else " Re-run with --force to send SIGKILL.")
+        die(f"PID(s) {', '.join(map(str, survived))} did not exit"
+            + (" even after SIGKILL" if force else " after SIGTERM") + "." + hint)
+
+
 def cli_list_running(*, all_users: bool = False, probe: bool = False,
                      json_output: bool = False, long_output: bool = False,
                      pattern: str | None = None,
@@ -12238,20 +12404,7 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
     # Optional case-insensitive filter over working dir, project, and attributed session.
     _total_before_filter = len(instances)
     if pattern:
-        _rf = pattern.lower()
-
-        def _inst_matches(it: dict) -> bool:
-            hay = [it.get("cwd") or "", it.get("project") or ""]
-            sess = it.get("session") or {}
-            hay.append(sess.get("id") or "")
-            hay.append(sess.get("title") or "")
-            hay.append(sess.get("directory") or "")
-            hay.append(sess.get("project_id") or "")
-            for sid in (sess.get("ids") or []):
-                hay.append(sid or "")
-            return any(_rf in h.lower() for h in hay)
-
-        instances = [it for it in instances if _inst_matches(it)]
+        instances = [it for it in instances if _instance_matches_pattern(it, pattern)]
 
     def _auth_cell(auth: str) -> str:
         """Map the raw auth enum to a colored YES/NO/???/n/a cell for the 'Auth?' column
@@ -15596,6 +15749,16 @@ def _run_main() -> None:
         cli_reconnect(
             assume_yes=getattr(args, "yes", False),
             dry_run=getattr(args, "dry_run", False),
+            verbosity=verbosity,
+        )
+        return
+
+    if getattr(args, "run_kill", False):
+        cli_kill(
+            pattern=getattr(args, "kill_pattern", None),
+            assume_yes=getattr(args, "yes", False),
+            dry_run=getattr(args, "dry_run", False),
+            force=getattr(args, "force", False),
             verbosity=verbosity,
         )
         return
