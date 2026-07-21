@@ -28,3 +28,11 @@
 - Cold-start docs: strong (README/ARCHITECTURE/DECISIONS/58 IPDs). Gaps: A01 (ARCH verb list), KD01 (DECISIONS signalling-safety entry), D01 (changelog date), DR03 (broken AGENTS refs). All Low/Low.
 - TODO-vs-docs reconciled: no contradiction.
 - Next: Section 5 (usability/maintainability + full TODO triage + principles + cold-start verdict + 8 personas).
+
+## Section 5 checkpoint
+- 8 personas run; no new F/U/M finding on the 1.3.0 features.
+- Guiding principles: FULL adherence (GP01), no violation.
+- Cold-start: PASS (KD02), completed by fixing A01+KD01.
+- TODO triage FINAL: no must/should-before-release; forked-spend de-dup out-of-scope; TODO.md honest.
+- Deprecation candidates: none.
+- Next: Section 6 (compatibility/packaging/CI/schema/published-version).

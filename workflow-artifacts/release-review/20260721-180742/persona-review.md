@@ -18,3 +18,13 @@ Lead-persona notes appended per section (2-6); full eight-persona sign-off in Se
 ## Section 4 (docs/specs/examples)
 - Complete novice (7): README command reference documents all 5 new commands thoroughly, each with safety notes, defaults, and the Linux-only caveat; a novice can learn reconnect/kill/rename from README alone without reading code. Good self-documenting posture. The broken AGENTS.md refs (DR03) only bite a contributor, not an end user.
 - UI/UX (3): the new commands' help text and the doctor server-check remediation strings mirror the existing lr guidance (consistent terminology). No jargon/onboarding gap in the user-facing surface. Gaps are in maintainer/cold-start docs (ARCHITECTURE verb list A01, DECISIONS entry KD01), not user docs.
+
+## Section 5 (feature/usability/maintainability) - all eight personas
+- QA/QC (1): destructive paths (kill/reconnect) confirm-by-default + dry-run; no accidental-data-loss path. Covered.
+- Testing/regression (2): comprehensive coverage confirmed in S3; no gap.
+- UI/UX (3): consistent grammar and terminology across new commands; remediation strings reused from lr. Killed/survived feedback is clear. No friction finding.
+- Architect (4): general-case solved (shared _instance_matches_pattern; reused detection/DB seams); no speculative bloat; KISS preserved. No M/GP finding.
+- Software engineer (5): S2 confirmed clean resource handling and injection safety. Maintainable (reuses seams). No M finding.
+- Power user (6): scriptable (--json on filters/doctor/lr; -y/--dry-run/--force escape hatches). reconnect foreground-exec is the expert-friendly behavior. No F finding.
+- Novice (7): README teaches all commands; help/errors guide recovery; Linux-only caveat stated up front. No U finding for end users (contributor-facing DR03 aside).
+- Stakeholder (8): the 1.3.0 goal (safer, more ergonomic local opencode administration: recover an orphaned session, stop a stray server, rename, spot insecure servers) is delivered and matches the CHANGELOG. Fitness for purpose met.
