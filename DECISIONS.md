@@ -334,3 +334,48 @@ v1.1 -> v1.2 cycle.
 - Record these decisions as new IPDs instead of a decisions log: rejected as a poor fit; an
   IPD is a plan for a unit of work, whereas several of these (OS support policy, fail-fast,
   dependency floor) are standing decisions, not planned work items.
+
+## 2026-07-21: reconnect / kill process-signalling safety model
+
+### Context
+
+The 1.3.0 line added two commands that send signals to running processes: `ocman reconnect`
+(kill an orphaned opencode in the current dir, then foreground-relaunch it on its session) and
+`ocman kill [PATTERN]` (the no-relaunch counterpart). Signalling the wrong process is a live
+data-integrity hazard, so the safety model is a standing decision, not a per-feature detail.
+
+### Decision
+
+Both commands share one hardened signalling model:
+
+- **Own-user only.** A target is included only if `/proc/<pid>` is owned by the current UID
+  (checked via `os.stat(...).st_uid`, not the ps username, which truncates). ocman never
+  signals another user's process.
+- **PID-reuse guard before EACH signal.** Immediately before every `os.kill`, re-validate that
+  the pid is still live, still owned by us, and still looks like an opencode process; refuse
+  otherwise. A narrow TOCTOU window remains and is documented rather than pretended away.
+- **Zombie-aware liveness.** A reaped/zombie pid counts as gone, so a reaped child is not
+  mistaken for a live target.
+- **SIGTERM first, optional SIGKILL.** SIGTERM with a short wait; `kill --force`/`-9` escalates
+  a survivor to SIGKILL (re-running the guard first). `reconnect` never force-kills: it stops
+  rather than relaunch if the process will not exit.
+- **reconnect resolves the relaunch target up front** (`require_opencode()` before any kill) and
+  never launches a bare `opencode`; it resumes the killed process's `-s` session if known, else
+  the most-recent session for the dir. It re-execs in the current shell, so only `-s <session>`
+  is reproduced, not the old process's other flags/env.
+- **One confirmation, honest dry-run.** Both confirm by default (`-y` to skip, `--dry-run` to
+  preview with zero side effects); a survivor stops the operation and reports died-vs-survived.
+- **Linux-only**, because reliable process/socket enumeration is Linux-only; both fail loud
+  rather than give a false "nothing running".
+
+### Rejected alternatives
+
+- Match processes by ps username: rejected (ps truncates long usernames, risking a wrong-owner
+  match); UID from `/proc/<pid>` is authoritative.
+- Skip the pre-signal re-check and rely on the initial enumeration: rejected; a pid can exit and
+  be reused between enumeration and signalling, so the guard re-runs immediately before each kill.
+- Let `reconnect` fall back to a bare `opencode` when no session is found: rejected; it errors
+  clearly instead, so a reconnect never silently drops the user into an unrelated session.
+
+Full rationale: `.agents/plans/executed/20260720-2006-01-reconnect-ipd.md` and
+`.agents/plans/executed/20260720-2350-01-kill-ipd.md`.

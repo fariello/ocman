@@ -17,3 +17,10 @@
 63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2187
 63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2208
 63b35e559a8195e25457a53017695a8155f9874d:tests/test_ocman.py:aws-access-token:2211
+
+# Same synthetic AWS fixture strings, echoed into a PRIOR release-review run's own
+# artifacts (findings register / report) while documenting the secret-scan finding.
+# Run records under workflow-artifacts/ are out of review scope; not live credentials.
+2040732d7680af37da1fe4c7ee84e1290aee7b74:workflow-artifacts/release-review/20260720-125929/03-findings-register.csv:aws-access-token:3
+039951c4b9d80f9618222da3a86295b60fcf1385:workflow-artifacts/release-review/20260720-125929/12-final-response.md:aws-access-token:21
+2040732d7680af37da1fe4c7ee84e1290aee7b74:workflow-artifacts/release-review/20260720-125929/section-summaries/02-quality-security-edge-cases.md:aws-access-token:31

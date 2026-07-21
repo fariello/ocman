@@ -19,7 +19,7 @@ export/import).
   `backup`, `history`, and `config` (e.g. `ocman session recover ID`, `ocman db clean`).
   A handful of top-level verbs are kept as aliases (`search`, `info`, `disk`, `logs`,
   `spend`, `running`, `doctor`, `reclaim`, `models`, `compaction-prompt`, `filter`,
-  `move`, `export`, `ui`/`gui`, `help`).
+  `move`, `export`, `reconnect`, `kill`, `rename`, `ui`/`gui`, `help`).
   `build_parser()` builds the parser tree; `main()` parses arguments (`parse_args`) and
   `_normalize()` folds the parsed subcommand namespace back into a flat namespace that
   `main()` dispatches on. Global options (`--db`, `-v/--verbose`, `-V/--version`,
