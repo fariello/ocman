@@ -5,6 +5,17 @@
 ## [1.3.0] - 2026-07-20
 
 ### Added
+- **`ocman reconnect`: recover an orphaned opencode after an SSH/network drop.** When a dropped
+  connection leaves `opencode` running detached in your project, reconnect (from that directory)
+  finds the opencode running at/under the current dir, kills it, and foreground-relaunches
+  `opencode -s <session>` in your current shell. It resumes the killed process's `-s` session if
+  it was launched with one, else the most-recently-updated session for the directory; with
+  several instances it asks which to kill (including "all"). Safety: own-user processes only
+  (verified by `/proc/<pid>` owner), a PID-reuse guard re-checks the target immediately before
+  signalling, SIGTERM with a short wait (it stops rather than relaunch if the process will not
+  exit), one confirmation covering kill+relaunch, and `--dry-run` / `-y`. Linux-only (process
+  detection is Linux-only). Because it re-execs in your current shell, the new opencode inherits
+  that shell's environment; only `-s <session>` is reproduced, not the old process's other flags.
 - **Rename a session from the CLI.** `ocman session rename <SESSION> --to "New title"`, with a
   natural top-level alias `ocman rename <SESSION> to "New title"` (the word `to` is optional).
   `<SESSION>` is resolved the usual way (list number from `ocman ls`, `ses_...` id, or a unique

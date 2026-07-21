@@ -5580,6 +5580,7 @@ def build_help(topic: str | None = None) -> str:
     ]
 
     move = [
+        (f"{prog} reconnect", "Kill the opencode running here and relaunch it on its session (Linux)"),
         (f'{prog} rename SPEC to "New title"', "Rename a session (change its title)"),
         (f"{prog} move SPEC to DST", "Move a project or session (auto-detects which)"),
         (f"{prog} move project SRC to DST", "Force project (disambiguate / use a number)"),
@@ -5722,6 +5723,7 @@ def build_help_reference() -> str:
             ("search QUERY [in [project|session] NAME]", "Alias of 'session search'"),
             ("move [project|session] SPEC to DST", "Move; auto-detects kind (word 'to' optional)"),
             ('rename SPEC to "New title"', "Rename a session (alias of 'session rename')"),
+            ("reconnect [--dry-run -y]", "Kill the opencode in this dir + relaunch on its session (Linux; foreground exec)"),
             ("export [session|project] SPEC to FILE", "Export a session or project bundle; auto-detects"),
             ("list projects | list sessions [NAME] | list models", "Word-order aliases"),
             ("lp | ls | lr [PATTERN]", "Short aliases for 'list projects' / 'list sessions' / 'list running'; optional PATTERN filters"),
@@ -5987,6 +5989,7 @@ def _legacy_defaults(config: dict) -> dict:
         # models / prompt
         "show_models": False,
         "show_running": False,
+        "run_reconnect": False,
         "all_users": False,
         "probe": False,
         "while_running": False,
@@ -6434,6 +6437,13 @@ def build_parser() -> argparse.ArgumentParser:
                     help="After verifying a remote move, delete the local copy.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompts.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks on delete.")
+
+    # 'ocman reconnect' (kill the orphaned opencode here + relaunch on its session).
+    sp = new_sub("reconnect",
+                 help="Kill the opencode running in this dir and relaunch it on its session (Linux).")
+    sp.add_argument("--dry-run", action="store_true",
+                    help="Show the reconnect plan (kill + launch) without acting.")
+    sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
     # 'ocman rename SPEC to "New title"' (top-level sugar for 'session rename').
     sp = new_sub("rename", help="Rename a session (change its title).")
@@ -6901,6 +6911,11 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["dry_run"] = bool(g("dry_run", False))
         out["while_running"] = bool(g("while_running", False))
         out["force"] = bool(g("force", False))
+        out["yes"] = bool(g("yes", False))
+
+    elif group == "reconnect":
+        out["run_reconnect"] = True
+        out["dry_run"] = bool(g("dry_run", False))
         out["yes"] = bool(g("yes", False))
 
     elif group == "info":
@@ -11944,6 +11959,257 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
     print(color_green("========================================================"))
 
 
+def _reconnect_candidates(cwd: str, *, verbosity: int = 0) -> list[dict]:
+    """Own-user opencode instances whose cwd is AT or UNDER ``cwd`` (Linux only).
+
+    Reuses the `list running` detection path, then filters to (a) the current user's
+    processes (authoritative /proc/<pid> st_uid == getuid(), NOT the truncatable ps name)
+    and (b) instances whose captured cwd equals ``cwd`` or is nested under it. Raises
+    RunningDetectionError (same as `list running`) when detection is not available.
+    """
+    instances = detect_running_instances(all_users=False, verbosity=verbosity)
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    base = os.path.normpath(cwd)
+    out: list[dict] = []
+    for it in instances:
+        pid = it.get("pid")
+        # Authoritative own-user check (re-evaluated; detect_running_instances does not
+        # store is_own on the dict).
+        if my_uid is not None and pid is not None:
+            try:
+                if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                    continue
+            except OSError:
+                continue
+        icwd = it.get("cwd") or ""
+        if not icwd:
+            continue
+        n = os.path.normpath(icwd)
+        if n == base or n.startswith(base.rstrip("/") + "/"):
+            out.append(it)
+    return out
+
+
+def _pid_looks_like_opencode(pid: int) -> bool:
+    """True if /proc/<pid>/cmdline still names an opencode process (PID-reuse guard)."""
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            raw = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace").lower()
+    except OSError:
+        return False
+    return "opencode" in raw
+
+
+def _pid_is_gone(pid: int) -> bool:
+    """True if ``pid`` is no longer a live process.
+
+    Treats a ZOMBIE (state 'Z') as gone: after SIGTERM a child of THIS process becomes a
+    zombie until reaped, and `os.kill(pid, 0)` still succeeds on a zombie. In the real
+    reconnect case the orphaned opencode is reparented to init (reaped, not our zombie), but
+    handling 'Z' keeps the helper correct regardless of parentage.
+    """
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return True  # ESRCH (gone) or EPERM (not ours) -> not a live signalable target
+    try:
+        with open(f"/proc/{pid}/stat", "rb") as fh:
+            data = fh.read()
+        # state is the char after the ") " that closes comm; robust to spaces in comm.
+        rparen = data.rfind(b")")
+        if rparen != -1 and rparen + 2 < len(data):
+            state = chr(data[rparen + 2])
+            if state == "Z":
+                return True
+    except OSError:
+        return True
+    return False
+
+
+def _kill_pid_gracefully(pid: int, *, timeout: float = 5.0, verbosity: int = 0) -> bool:
+    """Send SIGTERM to ``pid`` and wait up to ``timeout`` for it to exit.
+
+    Returns True if the process is gone by the deadline, False if still alive (the caller
+    then STOPS and does not relaunch). Ownership + still-an-opencode are re-validated
+    IMMEDIATELY before signalling (PID-reuse guard). NOTE: this guard is best-effort; a
+    narrow TOCTOU window remains between the re-check and os.kill, so it reduces but cannot
+    fully eliminate the risk of signalling a recycled PID. No SIGKILL escalation here.
+    """
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    # Preflight: exists + signalable.
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return True  # already gone -> treat as exited
+    # PID-reuse guard: same owner AND still an opencode process.
+    if my_uid is not None:
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                raise RecoveryError(
+                    f"Refusing to signal PID {pid}: it is no longer owned by the current user "
+                    "(possible PID reuse).")
+        except OSError:
+            return True
+    if not _pid_looks_like_opencode(pid):
+        raise RecoveryError(
+            f"Refusing to signal PID {pid}: it no longer looks like an opencode process "
+            "(possible PID reuse).")
+    try:
+        os.kill(pid, signal.SIGTERM)
+    except OSError as e:
+        raise RecoveryError(f"Failed to send SIGTERM to PID {pid}: {e}")
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if _pid_is_gone(pid):
+            return True
+        time.sleep(0.1)
+    return _pid_is_gone(pid)
+
+
+def _pick_reconnect_session(killed: list[dict], cwd: str, *, interactive: bool) -> str | None:
+    """Choose the session id to resume.
+
+    - Exactly one killed instance with a `launched-with` `-s` id -> that id.
+    - Otherwise (killed-all/ambiguous, or zero killed) -> the sessions under ``cwd``
+      (most-recent first); interactively pick (default = most-recent) when a TTY, else the
+      most-recent. Returns None ONLY when there is no session to resume for this cwd; the
+      caller MUST treat None as a clear error and MUST NOT launch a bare `opencode`.
+    """
+    if len(killed) == 1:
+        sess = killed[0].get("session") or {}
+        sid = sess.get("id")
+        if sid and str(sess.get("provenance", "")).startswith("launched-with"):
+            return sid
+
+    candidates = db_list_sessions_under_dir(cwd)  # most-recent first
+    if not candidates:
+        return None
+    if not interactive or len(candidates) == 1:
+        return candidates[0]["id"]
+
+    print(color_bold(f"Sessions under {cwd} (most recent first):"))
+    shown = candidates[:10]
+    for i, s in enumerate(shown, 1):
+        marker = " (most recent)" if i == 1 else ""
+        print(f"  {i}. {s['id']}  {s.get('title') or '(untitled)'}{marker}")
+    try:
+        ans = input(f"Resume which session? [1-{len(shown)}, default 1]: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        return candidates[0]["id"]
+    if not ans:
+        return candidates[0]["id"]
+    try:
+        idx = int(ans) - 1
+        if 0 <= idx < len(shown):
+            return shown[idx]["id"]
+    except ValueError:
+        pass
+    print(color_yellow("Invalid choice; using the most recent session."))
+    return candidates[0]["id"]
+
+
+def cli_reconnect(*, assume_yes: bool = False, dry_run: bool = False,
+                  verbosity: int = 0) -> None:
+    """`ocman reconnect`: kill the orphaned opencode running in the current dir and
+    foreground-relaunch opencode on its (or the most-recent) session.
+
+    Linux-only. Foreground exec: ocman BECOMES opencode (inherits the current shell env).
+    Only `-s <session>` is reproduced, not the killed process's other flags/env.
+    """
+    # (a) require_opencode UP FRONT: never kill and then discover we cannot relaunch.
+    require_opencode()
+
+    interactive = sys.stdout.isatty()
+    cwd = str(Path.cwd())
+
+    # (b) enumerate candidates (Linux-guarded; fail loud like `list running`).
+    try:
+        candidates = _reconnect_candidates(cwd, verbosity=verbosity)
+    except RunningDetectionError as e:
+        die(f"Cannot reconnect: {e} (reconnect is Linux-only).")
+
+    # (c) branch zero / one / many.
+    if not candidates:
+        to_kill: list[dict] = []
+        print(color_yellow(f"{info_prefix()} No opencode instance found running under {cwd}."))
+    elif len(candidates) == 1:
+        to_kill = candidates
+    else:
+        print(color_bold(f"Multiple opencode instances running under {cwd}:"))
+        for i, it in enumerate(candidates, 1):
+            print(f"  {i}. PID {it['pid']}  {it.get('kind','?')}  {it.get('cmdline','')[:80]}")
+        print("  a. all of them")
+        if not interactive:
+            die("Multiple instances found and no TTY to choose; aborting (run interactively).")
+        try:
+            ans = input(f"Kill which? [1-{len(candidates)}, 'a' for all]: ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            die("Aborted; nothing killed.")
+        if ans == "a":
+            to_kill = list(candidates)
+        else:
+            try:
+                idx = int(ans) - 1
+                if not (0 <= idx < len(candidates)):
+                    raise ValueError
+                to_kill = [candidates[idx]]
+            except ValueError:
+                die("Invalid choice; nothing killed.")
+
+    # (d) resolve the session to resume.
+    sid = _pick_reconnect_session(to_kill, cwd, interactive=interactive)
+    if not sid:
+        die(f"Nothing to resume: no opencode session found for {cwd}. "
+            "Start one with 'opencode' here, or 'cd' to the project first.")
+
+    # (e)+(f) build the launch argv and render the plan.
+    argv = ["opencode", "-s", sid]
+    launch_str = " ".join(argv)
+    print()
+    print(color_bold("Reconnect plan:"))
+    if to_kill:
+        for it in to_kill:
+            print(f"  kill  PID {it['pid']}  ({it.get('cmdline','')[:80]})")
+    else:
+        print("  kill  (nothing running to kill)")
+    print(f"  then  exec: {launch_str}   (cwd: {cwd})")
+    print(color_dim("  Note: reconnect relaunches opencode in THIS shell (inherits its "
+                    "environment); only -s <session> is reproduced, not the old process's "
+                    "other flags/env."))
+
+    # (g) ONE confirmation covering BOTH kill and relaunch. dry-run OR 'no' -> zero side effects.
+    n = len(to_kill)
+    verb = (f"kill {n} instance(s) and exec {launch_str}" if n
+            else f"exec {launch_str}")
+    if not confirm_destructive(None, render=False, action_verb=verb,
+                               dry_run=dry_run, assume_yes=assume_yes,
+                               interactive=interactive):
+        return  # dry-run note already printed, or user cancelled; NO kill, NO exec.
+
+    # (h) kill the chosen pids; on any survivor, STOP (no exec) and report died vs survived.
+    died: list[int] = []
+    survived: list[int] = []
+    for it in to_kill:
+        pid = it["pid"]
+        if _kill_pid_gracefully(pid, verbosity=verbosity):
+            died.append(pid)
+        else:
+            survived.append(pid)
+    if survived:
+        if died:
+            print(color_yellow(f"{info_prefix()} Killed: {', '.join(map(str, died))}."))
+        die(f"PID(s) {', '.join(map(str, survived))} did not exit after SIGTERM; "
+            "not relaunching. Re-run to retry (a future --force could SIGKILL).")
+    if died:
+        print(f"{info_prefix()} Killed: {', '.join(map(str, died))}.")
+
+    # (i) foreground exec: point of no return; ocman becomes opencode. Nothing after this.
+    print(f"{info_prefix()} Launching: {launch_str}")
+    os.execvp("opencode", argv)
+
+
 def cli_list_running(*, all_users: bool = False, probe: bool = False,
                      json_output: bool = False, long_output: bool = False,
                      pattern: str | None = None,
@@ -15322,6 +15588,14 @@ def _run_main() -> None:
             json_output=getattr(args, "json_output", False),
             long_output=getattr(args, "running_long", False),
             pattern=getattr(args, "running_filter", None),
+            verbosity=verbosity,
+        )
+        return
+
+    if getattr(args, "run_reconnect", False):
+        cli_reconnect(
+            assume_yes=getattr(args, "yes", False),
+            dry_run=getattr(args, "dry_run", False),
             verbosity=verbosity,
         )
         return
