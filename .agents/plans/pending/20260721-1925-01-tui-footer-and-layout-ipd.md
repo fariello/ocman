@@ -5,7 +5,7 @@
 - Scope: `ocman_tui/app.py` (bindings, compose footer, actions, modal screens, tab removal),
   `ocman_tui/css/style.css` (sidebar-pane width, footer bar styling), `tests/test_tui.py`.
   No `ocman/cli.py` change. No DB schema change. No new dependency.
-- Status: PROPOSED (partially executed; written retroactively - see Workflow history)
+- Status: reviewed (plan-review applied; awaiting maintainer approval to execute TF-07..TF-14)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused pending this
   UI work; this rides along and re-triggers a release-review delta pass before promotion).
 - Approval: awaiting maintainer review/approval
@@ -19,6 +19,15 @@
   (a process miss). This IPD is written RETROACTIVELY to capture the plan, mark the already-done
   parts, and gate the remaining overlay-screen refactor through the normal lifecycle. Per
   AGENTS.md the correct closure of a process gap is a new plan, not a silent continuation.
+
+## Workflow history
+- 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-001..PR-006. Verified DONE claims (TF-01..06) and PENDING feasibility (config query_one
+  whole-DOM save/load, storage/running self-load, TabbedContent.active) against code. Fixes
+  applied in-place: transition-ordering MUST (TF-13), config save-on-dismiss to replace the lost
+  tab-switch save (TF-10), migrate the 8 existing tab-based tests (TF-14), Esc/^m dismiss
+  bindings not automatic (TF-08), ^c->^g Config rebind (UX; maintainer-approved), execution-
+  contract gate added. Status -> reviewed; GO - PENDING HUMAN APPROVAL.
 
 ## Goal
 
@@ -37,9 +46,13 @@ Design (settled with maintainer):
 - Footer/keys and their EXACT glyphs (from the maintainer's mockup):
   `space` Select, `^q` Quit, `^b` Sidebar (live checkbox glyph), `^u` ↻ Update (was `^r`
   Refresh), `^s` 🔎 Search (focus the search field; was Toggle Sidebar), `^d` 🩺 Doctor,
-  `^r` ▶ Running, `^c` ⚙ Config, `^m` Main.
-- Maintainer's target layout line (verbatim, the look to match):
-  `[space] Select  ^q Quit  ^b ☐Sidebar  ^u ↻Update  ^s🔎Search  ^d🩺Doctor  ^r ▶Running  ^c ⚙Config`
+  `^r` ▶ Running, `^g` ⚙ Config, `^m` Main.
+- Maintainer's ORIGINAL mockup used `^c` for Config; during plan-review this was rebound to
+  `^g` (confiG) to avoid the `ctrl+c`-means-interrupt/abort muscle-memory inversion (decision
+  2026-07-21, plan-review; maintainer accepted the recommendation). The footer LABEL stays
+  `⚙ Config`; only the accelerator changed to `^g`.
+- Maintainer's target layout line (the look to match, with the `^g` rebind applied):
+  `[space] Select  ^q Quit  ^b ☐Sidebar  ^u ↻Update  ^s🔎Search  ^d🩺Doctor  ^r ▶Running  ^g ⚙Config`
   (plus `^m Main`, added per the maintainer's follow-up question).
 - The maintainer explicitly asked "if there's a better layout, please propose"; the overlay
   design below is that proposal, accepted by the maintainer (overlay ModalScreens for
@@ -64,12 +77,33 @@ Design (settled with maintainer):
   on `on_mount` (Storage runs its guarded checkup worker; Running refreshes). This avoids
   re-parenting the existing tab-pane widgets and preserves the hardened storage-worker lifecycle.
 - **Config overlay** hosts the `#cfg-*` inputs/checkboxes + Save/Reset. `load_tui_config` /
-  `save_tui_config` use app-level `self.query_one("#cfg-...")`, which searches the whole DOM
-  (including a mounted modal), so config load/save keeps working from the overlay. Config load
-  is triggered after the modal mounts; auto-save-on-change (the `cfg-*` handlers) is preserved.
+  `save_tui_config` use app-level `self.query_one("#cfg-...")` (verified `app.py:2271-2279`,
+  `2289-2311`), which searches the whole DOM (including a mounted modal), so config load/save
+  keeps working from the overlay. Config load is triggered after the modal mounts;
+  auto-save-on-change (the `cfg-*` `Input.Submitted`/`Checkbox.Changed` handlers at
+  `app.py:2364-2372`) is preserved because those handlers are app-level and still fire.
+- **CRITICAL: the auto-save-on-tab-SWITCH path is LOST and must be replaced.** Today config is
+  auto-saved by `on_tabbed_content_tab_activated` (`app.py`) when the user leaves the config TAB;
+  the existing test `test_tui_config_tab` (`tests/test_tui.py:611-618`) asserts exactly this
+  ("auto-save via tab activation"). Once Config is a modal (not a tab) that trigger NO LONGER
+  fires. The Config overlay MUST therefore call `save_tui_config(notify=False)` on dismiss
+  (`^m`/`Esc`/close), and the test must be migrated to assert save-on-dismiss. Not doing this
+  silently drops config persistence.
 - **Binding conflicts resolved:** old `^s`=Toggle Sidebar and `^r`=Refresh collided with the new
-  `^s`=Search / `^r`=Running. Rebind Sidebar->`^b`, Refresh->`^u` (Update). `^c` overrides
-  Textual's default quit-on-ctrl-c (intended: it is now Config; `^q` quits).
+  `^s`=Search / `^r`=Running. Rebind Sidebar->`^b`, Refresh->`^u` (Update), Config->`^g`.
+  Config was originally proposed on `^c` but rebound to `^g` in plan-review (see Goal) to keep
+  `ctrl+c` out of a surprising "open a screen" role; `^q` quits. NOTE: the CURRENT in-tree
+  edit still binds `ctrl+c`=show_config (app.py:1034) - the executor MUST change that binding to
+  `ctrl+g` and update the `foot-config` label accelerator when doing TF-07..TF-14. TF-12 MUST
+  test that `^g` opens Config and `^q` still quits.
+- **Transition ordering (MUST):** the footer actions currently call `_activate_tab("tab-...")`.
+  TF-07 (push overlays) and TF-09 (remove the tabs) MUST land in the SAME edit: rewire
+  `action_show_doctor/running/config` from `_activate_tab(...)` to `push_screen(<Modal>())`
+  BEFORE or WITH removing the panes. Removing a pane while an action still queries it would make
+  `^d/^r/^g` and the footer buttons crash or no-op.
+- **Esc is not automatic:** existing modals in this file (`app.py:78+`) `dismiss()` on a Cancel
+  BUTTON; none binds Escape. The new overlays MUST add `BINDINGS = [Binding("escape","dismiss"),
+  Binding("ctrl+m","dismiss")]` (or equivalent) for TF-08 to hold.
 - **No `ocman/cli.py` change**; TUI-only. No DB, no dependency, no serialized-format change.
 
 ## Findings / requirements
@@ -78,16 +112,18 @@ Design (settled with maintainer):
 |----|-------------|--------|
 | TF-01 | `#sidebar-pane` fixed width (40) so `#workspace` (1fr) takes the rest | DONE |
 | TF-02 | Custom `#footer-bar`: key hints + clickable, distinctly-styled command buttons | DONE |
-| TF-03 | Bindings: space/^q/^b/^u/^s/^d/^r/^c wired to actions | DONE |
+| TF-03 | Bindings: space/^q/^b/^u/^s/^d/^r/^g (note: in-tree still ^c; rebind to ^g in TF-07..14) wired to actions | DONE |
 | TF-04 | Live sidebar glyph (🗹/☐) + bold `b`, updated on every toggle | DONE |
 | TF-05 | `^s`/Search focuses the search field (un-hiding the sidebar if hidden) | DONE |
 | TF-06 | Footer buttons clickable and equivalent to their key bindings | DONE (tab-switch form) |
 | TF-07 | Doctor/Running/Config open as overlay ModalScreens (not tabs) | PENDING |
-| TF-08 | `^m` / Main button + `Esc` return to the main workspace (dismiss overlay) | PENDING |
+| TF-08 | `^m` Main button + `Esc` dismiss overlay; overlays add `Binding("escape"/"ctrl+m","dismiss")` (not automatic) | PENDING |
 | TF-09 | Remove the Storage/Running/Config TAB PANES (superseded) | PENDING |
-| TF-10 | Config overlay preserves load-on-open + auto-save-on-change + Save/Reset | PENDING |
-| TF-11 | Storage/Running overlays self-load via fresh widget on_mount | PENDING |
-| TF-12 | Tests: footer buttons present, glyph toggles, each overlay opens/closes, focus-search, config round-trips from the overlay | PENDING |
+| TF-10 | Config overlay: load-on-mount + auto-save-on-change + Save/Reset AND save_tui_config on dismiss (replaces the lost tab-switch save) | PENDING |
+| TF-11 | Storage/Running overlays self-load via fresh widget on_mount (verified: storage.py:113/129 worker, running.py:36/46 refresh) | PENDING |
+| TF-12 | New tests: footer buttons present, glyph toggles, each overlay opens/closes via key+button, focus-search, config round-trips from overlay incl. save-on-dismiss, `^g` opens Config and `^q` quits | PENDING |
+| TF-13 | Transition ordering: rewire show_doctor/running/config to push_screen IN THE SAME edit that removes the tabs (never query a removed pane) | PENDING |
+| TF-14 | Migrate existing tab-based tests: test_tui_config_tab (test_tui.py:585-624) + storage/running tests (test_tui.py:695-908) set TabbedContent.active to the removed tabs; rewrite to the overlay flow so they do not break | PENDING |
 
 ## Non-goals
 
@@ -98,11 +134,16 @@ Design (settled with maintainer):
 
 ## Validation plan
 
-- `PYTHONPATH=. pytest -q tests/test_tui.py` green, plus new TF-12 tests.
-- Full suite `PYTHONPATH=. pytest -q` still 473+ pass, 2 skipped (paste real output).
-- Headless pilot smoke: footer buttons present; ^b toggles glyph; ^s focuses search; ^d/^r/^c
-  open the correct overlay; ^m/Esc returns; config loads and saves from the overlay.
-- No em/en dash in authored prose.
+- `PYTHONPATH=. pytest -q tests/test_tui.py` green, INCLUDING the MIGRATED tab-based tests
+  (TF-14: test_tui_config_tab and the storage/running tests rewritten to the overlay flow) and
+  the new TF-12 tests. A green run here must show the migrated tests pass, not just that new
+  ones were added.
+- Full suite `PYTHONPATH=. pytest -q` still 473+ pass (net of the migrated tests), 2 skipped.
+  Paste the ACTUAL runner output (hard-MUST honesty rule); do not claim a count not run.
+- Headless pilot smoke: footer buttons present; ^b toggles glyph; ^s focuses search; ^d/^r/^g
+  open the correct overlay; ^m/Esc returns; config loads AND saves-on-dismiss from the overlay;
+  ^g opens Config and ^q quits.
+- No em/en dash in authored prose (`grep -nP $'[\u2013\u2014]'`).
 
 ### Acceptance gate (maintainer sign-off, MUST)
 
@@ -113,10 +154,30 @@ hand-tested result. Automated tests + pilot smoke are necessary but not sufficie
 
 ## Commit grouping
 
-- Already committed to the working tree as in-progress edits (NOT yet committed to git at IPD
-  authoring time): bindings + footer compose + actions + button wiring + CSS width/footer.
-- Remaining (TF-07..TF-12): overlay ModalScreens + tab removal + `^m` + tests, as one coherent
-  commit referencing TF IDs, after plan-review + maintainer approval.
+- The already-in-tree in-progress edits (TF-01..TF-06: bindings + footer compose + actions +
+  button wiring + CSS width/footer) are UNCOMMITTED to git at IPD authoring time. They commit as
+  one "TUI footer bar + sidebar-width fix" unit once the plan is approved.
+- Remaining (TF-07..TF-14): overlay ModalScreens + `^m`/Esc dismiss + tab removal + config
+  save-on-dismiss + transition rewire + NEW tests + MIGRATED tests, as one coherent commit
+  referencing TF IDs, after plan-review + maintainer approval. Both commits path-scoped to
+  `ocman_tui/` + `tests/test_tui.py`; never `git add -A`; never push.
+
+## Gate / execution contract (MUST, per AGENTS.md)
+
+Before writing any code for the remaining work, the executor MUST first create a step-granular
+TodoWrite checklist (one item per TF-07..TF-14 sub-step). Then:
+
+- **Open questions:** all resolved in this plan (see plan-review Workflow history). None block execution.
+- **Scope fence:** touch ONLY `ocman_tui/app.py`, `ocman_tui/css/style.css`, `tests/test_tui.py`.
+  No `ocman/cli.py`, no DB, no dependency, no other tab's content.
+- **Honesty rule (hard-MUST):** paste the ACTUAL `pytest` runner output for the validation run;
+  never claim a pass/count that was not run.
+- **Commits:** path-scoped (`git commit -m msg -- <path>`), never `git add -A`/`-a`/bare, never push.
+- **Lifecycle:** on completion AND maintainer hand-test sign-off (the Acceptance gate above),
+  `git mv` this plan `pending/ -> executed/` and re-`git add` the executed path so content stages.
+  Do NOT mark executed on green automated tests alone.
+- **Release interaction:** the paused 1.3.0 promotion (release-review run 20260721-180742) must get
+  a delta re-review covering this TUI change before rung C resumes.
 
 ## Deferred / open
 
