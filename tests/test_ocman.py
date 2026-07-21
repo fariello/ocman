@@ -4889,3 +4889,115 @@ def test_reconnect_partial_kill_stops_no_exec(monkeypatch, capsys):
     out = capsys.readouterr().out
     assert "exec" not in calls           # never relaunched after a partial kill
     assert "22" in out                    # reports the survivor
+
+
+@_linux_only
+def test_kill_pid_gracefully_returns_false_when_process_ignores_sigterm(monkeypatch):
+    """The real 'survives SIGTERM -> False' path (the trigger for reconnect to STOP)."""
+    import subprocess, time
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: True)
+    # A child that ignores SIGTERM; must be SIGKILLed in cleanup.
+    p = subprocess.Popen(["sh", "-c", "trap '' TERM; sleep 30"])
+    time.sleep(0.3)
+    try:
+        # Short timeout: SIGTERM is ignored, so it stays alive -> False.
+        assert ocman.cli._kill_pid_gracefully(p.pid, timeout=1.0) is False
+    finally:
+        p.kill()
+        try:
+            p.wait(timeout=2)
+        except Exception:
+            pass
+
+
+@_linux_only
+def test_pid_is_gone_true_for_dead_and_zombie(monkeypatch):
+    """_pid_is_gone: a never-existed pid is gone; a reaped/zombie child counts as gone."""
+    import subprocess, os, time, signal
+    # 1. Clearly-dead pid.
+    p = subprocess.Popen(["true"])
+    p.wait()
+    assert ocman.cli._pid_is_gone(p.pid) is True
+    # 2. Live process is NOT gone.
+    p2 = subprocess.Popen(["sleep", "30"])
+    time.sleep(0.2)
+    try:
+        assert ocman.cli._pid_is_gone(p2.pid) is False
+        # 3. Zombie: kill but do NOT reap (no wait) -> /proc state 'Z' -> treated as gone.
+        os.kill(p2.pid, signal.SIGKILL)
+        # give the kernel a moment to move it to zombie state
+        for _ in range(50):
+            if ocman.cli._pid_is_gone(p2.pid):
+                break
+            time.sleep(0.05)
+        assert ocman.cli._pid_is_gone(p2.pid) is True
+    finally:
+        try:
+            p2.wait(timeout=2)
+        except Exception:
+            pass
+
+
+@_linux_only
+def test_reconnect_candidates_excludes_other_user_pid(monkeypatch):
+    """A pid owned by a DIFFERENT uid must be filtered out."""
+    import os
+    fake = [{"pid": os.getpid(), "cwd": "/home/me/proj", "kind": "tui", "cmdline": "opencode", "session": {}},
+            {"pid": 999999, "cwd": "/home/me/proj", "kind": "tui", "cmdline": "opencode", "session": {}}]
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: [dict(x) for x in fake])
+    # os.stat on a bogus /proc/999999 raises OSError -> excluded; our own pid kept.
+    got = ocman.cli._reconnect_candidates("/home/me/proj")
+    assert [i["pid"] for i in got] == [os.getpid()]
+
+
+@_linux_only
+def test_reconnect_zero_match_launches_most_recent(monkeypatch, capsys):
+    """No opencode running here -> no kill, exec on the most-recent session for the dir."""
+    import os
+    calls = {}
+    monkeypatch.setattr(ocman, "require_opencode", lambda: None)
+    monkeypatch.setattr(ocman.cli, "_reconnect_candidates", lambda cwd, **k: [])
+    monkeypatch.setattr(ocman, "db_list_sessions_under_dir",
+                        lambda d: [{"id": "ses_recent", "title": "r", "updated": 2},
+                                   {"id": "ses_old", "title": "o", "updated": 1}])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    def fake_exec(prog, argv):
+        calls["exec"] = (prog, list(argv)); raise SystemExit(0)
+    monkeypatch.setattr(os, "execvp", fake_exec)
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_reconnect(assume_yes=True, dry_run=False)
+    assert "killed" not in calls                      # nothing to kill
+    assert calls["exec"] == ("opencode", ["opencode", "-s", "ses_recent"])
+
+
+@_linux_only
+def test_reconnect_nothing_to_resume_errors_no_exec(monkeypatch):
+    """Zero match AND no session for the dir -> clear error, never bare opencode."""
+    import os
+    calls = {}
+    monkeypatch.setattr(ocman, "require_opencode", lambda: None)
+    monkeypatch.setattr(ocman.cli, "_reconnect_candidates", lambda cwd, **k: [])
+    monkeypatch.setattr(ocman, "db_list_sessions_under_dir", lambda d: [])
+    monkeypatch.setattr(os, "execvp", lambda *a: calls.setdefault("exec", a))
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_reconnect(assume_yes=True, dry_run=False)
+    assert "exec" not in calls
+
+
+@_linux_only
+def test_reconnect_user_says_no_zero_side_effects(monkeypatch):
+    """Interactive 'no' at the confirm -> no kill, no exec (RC-10)."""
+    import os
+    calls = {}
+    monkeypatch.setattr(ocman, "require_opencode", lambda: None)
+    monkeypatch.setattr(ocman.cli, "_reconnect_candidates",
+                        lambda cwd, **k: [{"pid": 7, "cwd": cwd, "kind": "tui", "cmdline": "opencode -s ses_a",
+                                           "session": {"id": "ses_a", "provenance": "launched-with (may be stale)"}}])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    monkeypatch.setattr(os, "execvp", lambda *a: calls.setdefault("exec", a))
+    monkeypatch.setattr(_sys_rc.stdout, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a: "no")   # decline the typed-yes
+    ocman.cli.cli_reconnect(assume_yes=False, dry_run=False)  # returns cleanly
+    assert "killed" not in calls and "exec" not in calls
