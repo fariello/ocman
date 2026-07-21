@@ -10,3 +10,7 @@
 | scan_secrets.py --format json | built-in secret scan | 953 heuristic hits, low false positives (env-var docs) |
 | gitleaks detect --redact (full history) | authoritative secret scan | 3 hits, all synthetic fixtures in prior-run artifacts; not live |
 | gh run list secret-scan | confirm CI scanner state | green (action range does not hit the 3) |
+| pypi json api ocman | published-version check | latest 1.2.0; proposed 1.3.0 valid bump |
+| python -m build | packaging build check | built sdist+wheel (1.3.0rc4 pre-bump) OK |
+| twine check dist/* | metadata validity | PASSED both |
+| ocman --version (entry point) | console script smoke | ocman 1.3.0rc4 |

@@ -28,3 +28,7 @@ Lead-persona notes appended per section (2-6); full eight-persona sign-off in Se
 - Power user (6): scriptable (--json on filters/doctor/lr; -y/--dry-run/--force escape hatches). reconnect foreground-exec is the expert-friendly behavior. No F finding.
 - Novice (7): README teaches all commands; help/errors guide recovery; Linux-only caveat stated up front. No U finding for end users (contributor-facing DR03 aside).
 - Stakeholder (8): the 1.3.0 goal (safer, more ergonomic local opencode administration: recover an orphaned session, stop a stray server, rename, spot insecure servers) is delivered and matches the CHANGELOG. Fitness for purpose met.
+
+## Section 6 (compatibility/packaging/release)
+- Operator (8): a first-time installer runs `pip install ocman` (PyPI 1.2.0 -> will be 1.3.0) or `pip install .` from source; README install steps are accurate; console script works; build+twine pass. No O finding beyond the version-string finalization (PKG01/DR01).
+- Software engineer (5): additive change set, no serialized-format drift, dynamic re-export keeps `from ocman import X` working for new symbols. Clean.

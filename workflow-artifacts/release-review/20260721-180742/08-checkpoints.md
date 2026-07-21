@@ -36,3 +36,10 @@
 - TODO triage FINAL: no must/should-before-release; forked-spend de-dup out-of-scope; TODO.md honest.
 - Deprecation candidates: none.
 - Next: Section 6 (compatibility/packaging/CI/schema/published-version).
+
+## Section 6 checkpoint
+- Published-version check: PyPI latest 1.2.0; proposed 1.3.0 is a VALID bump (PKG01). No rc on PyPI.
+- Build: python -m build OK; twine check PASSED (sdist+wheel); console script + dynamic re-export OK.
+- Compatibility: additive only, ls<ARG> precedence preserved (regression-tested), no schema/format drift (R01).
+- CI: no change recommended (16/16 green); note S2-S01 gitleaks baseline (.gitleaksignore, not a workflow change).
+- Sections 1-6 COMPLETE. Ready to build implementation-plan.md.
