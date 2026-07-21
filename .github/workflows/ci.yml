@@ -50,3 +50,8 @@ jobs:
       env:
         PYTHONPATH: .
       run: pytest --cov=ocman --cov=ocman_tui --cov-report=term-missing || true
+    - name: Benchmarks (informational, non-gating; prints timings, never fails the build)
+      env:
+        PYTHONPATH: .
+        OCMAN_BENCHMARK: "1"
+      run: pytest tests/test_perf.py -s || true

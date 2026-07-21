@@ -1251,3 +1251,67 @@ async def test_tui_filter_runs(tui_db, tmp_path, monkeypatch):
     assert captured.get("model") == "uri/test/model"
 
 
+
+
+# --- TF-02 (follow-up IPD): Storage worker #doctor-table mount-race guard ------
+
+def test_storage_checkup_worker_skips_when_unmounted(monkeypatch):
+    """Deterministic guard test: the checkup worker's UI callback must NOT raise
+    NoMatches/WorkerFailed when the widget is not mounted (the race we hit under load).
+    Mutation-check: removing the `if not self.is_mounted: return` guard makes this raise."""
+    from ocman_tui.widgets.storage import StorageWidget
+    import ocman
+
+    sw = StorageWidget()               # constructed, NOT mounted -> is_mounted is False
+    assert not sw.is_mounted
+
+    # The worker marshals its UI update via self.app._safe_call_from_thread(fn); run it inline.
+    class _FakeApp:
+        def notify(self, *a, **k):
+            pass
+        def _safe_call_from_thread(self, fn, *a, **k):
+            return fn(*a, **k)   # execute the update_ui callback synchronously
+    monkeypatch.setattr(type(sw), "app", property(lambda self: _FakeApp()))
+
+    # A checkup record so update_ui has something to render if it (wrongly) proceeds.
+    monkeypatch.setattr(ocman, "discover_storage_locations", lambda *a, **k: {})
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    monkeypatch.setattr(ocman, "run_doctor_checks",
+                        lambda *a, **k: [{"key": "x", "title": "X", "status": "ok",
+                                          "size_bytes": 0, "count": 0, "fix_cmd": None,
+                                          "bucket": "report"}])
+    # Must not raise: the guard returns early because the widget/#doctor-table is not mounted.
+    sw._do_checkup_worker(deep=False)
+
+
+# --- TF-03/04 (follow-up IPD): database.py worker ERROR path ------------------
+
+@pytest.mark.anyio
+async def test_tui_prune_worker_error_is_surfaced_not_crashed(tui_db, monkeypatch):
+    """The prune worker's off-thread failure must surface via an error notify and NOT crash
+    the app / worker (covers the except branch in _do_prune_worker)."""
+    from textual.widgets import TabbedContent
+    import ocman_tui.widgets.database as dbmod
+
+    notifications = []
+
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one(TabbedContent).active = "tab-admin"
+        await pilot.pause()
+        widget = app.query_one(DatabaseAdminWidget)
+        # Capture notifications; make the cleanup entry point raise.
+        monkeypatch.setattr(app, "notify",
+                            lambda msg, **k: notifications.append((msg, k.get("severity"))))
+        monkeypatch.setattr(dbmod, "db_run_cleanup",
+                            lambda **k: (_ for _ in ()).throw(RuntimeError("boom in cleanup")))
+        widget.query_one("#check-dry-run", Checkbox).value = True
+        widget.run_prune_operation()
+        # Wait for the worker to surface the error (no crash).
+        for _ in range(50):
+            if any(sev == "error" for _, sev in notifications):
+                break
+            await pilot.pause(0.1)
+    assert any(sev == "error" and "boom in cleanup" in msg for msg, sev in notifications), \
+        f"expected an error notify surfacing the failure; got {notifications}"

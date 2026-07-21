@@ -16,6 +16,7 @@ from textual.app import ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static, Button, Checkbox, Input, Label, RichLog, DataTable
 from textual.screen import ModalScreen
+from textual.css.query import NoMatches
 
 from ..core import (
     discover_storage_locations,
@@ -140,7 +141,17 @@ class StorageWidget(Static):
             return
 
         def update_ui() -> None:
-            table = self.query_one("#doctor-table", DataTable)
+            # The checkup runs in a background thread; by the time this UI callback is
+            # marshalled back, the widget (and #doctor-table) may not be mounted yet or may
+            # already be torn down (tab switch / app exit), so query_one would raise
+            # NoMatches -> WorkerFailed. Skip safely in that case (matches DatabaseAdminWidget
+            # .refresh_metrics). See .agents/plans/executed/20260721-1424-01-testing-followup.
+            if not self.is_mounted:
+                return
+            try:
+                table = self.query_one("#doctor-table", DataTable)
+            except NoMatches:
+                return
             table.clear()
             for rec in records:
                 size = human_size_local(rec["size_bytes"]) if rec.get("size_bytes") else "-"

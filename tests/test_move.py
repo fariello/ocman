@@ -434,3 +434,76 @@ def test_confirm_remote_delete_requires_remote(monkeypatch, tmp_path):
             metadata_only=False, confirm_remote_delete=True, assume_yes=True,
             force=False, verbosity=0,
         )
+
+
+# --- TF-01 (follow-up IPD): pure _git_decisions_for_state branch tests --------
+
+def _gs(**over):
+    base = {"dirty": False, "staged": 0, "modified": 0, "untracked": 0, "other": 0,
+            "clean": True, "upstream": True, "ahead": 0, "behind": 0}
+    base.update(over)
+    return base
+
+
+def test_git_decisions_not_a_repo():
+    cmds, labels, needs_bulk = ocman.cli._git_decisions_for_state(None)
+    assert cmds == [] and needs_bulk is True
+    assert any("not a git repo" in l for l in labels)
+
+
+def test_git_decisions_clean_in_sync():
+    cmds, labels, needs_bulk = ocman.cli._git_decisions_for_state(_gs())
+    assert cmds == [] and needs_bulk is False
+    assert any("in sync" in l for l in labels)
+
+
+def test_git_decisions_clean_no_upstream():
+    cmds, labels, needs_bulk = ocman.cli._git_decisions_for_state(_gs(upstream=False))
+    assert cmds == [] and needs_bulk is False
+    assert any("no upstream" in l for l in labels)
+
+
+def test_git_decisions_ahead_push():
+    cmds, labels, needs_bulk = ocman.cli._git_decisions_for_state(
+        _gs(clean=False, ahead=2), divergence_choice=1)
+    assert cmds == [["push"]] and needs_bulk is False
+    # skip variant
+    cmds2, _, _ = ocman.cli._git_decisions_for_state(_gs(clean=False, ahead=2), divergence_choice=2)
+    assert cmds2 == []
+
+
+def test_git_decisions_ahead_and_behind_pushpull():
+    cmds, _, _ = ocman.cli._git_decisions_for_state(
+        _gs(clean=False, ahead=1, behind=1), divergence_choice=1)
+    assert cmds == [["push"], ["pull"]]
+    cmds_p, _, _ = ocman.cli._git_decisions_for_state(_gs(clean=False, ahead=1, behind=1), divergence_choice=2)
+    assert cmds_p == [["push"]]
+    cmds_l, _, _ = ocman.cli._git_decisions_for_state(_gs(clean=False, ahead=1, behind=1), divergence_choice=3)
+    assert cmds_l == [["pull"]]
+    cmds_n, _, _ = ocman.cli._git_decisions_for_state(_gs(clean=False, ahead=1, behind=1), divergence_choice=4)
+    assert cmds_n == []
+
+
+def test_git_decisions_dirty_abort_raises():
+    with pytest.raises(ocman.RecoveryError, match="aborted"):
+        ocman.cli._git_decisions_for_state(_gs(dirty=True, clean=False, staged=1), dirty_choice=1)
+
+
+def test_git_decisions_dirty_commit_staged_needs_bulk():
+    cmds, labels, needs_bulk = ocman.cli._git_decisions_for_state(
+        _gs(dirty=True, clean=False, staged=1, modified=2), dirty_choice=2)
+    assert cmds == [["commit", "-m", "ocman move: commit staged changes"]]
+    assert needs_bulk is True  # unstaged/untracked left behind -> only bulk carries them
+
+
+def test_git_decisions_dirty_add_all():
+    cmds, _, needs_bulk = ocman.cli._git_decisions_for_state(
+        _gs(dirty=True, clean=False, modified=1), dirty_choice=3)
+    assert cmds == [["add", "-A"], ["commit", "-m", "ocman move: commit all changes"]]
+    assert needs_bulk is False
+
+
+def test_git_decisions_dirty_no_commit_needs_bulk():
+    cmds, _, needs_bulk = ocman.cli._git_decisions_for_state(
+        _gs(dirty=True, clean=False, modified=1), dirty_choice=4)
+    assert cmds == [] and needs_bulk is True

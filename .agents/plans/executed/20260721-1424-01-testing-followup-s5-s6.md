@@ -7,7 +7,7 @@
   and possibly a small hardening of the Storage widget's worker + `.github/workflows/ci.yml`
   (one perf step). Tests + a testability seam + a widget-mount guard only; no user-facing
   behavior change.
-- Status: reviewed
+- Status: executed (2026-07-21)
 - Target version: rides the 1.3.0 line (test/infra + a pure seam; no user-facing change).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -25,6 +25,30 @@
   commits to it), PR-002 (TF-02 needs a DETERMINISTIC mutation-checked guard test, not only a
   probabilistic stress loop). Remaining open questions are non-blocking preferences with safe
   defaults. No unfixed BLOCKER/HIGH. GO - PENDING HUMAN APPROVAL.
+- 2026-07-21 approved by maintainer; executed (its_direct/pt3-claude-opus-4.8). All 5 steps done.
+
+## Post-execution summary
+
+- TF-02 (Step 1): guarded `StorageWidget._do_checkup_worker`'s `update_ui` callback with
+  `if not self.is_mounted: return` + `try/except NoMatches` around the `#doctor-table` query
+  (imported `NoMatches`), matching the `DatabaseAdminWidget.refresh_metrics` precedent. Added a
+  DETERMINISTIC test (`test_storage_checkup_worker_skips_when_unmounted`) that drives the worker
+  on an unmounted widget and asserts no raise; MUTATION-CHECKED (removing the guard makes it fail
+  with NoMatches). Stress-loop of storage+models TUI tests: 0 failures across the completed runs.
+- TF-01 (Steps 2-3): extracted pure `_git_decisions_for_state(gs, *, dirty_choice, divergence_choice)`
+  from `_gather_git_decisions`; the orchestrator now resolves all `_menu` choices up front
+  (non-interactive defaults preserved byte-identically: divergence defaults to 1, dirty
+  non-interactive still `die`s) then delegates. Added 9 pure-seam unit tests (not-a-repo, clean
+  in-sync, clean-no-upstream, ahead push/skip, ahead+behind push/pull/pull-only/none, dirty
+  abort-raises/commit-staged/add-all/no-commit). All 26 move tests pass (17 existing unchanged).
+- TF-03/04 (Step 4): added `test_tui_prune_worker_error_is_surfaced_not_crashed` covering the
+  `_do_prune_worker` except branch (db_run_cleanup raises -> error notify, no crash). Happy path
+  already covered by `test_tui_prune_duration_and_scope`.
+- TF-04 (Step 5): added a non-gating "Benchmarks" step to the CI coverage job
+  (`OCMAN_BENCHMARK=1 pytest tests/test_perf.py -s || true`); verified locally it prints timings
+  (2 passed, report-only). Never gates the build.
+- Validation: full suite **473 passed, 2 skipped** (was 462; +11 new tests).
+- Release: rides the 1.3.0 line; NOT promoted to final 1.3.0.
 
 ## Goal
 

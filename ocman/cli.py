@@ -9410,14 +9410,20 @@ def _menu(prompt: str, options: list[str], *, default: int = 1, max_tries: int =
     die("Too many invalid selections; aborting.")
 
 
-def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[list[str]], list[str], bool]:
-    """Ask the up-front git-state menus (B1/B2). Returns (git_cmds, labels, needs_bulk).
+def _git_decisions_for_state(
+    gs: dict | None, *, dirty_choice: int = 1, divergence_choice: int = 1,
+) -> tuple[list[list[str]], list[str], bool]:
+    """PURE builder: map a git-state dict + resolved choices -> (git_cmds, labels, needs_bulk).
 
-    ``git_cmds`` is a list of argv lists to run locally (post-confirm). ``labels`` is
-    human descriptions for the summary/runbook. ``needs_bulk`` is True when the user
-    chose an option whose changes only travel via bulk copy (dirty, not committed).
+    No IO, no prompts. ``gs`` is the result of ``git_state(source_dir)`` (or None for a
+    non-repo). ``dirty_choice`` (1-4) is the resolved answer to the dirty-tree menu (only
+    consulted when ``gs['dirty']``): 1=abort, 2=commit staged only (needs bulk), 3=add -A +
+    commit all, 4=no commit (needs bulk). ``divergence_choice`` is the resolved answer to the
+    push/pull menu (only consulted when there is an upstream and ahead/behind): for
+    ahead+behind 1=push&pull/2=push/3=pull/4=none; for ahead-only or behind-only 1=do/2=skip.
+    Choice 1 for a dirty tree (abort) is signalled by raising RecoveryError so the caller can
+    surface it; the orchestrator handles the interactive/non-interactive abort messaging.
     """
-    gs = git_state(source_dir)
     if gs is None:
         return ([], ["source is not a git repo (bulk file copy only)"], True)
 
@@ -9426,6 +9432,59 @@ def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[lis
     needs_bulk = False
 
     # B2: dirty first (pushing requires a committed tree).
+    if gs["dirty"]:
+        if dirty_choice == 1:
+            raise RecoveryError("Operation aborted so you can fix the repo.")
+        elif dirty_choice == 2:
+            git_cmds.append(["commit", "-m", "ocman move: commit staged changes"])
+            labels.append("git commit staged changes")
+            needs_bulk = True  # unstaged/untracked left behind -> only bulk carries them
+        elif dirty_choice == 3:
+            git_cmds.append(["add", "-A"])
+            git_cmds.append(["commit", "-m", "ocman move: commit all changes"])
+            labels.append("git add -A && git commit (all changes)")
+        elif dirty_choice == 4:
+            labels.append("no commit; rely on bulk copy for the dirty tree")
+            needs_bulk = True
+
+    # B1: divergence (only meaningful with an upstream).
+    if gs["upstream"] and (gs["ahead"] or gs["behind"]):
+        ahead, behind = gs["ahead"], gs["behind"]
+        if ahead and behind:
+            if divergence_choice == 1:
+                git_cmds += [["push"], ["pull"]]; labels.append("git push && git pull")
+            elif divergence_choice == 2:
+                git_cmds.append(["push"]); labels.append("git push")
+            elif divergence_choice == 3:
+                git_cmds.append(["pull"]); labels.append("git pull")
+        elif ahead:
+            if divergence_choice == 1:
+                git_cmds.append(["push"]); labels.append("git push")
+        elif behind:
+            if divergence_choice == 1:
+                git_cmds.append(["pull"]); labels.append("git pull")
+    elif gs["clean"] and not gs["upstream"]:
+        labels.append("repo clean, no upstream configured (cannot push; not guessing a remote)")
+    elif gs["clean"]:
+        labels.append("repo clean, in sync with upstream")
+
+    return (git_cmds, labels, needs_bulk)
+
+
+def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[list[str]], list[str], bool]:
+    """Ask the up-front git-state menus (B1/B2). Returns (git_cmds, labels, needs_bulk).
+
+    Thin orchestrator: fetch the git state (IO), resolve the interactive menus into plain
+    ``dirty_choice`` / ``divergence_choice`` ints (non-interactive defaults preserved), then
+    delegate the cmd/label building to the pure ``_git_decisions_for_state``. ``git_cmds`` is a
+    list of argv lists to run locally (post-confirm); ``labels`` are human descriptions;
+    ``needs_bulk`` is True when the chosen option's changes only travel via bulk copy.
+    """
+    gs = git_state(source_dir)
+    if gs is None:
+        return _git_decisions_for_state(None)
+
+    dirty_choice = 1
     if gs["dirty"]:
         parts = []
         if gs["staged"]:
@@ -9439,7 +9498,7 @@ def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[lis
         summary = ", ".join(parts) or "uncommitted changes"
         if not interactive:
             die("Source repo is dirty and this is non-interactive. Commit/clean it first.")
-        choice = _menu(
+        dirty_choice = _menu(
             f"Source repo is DIRTY ({summary}). How should the working tree be handled?",
             [
                 "Quit and fix the dirty repo myself (SAFEST)",
@@ -9448,27 +9507,14 @@ def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[lis
                 "Do not commit; proceed anyway (only sound with BULK COPY, since git push omits dirty work) (WARNING)",
             ],
         )
-        if choice == 1:
+        if dirty_choice == 1:
             die("Operation aborted so you can fix the repo.")
-        elif choice == 2:
-            git_cmds.append(["commit", "-m", "ocman move: commit staged changes"])
-            labels.append("git commit staged changes")
-            needs_bulk = True  # unstaged/untracked left behind -> only bulk carries them
-        elif choice == 3:
-            git_cmds.append(["add", "-A"])
-            git_cmds.append(["commit", "-m", "ocman move: commit all changes"])
-            labels.append("git add -A && git commit (all changes)")
-        elif choice == 4:
-            labels.append("no commit; rely on bulk copy for the dirty tree")
-            needs_bulk = True
-        # Re-inspect after a planned commit would change divergence; we conservatively
-        # still offer push/pull below based on the CURRENT upstream counts.
 
-    # B1: divergence (only meaningful with an upstream).
-    if gs["upstream"] and (gs["ahead"] or gs["behind"]):
+    divergence_choice = 1
+    if gs["upstream"] and (gs["ahead"] or gs["behind"]) and interactive:
         ahead, behind = gs["ahead"], gs["behind"]
         if ahead and behind:
-            choice = _menu(
+            divergence_choice = _menu(
                 f"Repo has {ahead} commit(s) to push and {behind} to pull. Sync before moving?",
                 [
                     "Push and pull all commits (Recommended before proceeding)",
@@ -9476,33 +9522,20 @@ def _gather_git_decisions(source_dir: Path, interactive: bool) -> tuple[list[lis
                     "Pull only",
                     "Do not push or pull (WARNING: if something goes wrong, work may be lost)",
                 ],
-            ) if interactive else 1
-            if choice == 1:
-                git_cmds += [["push"], ["pull"]]; labels.append("git push && git pull")
-            elif choice == 2:
-                git_cmds.append(["push"]); labels.append("git push")
-            elif choice == 3:
-                git_cmds.append(["pull"]); labels.append("git pull")
+            )
         elif ahead:
-            choice = _menu(
+            divergence_choice = _menu(
                 f"Repo has {ahead} commit(s) to push. Push before moving?",
                 ["Push all commits (Recommended)", "Do not push (WARNING: work may be lost if something goes wrong)"],
-            ) if interactive else 1
-            if choice == 1:
-                git_cmds.append(["push"]); labels.append("git push")
+            )
         elif behind:
-            choice = _menu(
+            divergence_choice = _menu(
                 f"Repo is {behind} commit(s) behind upstream. Pull before moving?",
                 ["Pull all commits (Recommended)", "Do not pull (WARNING)"],
-            ) if interactive else 1
-            if choice == 1:
-                git_cmds.append(["pull"]); labels.append("git pull")
-    elif gs["clean"] and not gs["upstream"]:
-        labels.append("repo clean, no upstream configured (cannot push; not guessing a remote)")
-    elif gs["clean"]:
-        labels.append("repo clean, in sync with upstream")
+            )
 
-    return (git_cmds, labels, needs_bulk)
+    return _git_decisions_for_state(
+        gs, dirty_choice=dirty_choice, divergence_choice=divergence_choice)
 
 
 def _run_git_actions(source_dir: Path, git_cmds: list[list[str]]) -> None:
