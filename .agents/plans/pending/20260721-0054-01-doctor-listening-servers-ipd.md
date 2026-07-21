@@ -5,11 +5,23 @@
 - Scope: `ocman/cli.py` (new `check_listening_servers` doctor check + wire into
   `run_doctor_checks` + a `--all-servers` doctor flag + normalize/pass-through), tests, README,
   CHANGELOG. No TUI in this IPD. No DB schema change. doctor stays READ-ONLY.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (not yet executed; awaiting human approval)
 - Target version: rides the in-flight 1.3.0 line (candidate `v1.3.0-rc3` is out; a later
   `v1.3.0-rc4` may follow on request). NOT promoting to final `1.3.0` yet.
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
+
+## Workflow history
+
+- 2026-07-21 created (its_direct/pt3-claude-opus-4.8): authored from maintainer request (doctor
+  should surface insecure/exposed opencode servers).
+- 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED.
+  PR-001/DS-08 (wire via the `_step(label, fn)` wrapper, not a bare append; verified pattern at
+  cli.py:14754-14757), PR-002 (update the cli_doctor `run_doctor_checks(...)` call site at
+  cli.py:14836 to pass `all_servers=`), PR-003/DS-08 (`--fast` decision: run the check but never
+  probe / never make a network call under `--fast`; the ps/ss cost is acceptable and always-on
+  for the security signal). No open questions blocking; no unfixed BLOCKER/HIGH.
+  GO - PENDING HUMAN APPROVAL.
 
 ## Goal / motivation
 
@@ -80,13 +92,15 @@ Nearly all detection already exists and is battle-tested (it powers `lr`); this 
 | DS-05 | Degrade to UNKNOWN/SKIPPED on RunningDetectionError / non-Linux; never fail doctor | detect_running_instances raises 8095 |
 | DS-06 | doctor stays READ-ONLY (enumerate + optional own-loopback GET; no mutation/signal) | doctor read-only invariant 14662 |
 | DS-07 | reuse the exact lr remediation wording in the detail | banner text 12490-12492 |
+| DS-08 | Wire via the `_step(label, fn)` wrapper (not a bare append); update the cli_doctor call site; `doctor --fast` runs the check but never probes (no network in --fast) | _step pattern cli.py:14754-14757; cli_doctor call 14836 |
 
 ## Proposed changes (ordered, validatable)
 
 | Step | Source | Change | Files | Rem.Risk | Validation |
 |------|--------|--------|-------|----------|------------|
 | 1 | DS-01,DS-03,DS-04,DS-05,DS-07 | Add `check_listening_servers(*, all_users=False, probe=False) -> dict` (a `_check_record`): call `detect_running_instances(all_users=all_users, probe=probe)` inside try/except `RunningDetectionError` -> on error return `_check_record("listening_servers","Listening opencode servers",DOCTOR_UNKNOWN, detail="<reason> (Linux-only; needs 'ss')", bucket="report")`. Filter to instances with `listeners`. Compute `vulns=[it for it if it["vulnerable"]]`, `exposed=[... if it["exposed"] and not vulnerable]`. status = ERROR if vulns else WARN if exposed else OK. count = number of listening opencode servers. detail lists pids + binds for vulns/exposed + the exact lr remediation text (DS-07); when OK with authed loopback servers, a short "N authed loopback server(s)" INFO-style detail. `bucket="report"`, `fix_cmd=None`. Point detail at `ocman list running` for the full view. | cli.py | Low | unit: fake detect_running_instances -> vulnerable=ERROR; exposed=WARN; authed-loopback=OK; none=OK; RunningDetectionError=UNKNOWN |
-| 2 | DS-01,DS-02,DS-04 | Wire into `run_doctor_checks`: add params `all_servers: bool=False` (thread from cli_doctor) and reuse the existing `deep` param for probe. Append `check_listening_servers(all_users=all_servers, probe=deep)` alongside the filesystem checks (~cli.py:14753-14757). Keep it AFTER the DB/filesystem checks so security shows near the end summary. It must not gate on schema/DB readability (a server can run with any DB state). | cli.py | Low | records include key "listening_servers"; present even when no DB |
+| 2 | DS-01,DS-02,DS-04,DS-08 | Wire into `run_doctor_checks`: add param `all_servers: bool=False` (thread from cli_doctor) and reuse the existing `deep` param for probe. Append the check using the SAME `_step(label, fn)` wrapper the sibling filesystem checks use (verified pattern at cli.py:14754-14757: `records.append(_step("checking for listening opencode servers", lambda: check_listening_servers(all_users=all_servers, probe=deep)))`), placed AFTER the filesystem checks so security shows near the end summary. Do NOT gate on schema/DB readability (a server can run with any DB state). UPDATE the `cli_doctor` call site (cli.py:14836 `run_doctor_checks(loc, running=..., progress=..., fast=..., deep=...)`) to also pass `all_servers=getattr(args,"doctor_all_servers",False)`. | cli.py | Low | records include key "listening_servers" (present even when no DB); progress label shows the step |
+| 2b | DS-08 | `--fast` decision: `doctor --fast` today skips byte-size scans for speed. The listening-servers check adds a `ps`+`ss` subprocess pair on EVERY doctor run (same cost as `lr`). Decide + implement: the check RUNS in the default and `--fast` path (it is cheap relative to the DB scans and is a security signal you always want), but under `--fast` it MUST NOT probe even if `--deep` is somehow also set (fast wins); the `--deep` HTTP probe is the only network cost and stays opt-in. Document this so `doctor --fast` stays fast and never makes network calls. | cli.py | Low | `doctor --fast` runs the check but performs no GET; timing unaffected beyond the ps/ss pair |
 | 3 | DS-02 | Add `doctor --all-servers` flag (argparse ~cli.py:6533-6540; dest `doctor_all_servers`) + normalize (map ~6985-6989 -> `out["doctor_all_servers"]`). `cli_doctor` passes `all_servers=getattr(args,"doctor_all_servers",False)` into `run_doctor_checks`. `--deep` already exists and maps to probe. Help text notes the root caveat. | cli.py | Low | `doctor --all-servers` parses; forwarded to the check |
 | 4 | DS-03,DS-06 | Ensure presentation: the new record flows through the existing detail-lines + summary + table (Check/Status/Size/Count/Recommended fix) with no special-casing; ERROR renders bold-red like other errors. Confirm doctor remains read-only (no new writes; the only new outbound is the opt-in `--deep` GET /app on own loopback). | cli.py | Low | `cli_doctor` JSON + text render the record; a vulnerable fake shows ERROR |
 | 5 | all | Help text: doctor help mentions the listening-servers check + `--all-servers` (+ that `--deep` probes own loopback auth). | cli.py | Low | `ocman doctor -h` / help shows it |
