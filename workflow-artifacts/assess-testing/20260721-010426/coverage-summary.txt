@@ -1,0 +1,15 @@
+Name                            Stmts   Miss  Cover
+---------------------------------------------------
+ocman_tui/widgets/database.py     304    143    53%
+ocman_tui/app.py                 1373    486    65%
+ocman/cli.py                     8910   2605    71%
+ocman/__init__.py                  18      4    78%
+ocman_tui/widgets/storage.py      120     24    80%
+ocman_tui/core.py                  11      2    82%
+ocman_tui/widgets/sidebar.py       73     13    82%
+ocman_tui/widgets/models.py        39      5    87%
+ocman_tui/widgets/spend.py         56      7    88%
+ocman_tui/widgets/running.py       73      7    90%
+ocman_tui/__init__.py               4      0   100%
+---------------------------------------------------
+TOTAL                           10981   3296    70%
