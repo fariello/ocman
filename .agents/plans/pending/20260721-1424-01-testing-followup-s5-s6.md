@@ -7,7 +7,7 @@
   and possibly a small hardening of the Storage widget's worker + `.github/workflows/ci.yml`
   (one perf step). Tests + a testability seam + a widget-mount guard only; no user-facing
   behavior change.
-- Status: to-review
+- Status: reviewed
 - Target version: rides the 1.3.0 line (test/infra + a pure seam; no user-facing change).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -17,6 +17,14 @@
 - 2026-07-21 created (its_direct/pt3-claude-opus-4.8): follow-up carrying the deferred Steps 5-6
   from the assess-testing IPD, plus the concrete Storage-tab worker-mount flake observed while
   executing that IPD.
+- 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED.
+  Verified all anchors against code (storage.py:143 unguarded `query_one("#doctor-table")`;
+  the `is_mounted` guard precedent at database.py:299; the interleaved `_menu` calls in
+  `_gather_git_decisions` cli.py:9413-9508). PR-001 (TF-01 seam: the interleaving means the pure
+  cut MUST be a choices-provider shape, not a single function containing menus; Step 2 now
+  commits to it), PR-002 (TF-02 needs a DETERMINISTIC mutation-checked guard test, not only a
+  probabilistic stress loop). Remaining open questions are non-blocking preferences with safe
+  defaults. No unfixed BLOCKER/HIGH. GO - PENDING HUMAN APPROVAL.
 
 ## Goal
 
@@ -60,8 +68,8 @@ Finish the testing-rigor work deferred from `20260721-0111-01`:
 
 | Step | Source | Change | Files | Rem.Risk | Validation |
 |------|--------|--------|-------|----------|------------|
-| 1 | TF-02 | Fix the Storage worker mount race FIRST (concrete CI annoyance). Options, pick the least-invasive that works: (a) in `_do_checkup_worker`/its UI-update callback, guard the `query_one("#doctor-table")` with an `is_mounted`/`try: ... except NoMatches` and re-schedule/skip if the table is not yet mounted (mirror the pattern already used elsewhere, e.g. database.py `refresh_metrics` guarded with `if not self.is_mounted: return`); OR (b) ensure the widget does not launch the checkup worker until after `on_mount`/compose has mounted `#doctor-table`. Prefer the guard that matches the existing `is_mounted` convention. Add/adjust a test that drives the Storage checkup and asserts no `WorkerFailed`, stress-looped locally to confirm the race is gone. | ocman_tui/widgets/storage.py, tests/test_tui.py | Medium | stress loop (e.g. run the storage/models TUI tests 20x) shows 0 failures; full suite green |
-| 2 | TF-01 | Extract the PURE decision function from `_gather_git_decisions`, e.g. `_git_decisions_for_state(gs: dict|None, choices) -> (git_cmds, labels, needs_bulk)` that takes an already-fetched `git_state` result (and the resolved user choices) and returns the tuple with NO IO and NO `input()`. `_gather_git_decisions` keeps its signature/behavior: it calls `git_state()`, resolves the interactive menus, then delegates to the pure function. Product behavior unchanged (pure refactor). | ocman/cli.py | Medium | existing move tests unchanged/green; new unit tests call `_git_decisions_for_state` with fabricated git states (clean / dirty-staged / dirty-unstaged / not-a-repo / detached) and assert the cmds/labels/needs_bulk |
+| 1 | TF-02 | Fix the Storage worker mount race FIRST (concrete CI annoyance). Options, pick the least-invasive that works: (a) in `_do_checkup_worker`/its UI-update callback, guard the `query_one("#doctor-table")` with an `is_mounted`/`try: ... except NoMatches` and re-schedule/skip if the table is not yet mounted (mirror the pattern already used elsewhere, e.g. database.py `refresh_metrics` guarded with `if not self.is_mounted: return`); OR (b) ensure the widget does not launch the checkup worker until after `on_mount`/compose has mounted `#doctor-table`. Prefer the guard that matches the existing `is_mounted` convention. Add BOTH (a probabilistic stress loop is not enough on its own): (i) a DETERMINISTIC unit test that drives `_do_checkup_worker`'s `update_ui` path when `#doctor-table` is absent / the widget is not mounted (e.g. call the guarded update after simulating unmount, or monkeypatch so the table query would raise) and assert it does NOT raise `WorkerFailed`/`NoMatches` (it skips/re-schedules); AND (ii) a stress loop to confirm the race is gone in practice. | ocman_tui/widgets/storage.py, tests/test_tui.py | Medium | (i) the deterministic guard test passes and FAILS if the guard is removed (mutation-check); (ii) stress loop (storage + models TUI tests 20x) shows 0 `WorkerFailed`/`NoMatches`; full suite green |
+| 2 | TF-01 | Extract the PURE decision function from `_gather_git_decisions`. IMPORTANT (verified against cli.py:9413-9508): the current function INTERLEAVES `_menu(...)` interactive prompts BETWEEN decision branches (dirty/staged/detached), so a pure function that still contains the menus is impossible. Commit to the CHOICES-PROVIDER shape: (a) keep `_gather_git_decisions(source_dir, interactive)` as the thin orchestrator that calls `git_state()`, then resolves ALL interactive menus UP FRONT into a plain `choices` dict/dataclass (each menu -> a resolved int/enum; non-interactive defaults preserved exactly as today), then (b) delegate to a NEW pure `_git_decisions_for_state(gs: dict | None, choices) -> (git_cmds, labels, needs_bulk)` that has NO IO and NO `input()`/`_menu`. The set of choice keys must cover every branch currently reached by a `_menu` call. Product behavior unchanged (pure refactor; the non-interactive default path must produce byte-identical output). | ocman/cli.py | Medium | existing move/remote-move tests unchanged/green; new unit tests call `_git_decisions_for_state` with fabricated git states x choice combinations (clean / dirty-staged / dirty-unstaged / not-a-repo / detached) and assert the cmds/labels/needs_bulk |
 | 3 | TF-01 | Unit-test `_git_decisions_for_state` across the branches: no-repo -> needs_bulk True + "bulk file copy" label; clean committed -> push cmds, needs_bulk False; dirty -> needs_bulk semantics; each choice path. Mutation-check at least one (flip a branch -> test fails). | tests/test_move.py | Low | new tests exercise the decision branches; coverage of the seam rises |
 | 4 | TF-03 | Add focused async tests for widgets/database.py worker/error paths: a mutating action's happy path AND its off-thread worker ERROR path (the worker must surface the error via notify without touching a widget off the UI thread / after unmount). Reuse `await_screen`/`is_mounted` patterns; monkeypatch the underlying db_* call to raise and assert graceful handling (no crash, error surfaced). | tests/test_tui.py | Low | new tests pass; database.py coverage rises on the worker/error branches |
 | 5 | TF-04 | Make ONE perf check CI-runnable in REPORT-ONLY mode: either a tiny CI step that runs `OCMAN_BENCHMARK=1 pytest tests/test_perf.py -s || true` (prints timings, never gates) in the existing non-gating coverage job or its own non-gating job; OR convert one benchmark into a bounded, generous assertion (e.g. import of N sessions < X s on CI) that only catches gross regressions. Prefer report-only to avoid CI-timing brittleness. | .github/workflows/ci.yml (and/or test_perf.py) | Low | CI shows perf timings; no new gating red |
@@ -99,11 +107,14 @@ Finish the testing-rigor work deferred from `20260721-0111-01`:
 
 ## Open questions
 
-- TF-01 seam shape: is a single `_git_decisions_for_state(gs, choices)` the right cut, or should
-  the interactive menu selection also be separated (a `choices` provider) so the pure function
-  takes only data? (Plan assumes the former: pure function takes the already-resolved choices.)
-- TF-05 perf: report-only step vs a bounded assertion? (Plan defaults to report-only.)
-- Priority: TF-02 (the CI-annoyance flake) is highest; is S5 (TF-01) or S6b (TF-03/04) next?
+- RESOLVED (PR-001, from repo evidence cli.py:9413-9508): TF-01 MUST use the choices-provider
+  shape (orchestrator resolves all `_menu` choices up front, then a pure
+  `_git_decisions_for_state(gs, choices)` builder), because the menus are interleaved with the
+  decision branches and cannot live inside a pure function. Step 2 now specifies this.
+- NON-BLOCKING (maintainer preference, safe default): TF-05 perf = report-only (default) vs a
+  bounded assertion. Plan defaults to report-only; confirm at approval.
+- NON-BLOCKING (preference): after TF-02 (highest, the CI flake), do S5 (TF-01) or S6b next?
+  Default: TF-02 -> TF-01 -> TF-03/04 -> perf. Confirm at approval.
 
 ## Approval and execution gate
 
