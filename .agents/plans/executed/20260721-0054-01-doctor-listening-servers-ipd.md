@@ -5,7 +5,7 @@
 - Scope: `ocman/cli.py` (new `check_listening_servers` doctor check + wire into
   `run_doctor_checks` + a `--all-servers` doctor flag + normalize/pass-through), tests, README,
   CHANGELOG. No TUI in this IPD. No DB schema change. doctor stays READ-ONLY.
-- Status: reviewed (not yet executed; awaiting human approval)
+- Status: executed (2026-07-21)
 - Target version: rides the in-flight 1.3.0 line (candidate `v1.3.0-rc3` is out; a later
   `v1.3.0-rc4` may follow on request). NOT promoting to final `1.3.0` yet.
 - Approval: awaiting maintainer review/approval
@@ -20,8 +20,28 @@
   cli.py:14754-14757), PR-002 (update the cli_doctor `run_doctor_checks(...)` call site at
   cli.py:14836 to pass `all_servers=`), PR-003/DS-08 (`--fast` decision: run the check but never
   probe / never make a network call under `--fast`; the ps/ss cost is acceptable and always-on
-  for the security signal). No open questions blocking; no unfixed BLOCKER/HIGH.
+  for   the security signal). No open questions blocking; no unfixed BLOCKER/HIGH.
   GO - PENDING HUMAN APPROVAL.
+- 2026-07-21 approved by maintainer; executed (its_direct/pt3-claude-opus-4.8). All steps done.
+
+## Post-execution summary
+
+- Step 1: `check_listening_servers(*, all_users=False, probe=False) -> _check_record` added after
+  `check_snapshots`. Reuses `detect_running_instances`; vulnerable->DOCTOR_ERROR (reuses the lr
+  remediation text), exposed-but-authed->WARN, authed-loopback/none->OK; RunningDetectionError->
+  UNKNOWN (never raises). bucket="report", fix_cmd=None; detail points at `ocman list running`.
+- Steps 2/2b: `run_doctor_checks` gained `all_servers` param; check appended via the `_step(label,
+  lambda: ...)` wrapper; probe computed as `deep and not fast` (so `--fast` never makes a network
+  call, fast wins over deep). `cli_doctor` call site updated to pass `all_servers`.
+- Step 3: `doctor --all-servers` flag (dest `doctor_all_servers`) + normalize + pass-through.
+- Step 4: record flows through the existing detail/summary/table + JSON with no special-casing.
+- Step 5: doctor help/reference line updated (servers + `--all-servers` + `--deep` probe note).
+- Step 6: CHANGELOG `[1.3.0]` Added + README doctor row updated.
+- Tests: 8 new (severity map error/warn/ok/none; detection-error->unknown; all_users+probe
+  pass-through; run_doctor_checks includes the record; `--fast` forces probe=False). Full suite:
+  **460 passed, 2 skipped** (was 452). (One transient sqlite VACUUM disk-I/O flake in an
+  unrelated TUI batch-delete test observed once, passed on rerun; not caused by this change.)
+- Release: rides the 1.3.0 line; NOT promoted to final 1.3.0.
 
 ## Goal / motivation
 

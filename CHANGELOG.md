@@ -5,6 +5,14 @@
 ## [1.3.0] - 2026-07-20
 
 ### Added
+- **`ocman doctor` now checks for insecure/exposed opencode servers.** The routine read-only
+  checkup gains a "Listening opencode servers" check: an unauthenticated control server is an
+  ERROR, a network-exposed (non-loopback) bind is a WARN, authed-loopback/none is OK, with the
+  same remediation guidance previously only in `list running` (set `OPENCODE_SERVER_PASSWORD`;
+  bind 127.0.0.1; avoid `--mdns`). Own-user by default; `doctor --all-servers` widens to all
+  users (auth shows "unknown" for others without root); `doctor --deep` confirms auth via a
+  read-only loopback probe; `--fast` never makes a network call. Linux-only; degrades to
+  "unknown" (never fails the checkup) where process/socket enumeration is unavailable.
 - **`ocman kill [PATTERN]`: stop the opencode running here (or matching PATTERN) without
   relaunching.** The no-relaunch counterpart to `reconnect`: with no argument it targets the
   opencode running at/under the current directory; `ocman kill <PATTERN>` matches by the same

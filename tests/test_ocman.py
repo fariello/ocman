@@ -5111,3 +5111,76 @@ def test_kill_survivor_exits_nonzero(monkeypatch, capsys):
         ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
     err = capsys.readouterr()
     assert "777" in (err.out + err.err)
+
+
+# --- doctor: listening opencode servers security check -----------------------
+
+def _fake_server(pid=1, listeners=None, vulnerable=False, exposed=False):
+    return {"pid": pid, "user": "me", "elapsed": "1:00", "kind": "serve",
+            "listeners": listeners if listeners is not None else ["127.0.0.1:5000"],
+            "auth": "unsecured" if vulnerable else "secured",
+            "exposed": exposed, "vulnerable": vulnerable, "cwd": "/p", "project": "p",
+            "session": {}}
+
+
+def test_check_listening_servers_vulnerable_is_error(monkeypatch):
+    monkeypatch.setattr(ocman, "detect_running_instances",
+                        lambda **k: [_fake_server(pid=7, listeners=["0.0.0.0:80"], vulnerable=True, exposed=True)])
+    rec = ocman.cli.check_listening_servers()
+    assert rec["key"] == "listening_servers"
+    assert rec["status"] == ocman.cli.DOCTOR_ERROR
+    assert "OPENCODE_SERVER_PASSWORD" in rec["detail"]
+    assert rec["bucket"] == "report" and rec["fix_cmd"] is None
+
+
+def test_check_listening_servers_exposed_is_warn(monkeypatch):
+    monkeypatch.setattr(ocman, "detect_running_instances",
+                        lambda **k: [_fake_server(pid=8, listeners=["0.0.0.0:80"], exposed=True)])
+    assert ocman.cli.check_listening_servers()["status"] == ocman.cli.DOCTOR_WARN
+
+
+def test_check_listening_servers_authed_loopback_ok(monkeypatch):
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: [_fake_server(pid=9)])
+    assert ocman.cli.check_listening_servers()["status"] == ocman.cli.DOCTOR_OK
+
+
+def test_check_listening_servers_none_ok(monkeypatch):
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: [])
+    assert ocman.cli.check_listening_servers()["status"] == ocman.cli.DOCTOR_OK
+
+
+def test_check_listening_servers_detection_error_is_unknown(monkeypatch):
+    def boom(**k):
+        raise ocman.cli.RunningDetectionError("no ss")
+    monkeypatch.setattr(ocman, "detect_running_instances", boom)
+    rec = ocman.cli.check_listening_servers()
+    assert rec["status"] == ocman.cli.DOCTOR_UNKNOWN  # never raises, never fails doctor
+
+
+def test_check_listening_servers_forwards_all_users_and_probe(monkeypatch):
+    seen = {}
+    def cap(**k):
+        seen.update(k)
+        return []
+    monkeypatch.setattr(ocman, "detect_running_instances", cap)
+    ocman.cli.check_listening_servers(all_users=True, probe=True)
+    assert seen == {"all_users": True, "probe": True}
+
+
+def test_run_doctor_checks_includes_listening_servers(monkeypatch):
+    monkeypatch.setattr(ocman, "detect_running_instances", lambda **k: [])
+    records = ocman.run_doctor_checks(running=False)
+    keys = {r["key"] for r in records}
+    assert "listening_servers" in keys
+
+
+def test_run_doctor_checks_fast_never_probes(monkeypatch):
+    seen = {}
+    def cap(**k):
+        seen.update(k)
+        return []
+    monkeypatch.setattr(ocman, "detect_running_instances", cap)
+    # --deep would normally probe, but --fast must win -> probe=False, no network.
+    ocman.run_doctor_checks(running=False, fast=True, deep=True, all_servers=True)
+    assert seen.get("probe") is False
+    assert seen.get("all_users") is True

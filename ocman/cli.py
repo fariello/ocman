@@ -5687,7 +5687,7 @@ def build_help_reference() -> str:
             ("clean [AGE] [--dry-run]", "Prune old backups (--older-than / '30 days')"),
         ]),
         ("storage checkup & reclaim", [
-            ("doctor [--fast|--deep] [--json] [-v]", "Read-only storage checkup (DB/WAL, event bloat, orphans, temp, snapshots)"),
+            ("doctor [--fast|--deep] [--all-servers] [--json]", "Read-only checkup (DB/WAL, bloat, orphans, temp, snapshots + insecure/exposed opencode servers; --deep probes auth, --all-servers widens)"),
             ("reclaim", "Guarded cleanup: offline WAL checkpoint + VACUUM (needs OpenCode stopped)"),
             ("reclaim --reclaim-temp", "Also delete leftover temp files no live process is using"),
             ("reclaim --reclaim-parts", "Also empty compacted tool-output (verify-or-skip)"),
@@ -6537,7 +6537,11 @@ def build_parser() -> argparse.ArgumentParser:
                          "counts only). Much faster on a multi-GB database.")
     sp.add_argument("--deep", dest="doctor_deep", action="store_true",
                     help="Also compute the exact superseded-snapshot byte breakdown of the "
-                         "event log (an extra full pass; slower on a large database).")
+                         "event log (an extra full pass; slower on a large database); and "
+                         "confirm listening-server auth via a read-only loopback probe.")
+    sp.add_argument("--all-servers", dest="doctor_all_servers", action="store_true",
+                    help="Include ALL users' opencode listeners in the security check (auth "
+                         "shows 'unknown' for others without root). Default: current user only.")
 
     sp = new_sub("reclaim", help="Guarded cleanup of safe/opt-in storage categories.")
     sp.add_argument("--dry-run", action="store_true",
@@ -6987,6 +6991,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["json_output"] = bool(g("json", False))
         out["doctor_fast"] = bool(g("doctor_fast", False))
         out["doctor_deep"] = bool(g("doctor_deep", False))
+        out["doctor_all_servers"] = bool(g("doctor_all_servers", False))
 
     elif group == "reclaim":
         out["run_reclaim"] = True
@@ -14656,9 +14661,51 @@ def check_snapshots(loc: dict) -> dict:
         bucket="report")
 
 
+def check_listening_servers(*, all_users: bool = False, probe: bool = False) -> dict:
+    """Check (security): running opencode control servers and whether they are exposed/unsecured.
+
+    Reuses the `list running` detection (`detect_running_instances`): opencode-only, own-user by
+    default. `vulnerable` (a listener with no auth) -> ERROR; `exposed` (non-loopback bind) but
+    authed -> WARN; authed loopback / none -> OK. Report-only (fix is how you launch opencode,
+    not an ocman reclaim). Degrades to UNKNOWN on `RunningDetectionError` (non-Linux, no `ss`,
+    unreliable enumeration) so it NEVER fails the doctor run. `probe` (only under doctor --deep)
+    does a read-only GET /app on your OWN loopback listeners to confirm auth. Read-only.
+    """
+    remediation = ("set OPENCODE_SERVER_PASSWORD before launch; bind 127.0.0.1; "
+                   "avoid --mdns on shared hosts")
+    try:
+        instances = detect_running_instances(all_users=all_users, probe=probe)
+    except RunningDetectionError as e:
+        return _check_record("listening_servers", "Listening opencode servers", DOCTOR_UNKNOWN,
+                             detail=f"could not enumerate ({e}); Linux-only, needs 'ss'.",
+                             bucket="report")
+    servers = [it for it in instances if it.get("listeners")]
+    if not servers:
+        return _check_record("listening_servers", "Listening opencode servers", DOCTOR_OK,
+                             detail="no listening opencode servers.")
+    vulns = [it for it in servers if it.get("vulnerable")]
+    exposed = [it for it in servers if it.get("exposed") and not it.get("vulnerable")]
+    if vulns:
+        status = DOCTOR_ERROR
+        lines = [f"pid {it['pid']} on {', '.join(it['listeners'])} (no auth)" for it in vulns]
+        detail = ("UNAUTHENTICATED opencode server(s): " + "; ".join(lines)
+                  + f". Remediation: {remediation}. See 'ocman list running' for detail.")
+    elif exposed:
+        status = DOCTOR_WARN
+        lines = [f"pid {it['pid']} on {', '.join(it['listeners'])}" for it in exposed]
+        detail = ("NETWORK-EXPOSED opencode server(s) (non-loopback bind): " + "; ".join(lines)
+                  + f". Remediation: {remediation}. See 'ocman list running' for detail.")
+    else:
+        status = DOCTOR_OK
+        detail = f"{len(servers)} authed loopback opencode server(s)."
+    return _check_record("listening_servers", "Listening opencode servers", status,
+                         count=len(servers), detail=detail, bucket="report")
+
+
 def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None = None,
                       running: bool | None = None, progress=None,
-                      fast: bool = False, deep: bool = False) -> list[dict]:
+                      fast: bool = False, deep: bool = False,
+                      all_servers: bool = False) -> list[dict]:
     """Run every doctor check and return the list of result records (read-only).
 
     Never mutates. If the DB is missing/:memory:/unreadable, the DB checks degrade to
@@ -14755,6 +14802,12 @@ def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None =
     records.append(_step("scanning for leftover temp WAL databases", lambda: check_temp_wal(loc)))
     records.append(_step("scanning /tmp for leftover .so libraries", lambda: check_temp_so(loc)))
     records.append(_step("sizing the snapshot store", lambda: check_snapshots(loc)))
+    # Security: listening opencode control servers. Always runs (cheap ps/ss; a signal you
+    # always want). The optional HTTP auth probe runs ONLY under --deep AND never under --fast
+    # (fast wins), so `doctor --fast` performs no network calls.
+    _probe = bool(deep and not fast)
+    records.append(_step("checking for listening opencode servers",
+                         lambda: check_listening_servers(all_users=all_servers, probe=_probe)))
     return records
 
 
@@ -14836,7 +14889,8 @@ def cli_doctor(args) -> None:
     records = run_doctor_checks(loc, running=running,
                                progress=None if json_mode else _progress,
                                fast=bool(getattr(args, "doctor_fast", False)),
-                               deep=bool(getattr(args, "doctor_deep", False)))
+                               deep=bool(getattr(args, "doctor_deep", False)),
+                               all_servers=bool(getattr(args, "doctor_all_servers", False)))
 
     if json_mode:
         emit_json("doctor", records)
