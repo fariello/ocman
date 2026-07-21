@@ -5184,3 +5184,46 @@ def test_run_doctor_checks_fast_never_probes(monkeypatch):
     ocman.run_doctor_checks(running=False, fast=True, deep=True, all_servers=True)
     assert seen.get("probe") is False
     assert seen.get("all_users") is True
+
+
+# --- Step 4 (assess-testing IPD): destructive-path error branches -------------
+
+def test_db_delete_project_recursive_not_found_raises(temp_db):
+    """Deleting a nonexistent project raises RecoveryError, not a silent no-op."""
+    from ocman import db_delete_project_recursive
+    with pytest.raises(ocman.RecoveryError, match="not found"):
+        db_delete_project_recursive("proj_does_not_exist", dry_run=False, force=True, verbosity=0)
+
+
+def test_db_delete_project_recursive_post_commit_metrics_failure_still_deletes(
+        temp_db, mock_history_path, monkeypatch, tmp_path):
+    """A failure AFTER the commit (e.g. the metrics sidecar write) must NOT resurrect the
+    project: the DELETE already committed. Exercises the post-commit error branch."""
+    import builtins
+    from ocman import db_delete_project_recursive
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/p', 'P1')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) "
+                "VALUES ('sess1','proj1','S1',1000,2000)")
+    conn.commit(); conn.close()
+    monkeypatch.setattr(ocman.Path, "home", staticmethod(lambda: tmp_path))
+    # Metrics write (post-commit) blows up.
+    monkeypatch.setattr(ocman, "save_deletion_metrics",
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("metrics boom")))
+    orig_input = builtins.input
+    builtins.input = lambda _: "yes"
+    try:
+        # The delete itself committed; a post-commit metrics error may surface, but the
+        # project must be GONE either way (no rollback of a committed delete).
+        try:
+            db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0)
+        except Exception:
+            pass
+    finally:
+        builtins.input = orig_input
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("SELECT COUNT(*) FROM project WHERE id='proj1'")
+    assert cur.fetchone()[0] == 0            # committed delete stands
+    cur.execute("SELECT COUNT(*) FROM session WHERE id='sess1'")
+    assert cur.fetchone()[0] == 0
+    conn.close()

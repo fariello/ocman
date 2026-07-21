@@ -8,6 +8,27 @@ from ocman_tui.widgets.sidebar import SidebarWidget
 from ocman_tui.widgets.database import DatabaseAdminWidget
 from textual.widgets import Tree, DataTable, Markdown, Input, Checkbox, RichLog, Button, Select
 
+
+async def await_screen(pilot, app, screen_cls, timeout: float = 5.0):
+    """Poll until the app's active screen is an instance of ``screen_cls``, then assert it.
+
+    `push_screen` takes more than one frame on slower runners (notably Windows CI on Python
+    3.10), so a bare `await pilot.pause()` + immediate `isinstance(app.screen, X)` races the
+    mount and flakes. This waits (in short pauses) up to ``timeout`` for the modal to become
+    the active screen, then asserts it is there. Assertion strength is preserved: it still
+    fails if the screen never mounts. Returns the screen for convenience.
+    """
+    import time as _t
+    deadline = _t.monotonic() + timeout
+    while _t.monotonic() < deadline:
+        if isinstance(app.screen, screen_cls):
+            return app.screen
+        await pilot.pause(0.05)
+    assert isinstance(app.screen, screen_cls), (
+        f"expected screen {screen_cls.__name__}, got {type(app.screen).__name__} after {timeout}s")
+    return app.screen
+
+
 @pytest.fixture
 def tui_db(tmp_path, monkeypatch):
     db_path = tmp_path / "test_opencode.db"
@@ -161,7 +182,7 @@ async def test_tui_delete_writes_extracts_when_checked(tui_db, tmp_path, monkeyp
         app.selected_session_title = "Session 1"
         app.confirm_and_delete_session()
         await pilot.pause()
-        assert isinstance(app.screen, DeletionSafetyModal)
+        await await_screen(pilot, app, DeletionSafetyModal)
         # Checkbox defaults to ON.
         assert app.screen.query_one("#check-del-extracts", Checkbox).value is True
         await pilot.click("#input-confirm-yes")
@@ -172,7 +193,7 @@ async def test_tui_delete_writes_extracts_when_checked(tui_db, tmp_path, monkeyp
             if isinstance(app.screen, PostExecutionSummaryModal):
                 break
             await pilot.pause(0.1)
-        assert isinstance(app.screen, PostExecutionSummaryModal)
+        await await_screen(pilot, app, PostExecutionSummaryModal)
 
     assert out.exists()
     names = [p.name for p in out.iterdir()]
@@ -196,7 +217,7 @@ async def test_tui_delete_skips_extracts_when_unchecked(tui_db, tmp_path, monkey
         app.selected_session_title = "Session 1"
         app.confirm_and_delete_session()
         await pilot.pause()
-        assert isinstance(app.screen, DeletionSafetyModal)
+        await await_screen(pilot, app, DeletionSafetyModal)
         await pilot.click("#check-del-extracts")  # toggle OFF
         await pilot.pause()
         assert app.screen.query_one("#check-del-extracts", Checkbox).value is False
@@ -208,7 +229,7 @@ async def test_tui_delete_skips_extracts_when_unchecked(tui_db, tmp_path, monkey
             if isinstance(app.screen, PostExecutionSummaryModal):
                 break
             await pilot.pause(0.1)
-        assert isinstance(app.screen, PostExecutionSummaryModal)
+        await await_screen(pilot, app, PostExecutionSummaryModal)
 
     assert not out.exists()
 
@@ -225,17 +246,7 @@ async def test_tui_clear_history(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         app.query_one("#btn-clear-history-log", Button).press()
-        await pilot.pause()
-        # Wait for the modal to actually become the active screen. On slower
-        # runners (notably Windows CI on Python 3.10) push_screen takes more than
-        # one frame, so a bare pause() + immediate isinstance check races the
-        # mount. Poll until the modal is on top. Extra pauses are harmless where
-        # it is already active (e.g. Linux).
-        for _ in range(50):
-            if isinstance(app.screen, ClearHistoryModal):
-                break
-            await pilot.pause(0.1)
-        assert isinstance(app.screen, ClearHistoryModal)
+        await await_screen(pilot, app, ClearHistoryModal)
         # Then wait for the modal's widgets to actually mount before querying them.
         for _ in range(50):
             if app.screen.query("#input-clear-history-yes"):
@@ -336,7 +347,7 @@ async def test_tui_app_deletion(tui_db):
         await pilot.pause()
         
         # Check that the DeletionSafetyModal is active
-        assert isinstance(app.screen, DeletionSafetyModal)
+        await await_screen(pilot, app, DeletionSafetyModal)
         
         # Enter "yes" in the input field
         await pilot.click("#input-confirm-yes")
@@ -352,7 +363,7 @@ async def test_tui_app_deletion(tui_db):
             if isinstance(app.screen, PostExecutionSummaryModal):
                 break
             await pilot.pause(0.1)
-        assert isinstance(app.screen, PostExecutionSummaryModal)
+        await await_screen(pilot, app, PostExecutionSummaryModal)
         
         # Verify that the session has been deleted from the database
         sqlite3 = ocman._get_sqlite()
@@ -380,7 +391,7 @@ async def test_tui_app_deletion_metadata_fetch_fails(tui_db, monkeypatch):
 
         app.confirm_and_delete_session()
         await pilot.pause()
-        assert isinstance(app.screen, DeletionSafetyModal)
+        await await_screen(pilot, app, DeletionSafetyModal)
 
         await pilot.click("#input-confirm-yes")
         await pilot.press(*"yes")
@@ -393,7 +404,7 @@ async def test_tui_app_deletion_metadata_fetch_fails(tui_db, monkeypatch):
             if isinstance(app.screen, PostExecutionSummaryModal):
                 break
             await pilot.pause(0.1)
-        assert isinstance(app.screen, PostExecutionSummaryModal)
+        await await_screen(pilot, app, PostExecutionSummaryModal)
 
 
 @pytest.mark.anyio
@@ -639,7 +650,7 @@ async def test_tui_app_project_deletion(tui_db):
         await pilot.pause()
         
         # Check that ProjectDeletionSafetyModal is active
-        assert isinstance(app.screen, ProjectDeletionSafetyModal)
+        await await_screen(pilot, app, ProjectDeletionSafetyModal)
         
         # Enter "yes" in the input field
         await pilot.click("#input-confirm-yes")
@@ -654,7 +665,7 @@ async def test_tui_app_project_deletion(tui_db):
             if isinstance(app.screen, PostExecutionSummaryModal):
                 break
             await pilot.pause(0.1)
-        assert isinstance(app.screen, PostExecutionSummaryModal)
+        await await_screen(pilot, app, PostExecutionSummaryModal)
         
         # Verify that project and its sessions are deleted from DB
         sqlite3 = ocman._get_sqlite()
@@ -732,7 +743,7 @@ async def test_tui_storage_checkpoint_vacuum(tui_db):
         await _wait_doctor_rows(pilot, sw)
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
-        assert isinstance(app.screen, ReclaimConfirmModal)
+        await await_screen(pilot, app, ReclaimConfirmModal)
         # Wait for the confirm button to mount before pressing (Windows CI is
         # slower to mount the modal); harmless where already mounted.
         for _ in range(50):
@@ -776,7 +787,7 @@ async def test_tui_storage_reclaim_refuses_while_running(tui_db, monkeypatch):
         await _wait_doctor_rows(pilot, sw)
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
-        assert isinstance(app.screen, ReclaimConfirmModal)
+        await await_screen(pilot, app, ReclaimConfirmModal)
         # Wait for the confirm button to mount before pressing (Windows CI is
         # slower to mount the modal); harmless where already mounted.
         for _ in range(50):
@@ -934,17 +945,19 @@ async def test_tui_multiselect_and_batch_delete(tui_db, tmp_path):
         assert app.query_one("#btn-batch-delete", Button).disabled is False
         app.confirm_and_batch_delete()
         await pilot.pause()
-        assert isinstance(app.screen, BatchDeleteModal)
+        await await_screen(pilot, app, BatchDeleteModal)
         app.screen.query_one("#input-batch-yes", Input).value = "yes"
         await pilot.pause()
         app.screen.query_one("#btn-confirm-batch-del", Button).press()
+        # Wait for the batch worker to FINISH via an APP-STATE signal (it clears
+        # selected_session_ids and refreshes on completion), NOT by polling the DB file with
+        # fresh connections during the worker's VACUUM - a concurrent reader opening mid-VACUUM
+        # intermittently hit "disk I/O error"/"database is locked" (the test raced its subject).
         for _ in range(80):
-            conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
-            cur.execute("SELECT COUNT(*) FROM session WHERE id IN ('sess1','sessX')")
-            remaining = cur.fetchone()[0]; conn.close()
-            if remaining == 0:
+            if not app.selected_session_ids:
                 break
             await pilot.pause(0.1)
+        assert not app.selected_session_ids, "batch delete did not complete in time"
     conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()
     cur.execute("SELECT COUNT(*) FROM session WHERE id IN ('sess1','sessX')")
     assert cur.fetchone()[0] == 0
@@ -964,7 +977,7 @@ async def test_tui_batch_delete_cancel_deletes_nothing(tui_db):
         app._refresh_batch_ui()
         app.confirm_and_batch_delete()
         await pilot.pause()
-        assert isinstance(app.screen, BatchDeleteModal)
+        await await_screen(pilot, app, BatchDeleteModal)
         app.screen.query_one("#btn-cancel-batch-del", Button).press()
         await pilot.pause()
     conn = sqlite3.connect(str(tui_db)); cur = conn.cursor()

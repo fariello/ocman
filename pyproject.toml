@@ -23,6 +23,7 @@ dependencies = [
 dev = [
     "pytest>=7.0",
     "anyio",
+    "pytest-cov",
 ]
 
 [project.scripts]
@@ -50,3 +51,11 @@ exclude = [
     ".agents/",
     "workflow-artifacts/",
 ]
+
+# Coverage measurement (opt-in; not gated in CI). Run:
+#   PYTHONPATH=. pytest --cov=ocman --cov=ocman_tui --cov-report=term-missing
+[tool.coverage.run]
+source = ["ocman", "ocman_tui"]
+
+[tool.coverage.report]
+show_missing = true
