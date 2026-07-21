@@ -94,9 +94,9 @@ You entered Section 9 via a rung chosen in Section 8: **B (release candidate)** 
 
 - **Tag?** "Create annotated tag `<vX.Y.Z-rc.N>` (rung B) or `<vX.Y.Z>` (rung C)?" If a stale/lightweight tag for this exact version exists locally, delete that local tag first. Then `git tag -a <ref> -m "Release <ref>"`.
 - **Push the tag/commit?** Separate confirmation, default NO, even for a candidate: "Push `<ref>` to `<remote>`?" Preserve the multi-remote STOP rule above (never guess a remote). A candidate that is only tagged locally is fully reversible; pushing it is not.
-- **GitHub Release?** (rung C only, optional) "Create a GitHub Release for `<tag>`?" Default to a DRAFT (`gh release create <tag> --draft ...`); NEVER auto-publish. The human publishes the draft as a separate, deliberate act.
+- **GitHub Release?** (rung C only) "Create a PUBLISHED, latest GitHub Release for `<tag>`, visible to everyone?" This is its own separate, default-NO confirmation naming that exact consequence. When the human CONFIRMS it, the release ends PUBLISHED and marked Latest, not a draft, because rung C means fully released: `gh release create <tag> --latest --notes-file <notes>` (no `--draft`). If notes or assets must be staged first, the equivalent two-step is `gh release create <tag> --draft ...` then `gh release edit <tag> --draft=false --latest`. Declining this confirmation (or not reaching it) leaves NO GitHub Release at all, never a dangling, invisible draft. Do not run any `gh release` command without this explicit confirmation. If `gh` is unavailable/unauthenticated, say so and hand off the exact command rather than leaving a draft. (Rung B, if it creates a GitHub Release at all, uses `--prerelease` and never `--latest`.)
 
-Rung B stops here (candidate: tag, optionally pushed; no GitHub Release, no publish). Rung C continues to publish/deploy below.
+Rung B stops here (candidate: tag, optionally pushed; no published GitHub Release - a clearly-marked `--prerelease` only if any; no publish). Rung C continues to publish/deploy below.
 
 ### 6. Publish / deploy (rung C only; only with explicit, authorized credentials)
 
@@ -116,9 +116,25 @@ Perform verification appropriate to the project type and record results:
 
 If verification fails, treat it as a release incident: stop, report, and recommend rollback if the project supports it.
 
-### 8. Record and report
+### 8. Verify the end state, then record and report
 
-- Update `release-execution-log.md` with each step, command, result, the release commit, the tag, published/deployed targets, and verification outcome.
+First VERIFY the actual release end state (do not assume a step took effect just because its command was issued):
+
+- **Tag on the remote:** confirm the tag is pushed and present on the remote (`git ls-remote --tags <remote> <ref>`), matching Step 2/5.
+- **GitHub Release published + Latest (rung C):** confirm the release exists and is NOT a draft with `gh release view <tag> --json isDraft,isPrerelease` and assert `isDraft=false` (and, for a full release, `isPrerelease=false`). Note: `gh release view --json` has NO `isLatest` field ("Latest" is GitHub-derived); verify Latest by having created/edited with `--latest`, and/or by checking `gh release list`, which flags the Latest release in its output. If `gh` is unavailable/unauthenticated, say so and give the manual check instead of blocking.
+- **Registry has the version (when checkable):** if the toolchain can check (e.g. query the package index for `<name>==<version>`), confirm the published version is present; otherwise report it as unverified with the manual check command.
+
+Then, if ANY externally-visible step is incomplete - an unpublished draft, an un-uploaded registry artifact, a tag not on the remote, or a step genuinely handed off because credentials were absent or interactive login was required - surface it in a loud, explicit block, never a silent completion:
+
+```
+REMAINING MANUAL STEPS (release NOT fully live):
+- <exact copy-pasteable command #1, e.g. gh release edit <tag> --draft=false --latest>
+- <exact copy-pasteable command #2, e.g. the registry publish/upload command>
+```
+
+If every checked action is confirmed complete, state that explicitly ("no remaining manual steps; release is fully live").
+
+- Update `release-execution-log.md` with each step, command, result, the release commit, the tag, published/deployed targets, the end-state verification, and any REMAINING MANUAL STEPS block.
 - Create the per-phase report `section-summaries/09-release-execution.md` (what was done, why, what was considered but not done - including any step handed off to the user and why).
 
 ---
@@ -136,6 +152,8 @@ Release execution is complete only when:
 1. The release commit is pushed and CI (if any) is green for it, or full local validation passed.
 2. Release artifacts are built and verified against the release commit/version.
 3. The annotated (signed if applicable) release tag is pushed and confirmed on the remote.
-4. Publishing/deployment is either completed with authorized credentials and verified, or explicitly handed off to the user.
-5. The post-release smoke test passed, or its failure is reported with a rollback recommendation.
-6. `release-execution-log.md` and the Section 9 per-phase report are written.
+4. On rung C, the GitHub Release (when the human confirmed that step) is verified PUBLISHED (not a draft) and marked Latest - or, if it could not be published in this run (e.g. `gh` unavailable, missing auth), it is surfaced in the REMAINING MANUAL STEPS block with the exact command. A rung-C run MUST NOT complete leaving a silent, unpublished draft.
+5. Publishing/deployment is either completed with authorized credentials and verified, or explicitly handed off to the user in the REMAINING MANUAL STEPS block. Where checkable, the registry is verified to have the version; otherwise it is reported as unverified with the manual check.
+6. The post-release smoke test passed, or its failure is reported with a rollback recommendation.
+7. The end-state verification ran and either confirmed the release is fully live (no remaining manual steps) or printed the REMAINING MANUAL STEPS block.
+8. `release-execution-log.md` and the Section 9 per-phase report are written.

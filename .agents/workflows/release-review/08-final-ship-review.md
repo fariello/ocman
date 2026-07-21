@@ -158,7 +158,7 @@ The GO / CONDITIONAL GO / NO-GO recommendation is unchanged (it is the reviewer'
 
 - **(A) Close out the review only [DEFAULT].** Approve the findings and disposition. NOTHING is tagged, pushed, released, or published. Fully reversible; no artifact is created.
 - **(B) Cut a release CANDIDATE.** Create an annotated `vX.Y.Z-rc.N` pre-release tag only (pushing it is a separate, default-NO confirmation in Section 9). Signals "this is the intended version, NOT live"; does NOT create a GitHub Release and does NOT publish to a registry.
-- **(C) FULL RELEASE.** Proceed to `09-release-execution.md`, where each externally-visible action (tag, push, GitHub Release, publish) is named and separately confirmed, default-NO. Only a bare final `vX.Y.Z` (no `-rc`) is used here.
+- **(C) FULL RELEASE.** Proceed to `09-release-execution.md`, where each externally-visible action (tag, push, GitHub Release, publish) is named and separately confirmed, default-NO. Full release means fully released: when the human confirms each action, the end state is LIVE - the tag pushed, the GitHub Release PUBLISHED and marked Latest (never a silent draft), and, once authorized, the registry published. Section 9 verifies this end state and surfaces any REMAINING MANUAL STEPS. Only a bare final `vX.Y.Z` (no `-rc`) is used here.
 
 The primary fork the user sees is candidate-versus-full, so the two cannot be conflated at the moment of consent. Do not begin any release execution automatically or without explicit approval of a specific rung. A bare `vX.Y.Z` tag means "intended for a registry release"; anything not registry-bound MUST be an `-rc.N` candidate (or left untagged). See `RELEASING.md`.
 

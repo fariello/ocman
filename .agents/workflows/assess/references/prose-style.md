@@ -5,10 +5,10 @@ surface-agnostic version of the nonfiction-prose discipline: write with quiet fo
 earn authority through specificity and evidence rather than decoration, and avoid the
 patterns that make prose read as mechanically generated.
 
-Origin: adapted from the "Nonfiction Prose Prompt Toolkit" (maintainer's
-`uri-ai-info/Prompts/`). That toolkit targets executive/board/long-form documents; this
-reference keeps the rules that apply to ALL prose and marks where intensity varies by
-surface. It is framework-owned so it travels with an install.
+Origin: adapted from an internal nonfiction-prose prompt toolkit maintained by the
+author. That toolkit targets executive/board/long-form documents; this reference keeps
+the rules that apply to ALL prose and marks where intensity varies by surface. It is
+framework-owned so it travels with an install.
 
 ## Apply by surface (do not over-apply)
 

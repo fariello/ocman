@@ -1,0 +1,5 @@
+# agent-workflows prompts staging: ignore the box-local, quarantine lane.
+# `local/` holds raw/sensitive/work-in-progress prompts (e.g. session-handoff drafts); it is
+# never committed. Promote a reviewed, scrubbed copy into a tracked lifecycle bucket (pending/, ...)
+# with `git mv`. The tracked buckets (siblings of this file) travel with the repo.
+local/
