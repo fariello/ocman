@@ -2,7 +2,7 @@
 
 ## [Unreleased]
 
-## [1.3.0] - 2026-07-20
+## [1.3.0] - 2026-07-21
 
 ### Added
 - **`ocman doctor` now checks for insecure/exposed opencode servers.** The routine read-only
