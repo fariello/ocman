@@ -112,7 +112,7 @@ class RestoreBackupModal(ModalScreen[Optional[str]]):
             Input("", id="input-restore-path", placeholder="e.g. /path/to/backup.zip"),
             Label("Warning: This will overwrite active database, history, and storage!", id="dialog-message"),
             Horizontal(
-                Button("Restore Now", id="btn-confirm-restore", variant="error"),
+                Button("[b red]⚠[/]Restore Now", id="btn-confirm-restore", variant="error"),
                 Button("Cancel", id="btn-cancel-restore", variant="primary"),
                 classes="horizontal-buttons"
             ),
@@ -141,7 +141,7 @@ class ClearHistoryModal(ModalScreen[bool]):
             Input(placeholder="Type 'yes' to confirm", id="input-clear-history-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-clear-history"),
-                Button("CLEAR HISTORY", id="btn-confirm-clear-history", variant="error", disabled=True),
+                Button("[b red]⚠[/]CLEAR HISTORY", id="btn-confirm-clear-history", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -183,7 +183,7 @@ class BatchDeleteModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-batch-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-batch-del"),
-                Button("CONFIRM BATCH DELETE", id="btn-confirm-batch-del",
+                Button("[b red]⚠[/]CONFIRM BATCH DELETE", id="btn-confirm-batch-del",
                        variant="error", disabled=True),
                 classes="horizontal-buttons",
             ),
@@ -237,7 +237,7 @@ class DeletionSafetyModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-del"),
-                Button("CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
+                Button("[b red]⚠[/]CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -365,7 +365,7 @@ class ProjectDeletionSafetyModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-del"),
-                Button("CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
+                Button("[b red]⚠[/]CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -1120,7 +1120,7 @@ class ConfigOverlay(_FooterOverlay):
                 yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
             with Horizontal(id="config-buttons-container"):
                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
-                yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
+                yield Button("[b red]⚠[/]Reset to Defaults", id="btn-reset-config", variant="error")
             with Horizontal(id="overlay-close-row"):
                 yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
@@ -1263,8 +1263,8 @@ class OrsessionApp(App):
                                 yield Label("DANGER ZONE", classes="panel-card-title")
                                 yield Label("Delete selected session/project and all related data from database and disk:", classes="info-label")
                                 with Horizontal():
-                                    yield Button("Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
-                                    yield Button("Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
+                                    yield Button("[b red]⚠[/]Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
+                                    yield Button("[b red]⚠[/]Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
                                     yield Button("Move/Update Path", id="btn-move-project", disabled=True)
                                     yield Button("Export Session Bundle", id="btn-export-session", disabled=True)
                                 # Multi-select batch actions (press Space on a session in the
@@ -1273,7 +1273,7 @@ class OrsessionApp(App):
                                              "Press Space on a session in the sidebar to select.",
                                              id="lbl-batch-selection", classes="info-label")
                                 with Horizontal():
-                                    yield Button("Batch Delete Selected", id="btn-batch-delete",
+                                    yield Button("[b red]⚠[/]Batch Delete Selected", id="btn-batch-delete",
                                                  variant="error", disabled=True)
                                     yield Button("Batch Export Selected", id="btn-batch-export",
                                                  disabled=True)

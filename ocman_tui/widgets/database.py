@@ -90,7 +90,7 @@ class OrphanInspectorModal(ModalScreen[None]):
             Horizontal(
                 Button("Refresh List", id="btn-refresh-orphans"),
                 Button("Cancel", id="btn-cancel-orphans"),
-                Button("DELETE SELECTED", id="btn-delete-orphans", variant="error"),
+                Button("[b red]⚠[/]DELETE SELECTED", id="btn-delete-orphans", variant="error"),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -267,7 +267,7 @@ class DatabaseAdminWidget(Static):
                     id="ops-fields"
                 )
                 with Horizontal():
-                    yield Button("Run Prune / Clean", id="btn-run-prune", variant="error")
+                    yield Button("[b red]⚠[/]Run Prune / Clean", id="btn-run-prune", variant="error")
                     yield Button("Inspect Orphans", id="btn-inspect-orphans", variant="primary")
                     yield Button("Import Session", id="btn-import-session", variant="success")
 
@@ -289,7 +289,7 @@ class DatabaseAdminWidget(Static):
                 with Horizontal():
                     yield Button("Create Backup", id="btn-create-backup", variant="success")
                     yield Button("Restore Backup", id="btn-restore-backup", variant="primary")
-                    yield Button("Prune Old Backups", id="btn-clean-backups", variant="error")
+                    yield Button("[b red]⚠[/]Prune Old Backups", id="btn-clean-backups", variant="error")
 
         # Bottom section: Logs Output Console
         yield Label("LIVE OPERATIONS LOG OUTPUT:", classes="info-label")

@@ -53,7 +53,7 @@ class ReclaimConfirmModal(ModalScreen[bool]):
             Label("Proceed?", classes="info-label"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-reclaim"),
-                Button("PROCEED", id="btn-confirm-reclaim", variant="error"),
+                Button("[b red]⚠[/]PROCEED", id="btn-confirm-reclaim", variant="error"),
                 classes="horizontal-buttons",
             ),
             id="dialog-container",
@@ -89,14 +89,14 @@ class StorageWidget(Static):
                 Checkbox("Proceed even if OpenCode is running (--while-running)",
                          value=False, id="check-reclaim-while-running"),
                 Horizontal(
-                    Button("Compact database (checkpoint + VACUUM)", id="btn-reclaim-vacuum", variant="warning"),
-                    Button("Reclaim temp files", id="btn-reclaim-temp"),
-                    Button("Reclaim compacted tool output (parts)", id="btn-reclaim-parts"),
+                    Button("[b red]⚠[/]Compact database (checkpoint + VACUUM)", id="btn-reclaim-vacuum", variant="warning"),
+                    Button("[b red]⚠[/]Reclaim temp files", id="btn-reclaim-temp"),
+                    Button("[b red]⚠[/]Reclaim compacted tool output (parts)", id="btn-reclaim-parts"),
                     classes="horizontal-buttons",
                 ),
                 Horizontal(
                     Input(placeholder="Backups dir to prune (path)", id="input-reclaim-backups-dir"),
-                    Button("Prune backups dir", id="btn-reclaim-backups"),
+                    Button("[b red]⚠[/]Prune backups dir", id="btn-reclaim-backups"),
                     classes="search-bar-row",
                 ),
                 Static(

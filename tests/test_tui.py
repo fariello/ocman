@@ -1610,3 +1610,27 @@ def test_tui_one_color_button_css():
     css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
     assert "#ffd75f" in css          # the single button color
     assert ".footer-btn" in css and "#ffd75f" in css
+
+
+@pytest.mark.anyio
+async def test_tui_destructive_buttons_carry_warn_glyph(tui_db):
+    """B2-GEN: with one uniform button color, every destructive button must carry the
+    bold-red warn glyph in its label so danger is still conveyed."""
+    from ocman_tui.widgets.database import DatabaseAdminWidget
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Destructive buttons mounted on the main screen (delete/prune/log-prune).
+        for bid in ("btn-delete-session-rec", "btn-delete-project", "btn-batch-delete",
+                    "btn-clear-history-log", "btn-run-prune", "btn-clean-backups"):
+            label = str(app.query_one("#" + bid, Button).label)
+            assert "\u26a0" in label, f"{bid} missing warn glyph: {label!r}"
+    # Buttons that live inside overlays/modals (reset-config, delete-orphans, reclaim PROCEED,
+    # confirm-delete) are verified by a static source scan.
+    from pathlib import Path as _P
+    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text()
+                    for f in ("app.py", "widgets/database.py", "widgets/storage.py"))
+    import re
+    destructive = re.findall(r'Button\((?:\n\s*)?"([^"]*)",\s*id="[^"]*",\s*variant="(?:error|warning)"', src)
+    for lbl in destructive:
+        assert "\u26a0" in lbl, f"destructive button label missing warn glyph: {lbl!r}"
