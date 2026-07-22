@@ -5,10 +5,10 @@
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{spend,models,database}.py`
   (layout heights), `tests/test_tui.py`. No `ocman/cli.py` change. No DB schema change. No new
   dependency.
-- Status: reviewed (plan-review applied 2026-07-21; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-21; executing PB-01..PB-10)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused; a delta
   release-review must cover this + the footer/overlay work before rung C resumes).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-21 ("Approve. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -21,6 +21,16 @@
   app.py:2515) + counts RENDERED-markdown lines; PB-09 pins bare id only (not the CLI providerID
   suffix) + non-JSON fallback; PB-08/PB-10 gain a CSS-presence regression-guard test. Both prior
   decisions resolved (PB-01 Esc, PB-06 2500). Status -> reviewed; GO - PENDING HUMAN APPROVAL.
+
+- 2026-07-21 (its_direct/pt3-claude-opus-4.8): EXECUTED PB-01..PB-10 (commit f8cd333). Full
+  suite 484 passed, 2 skipped. Notes: PB-08/PB-10 reconciled by dropping the `tall` border on
+  Input/Select/Button (which forced height 3 and clipped text) in favour of a solid high-contrast
+  field at height 1; PB-06 "Full lines" follows the existing Refresh-View pattern; the removed
+  `ctrl+m` also required updating 3 test presses to `escape`. Config isolation held (real
+  ~/.config/opencode/ocman.toml untouched this run). CAVEAT for hand-test: PB-08 (input
+  readability) and PB-10 (spacing) are visual; the toast colors (PB-02) and tight rows (PB-07b)
+  should be eyeballed. Plan stays in pending/ until maintainer hand-test sign-off, then
+  git mv -> executed/.
 
 ## Plan-review findings
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
