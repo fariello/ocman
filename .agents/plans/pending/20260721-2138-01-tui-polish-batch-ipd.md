@@ -21,30 +21,31 @@ Each maintainer item mapped to a requirement with evidence and approach:
 
 | ID | Maintainer item | Approach | Evidence |
 |----|-----------------|----------|----------|
-| PB-01 | Replace `^m` (Main): `^m`==Enter (CR) in many terminals, risks hijacking Enter | Rebind Main to a safe key (proposal: `^o` for "hOme"/back, or `escape`-only + a footer button). DECIDE key in review. Remove the priority `ctrl+m` binding and the overlay `ctrl+m` binding. | app.py:1165 `ctrl+m`; overlay BINDINGS app.py:1033-1034 |
+| PB-01 | Replace `^m` (Main): `^m`==Enter (CR) in many terminals, risks hijacking Enter | DECIDED (maintainer): drop the dedicated key entirely. Remove the app `ctrl+m` priority binding AND the overlay `ctrl+m` binding; keep `escape` as the dismiss key; relabel the footer `foot-main` button to `Esc Main` (clickable). No CR-collision key remains. | app.py:1165 `ctrl+m`; overlay BINDINGS app.py:1033-1034; footer `foot-main` |
 | PB-02 | Color TUI status messages like the CLI (green info / yellow warn / red error) | Add Toast CSS keyed by severity (`Toast.-information`/`.-warning`/`.-error`) matching CLI colors (green #a6e3a1 / yellow #f9e2af / red #f38ba8). CLI uses green=info, yellow=warn, red=error. | style.css has NO toast rules; cli.py:162/167/172 |
 | PB-03 | Spend list fills the space below the top controls | `#spend-table { height: 1fr; }` and make the SpendWidget container expand | spend.py:30 DataTable#spend-table |
 | PB-04a | Models list fills available space | `#models-table { height: 1fr; }` | models.py:24 DataTable#models-table |
 | PB-04b | Rename "Models Library" -> "Models" | TabPane title string | app.py TabPane "Models Library" |
 | PB-05a | Details & Transcript transcript fills space | transcript area height 1fr | app.py transcript-area/#transcript-md |
 | PB-05b | Rename "Details & Transcript" -> "Details" | TabPane title string | app.py:1068 |
-| PB-06 | Transcript shows CLI-style TRUNCATED lines unless user toggles "Full lines"; warn if >5000 lines | Add a "Full lines" Checkbox (default off). Off => apply the CLI per-line truncation the CLI uses (`truncate_turns_by_lines`, already imported in core). On => full; if resulting transcript >5000 lines, show a warning notify. | render_current_transcript app.py:1714; core imports truncate_turns_by_lines |
+| PB-06 | Transcript shows CLI-style TRUNCATED lines unless user toggles "Full lines"; warn if >2500 lines | Add a "Full lines" Checkbox (default off). Off => apply the CLI per-line truncation (`truncate_turns_by_lines`, already imported in core). On => full render; if the full render exceeds 2500 lines, show a warning notify (threshold DECIDED: 2500). | render_current_transcript app.py:1714; core imports truncate_turns_by_lines |
 | PB-07a | "Database Admin" -> "Database" | TabPane title | app.py:1271 "Database Admin" |
 | PB-07b | Database rows less separated | reduce vertical margins/padding on the admin metric rows | database.py Horizontal rows |
 | PB-08 | Text boxes hard to read in dark mode (accessibility) | Raise Input text/background contrast: brighter text (#cdd6f4 on a lighter field, or a higher-contrast pairing), placeholder contrast too. Applies to Input AND Select AND cfg-* fields. This is a GUIDING-PRINCIPLE (accessibility) fix. | style.css:85-92 Input |
 | PB-09 | Details -> Session Metadata: model should be just the model id, not JSON | `s['model']` is a JSON blob (`{"id":...,"providerID":...}`); parse like the CLI does and show the id only. | app.py:1658 raw s.get('model'); CLI parses at cli.py:12903-12905 |
 | PB-10 | All buttons + text boxes: no top/bottom padding, at most 1 space left/right | Global rule: `Button, Input, Select { padding: 0 1; margin: 0; }` (audit for height:3 defaults on Button). Reconcile with the footer buttons (already height 1). | style.css Input/Button/Select |
 
-## Design decisions to settle in plan-review (OPEN)
+## Design decisions (RESOLVED with maintainer 2026-07-21)
 
-- **PB-01 key choice:** what replaces `^m`? Candidates: `^o`, `^space`, or "Esc + footer button only"
-  (no dedicated key). MUST avoid CR-collision keys (`^m`, `^j`) and existing binds
-  (q/b/u/s/d/r/g). RECOMMEND: keep `escape` to dismiss + relabel the footer button to `Esc Main`
-  (drop a dedicated ^-key entirely), which sidesteps the whole CR problem. Decide in review.
-- **PB-06 threshold:** ">5000 lines" warning is on the FULL (untruncated) render; confirm the
-  5000 constant and whether it should reuse an existing threshold constant.
-- **PB-10 vs PB-08:** zero vertical padding on Inputs must not reduce the contrast/legibility fix
-  in PB-08; verify the two do not fight (a 1-row input with a border may clip text).
+- **PB-01 key choice:** RESOLVED = drop the dedicated key; use `Esc` to dismiss overlays plus
+  the clickable footer button relabeled `Esc Main`. No CR-collision key remains.
+- **PB-06 threshold:** RESOLVED = 2500 lines. The warning fires when the FULL (untruncated,
+  "Full lines" on) render exceeds 2500 lines. (Maintainer: "still too much, but we'll see how
+  the TUI handles that" - revisit after hand-testing.)
+- **PB-10 vs PB-08 (still to verify in execution, not an open decision):** zero vertical padding
+  on Inputs must not reduce the PB-08 legibility fix; a bordered 1-row input can clip text, so
+  during execution verify the two do not fight (may need `border: none` + a background instead of
+  a `tall` border to keep 1-row height AND readable text).
 
 ## Non-goals
 - No `ocman/cli.py` change; no DB or serialized-format change; no new dependency.
@@ -65,7 +66,7 @@ Each maintainer item mapped to a requirement with evidence and approach:
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Before coding, create a step-granular TodoWrite checklist (one item per PB-01..PB-10 sub-step).
-- Open questions: PB-01 key, PB-06 threshold (resolve in plan-review before execution).
+- Open questions: none (PB-01 = Esc-only + footer button; PB-06 = 2500; both resolved).
 - Scope fence: `ocman_tui/**`, `tests/test_tui.py` ONLY. No `ocman/cli.py`, no DB, no dep.
 - Honesty rule: paste the ACTUAL pytest output; never claim an unrun result.
 - Config safety: every TUI test MUST set an isolated `OCMAN_CONFIG_PATH`; never write the real config.
@@ -75,4 +76,4 @@ Before coding, create a step-granular TodoWrite checklist (one item per PB-01..P
 - Release: the paused 1.3.0 rung-C needs a delta release-review covering this batch.
 
 ## Deferred / open
-- None beyond the two OPEN decisions above.
+- None. Both prior open decisions resolved (PB-01 Esc, PB-06 2500).
