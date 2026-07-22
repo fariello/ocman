@@ -34,13 +34,13 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 | B2-05 | BUG: selecting a search-matched session updates TRANSCRIPT but NOT SESSION METADATA | on_data_table_row_selected (search path, app.py:1387) sets selected_* + start_session_export but never calls update_metadata_view. Fetch the full session row and call update_metadata_view like the tree path (app.py:1614). | app.py:1387-1413 vs 1605-1615 |
 | B2-06 | TRANSCRIPT LOG: remove all inner padding (outer/inner box, scrollbar, top/bottom/left) | CSS: `.transcript-area`/`#transcript-md`/`#transcript-container` padding 0; scrollbar-gutter tight. | style.css:271 .transcript-area |
 | B2-07 | Search box filters the TREE (projects+sessions) and TRANSCRIPT lines; no separate results box | REDESIGN: on search input, filter the sidebar Tree to projects-with-matches and matching sessions; filter transcript to matching lines; REMOVE the `#search-results` DataTable. See "Item 7 design" below. | app.py:1203 search-results; sidebar.py load_data |
-| B2-08 | If the search box stays always-visible, remove the now-useless `^s Search` menu item | Remove foot-search button + ctrl+s binding + action_focus_search (or keep action, drop the footer button + binding). DECIDE in review: keep ^s as a focus-jump or remove entirely. | footer foot-search; binding ctrl+s |
+| B2-08 | Remove the now-useless `^s Search` (search box always visible) | RESOLVED: remove the foot-search footer button, the `ctrl+s` binding, AND action_focus_search entirely. | footer foot-search; binding ctrl+s; action_focus_search |
 | B2-09 | Database SYSTEM METRICS: add much more info | Add rows (WAL size, page count/size, freelist, event-log row count, sessions/projects/parts counts, largest tables, last-vacuum). Reuse doctor/storage queries; read-only. | database.py:216-227 metrics-fields |
 | B2-10a | DATABASE OPERATIONS: Retention -> "Clean Older Than: [5-char box] (example: 2h or 3mo)" | Relabel + accept a duration string (2h/3d/1w/3mo/1y); parse to a cutoff. Reuse any existing duration parser in cli.py. | database.py operations card |
 | B2-10b | Add a units help line: h/d/w/mo/y | Static help label under the field. | database.py |
 | B2-10c | Label the non-descript operation text boxes | Add labels/hints for each operation input. | database.py operations card |
-| B2-11 | Allow selecting/copying text (Model, Transcript, SESSION METADATA) OR click-to-copy | Prefer click-to-copy (Textual selection in a TUI is limited): make metadata values + model click-to-copy via `app.copy_to_clipboard` with a toast; transcript already selectable in a Markdown/scroll? Verify. DECIDE approach in review. | Textual copy_to_clipboard availability |
-| B2-12 | Activity Log: replace "Clear Historical Activity Log" with "Delete entries older than [box] days" + [DELETE] with confirm | New input + Delete button -> ClearHistoryModal-style confirm -> prune runs[] older than N days and recompute cumulative. Needs a prune helper (see scope). | app.py clear-history-log button; cli.py _load/_save_history |
+| B2-11 | Allow selecting/copying text (Model, Transcript, SESSION METADATA) | RESOLVED "do what you can": attempt click-to-copy on metadata values + model via Textual `App.copy_to_clipboard` + a confirming toast. If the installed Textual has no working clipboard path (or SSH/no OSC-52), do NOT fake it: leave plain text and REPORT that copy is unavailable + why. Verify capability in execution. | Textual copy_to_clipboard availability |
+| B2-12 | Activity Log: replace "Clear Historical Activity Log" with "Delete entries older than [box] days" + [DELETE] with confirm | New input + Delete button -> confirm modal -> prune `runs[]` older than N days ONLY. RESOLVED: `cumulative` historical spend/metadata is KEPT in perpetuity (NOT recomputed), so `spend --historical` is unchanged; only old action-log entries stop displaying. Needs a runs-only prune helper. | app.py clear-history-log button; cli.py _load/_save_history |
 | B2-13 | Rename "Actions & Recovery" -> "Actions" | TabPane title. | app.py:1231 |
 | B2-14 | Rename "Activity Log" -> "Log" | TabPane title. | app.py "Activity Log" |
 | B2-15 | Actions -> LLM COMPACTION RUNNER: "Est Cost: Config load error" | update_estimated_cost catches all exceptions -> "Config load error" (app.py:1803-1807). Diagnose the real load_opencode_config failure (surface the actual error, and fix the cause; likely no compatible model / no api_key/base_url). | app.py:1795-1807 |
@@ -61,18 +61,43 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
   input's Changed/Submitted to re-filter the tree (debounce not required at this scale); and a
   transcript-line filter in render_current_transcript.
 
-## Design decisions to settle in plan-review (OPEN)
-- B2-08: remove `^s Search` entirely, or keep `^s` as a "jump focus to the always-visible search
-  box" accelerator (footer button removed either way)? RECOMMEND keep the binding, drop the footer button.
-- B2-11: click-to-copy vs enabling text selection. RECOMMEND click-to-copy on metadata values +
-  model (Textual `App.copy_to_clipboard`), because terminal text selection is unreliable in a
-  full-screen app; verify the Textual version supports it, else fall back to a note.
-- B2-07c: transcript-line filter uses the same query as the tree filter (RECOMMEND) vs a separate box.
-- B2-09: exact metric set (bounded, read-only, must not be slow on a large DB - reuse doctor's
-  already-bounded queries; do NOT add a full event-log scan to a synchronous mount path).
-- B2-12: N-days prune semantics - prune `runs[]` older than N days AND recompute `cumulative`
-  from the survivors, or keep cumulative as an all-time total and only prune runs[]? DECIDE (the
-  cumulative is used by `spend --historical`, so recomputing changes that number).
+## Design decisions (RESOLVED with maintainer 2026-07-21)
+- B2-08: RESOLVED = REMOVE `^s Search` entirely (the `ctrl+s` binding AND the foot-search button
+  AND action_focus_search), since the search box is always visible in the sidebar. Also remove
+  the B2-05/earlier "focus search / un-hide pane" behavior tied to it.
+- B2-11: RESOLVED = "do what you can; if nothing, say so." PLAN: attempt click-to-copy on the
+  metadata values + model via Textual `App.copy_to_clipboard` (fires a confirming toast). If the
+  installed Textual lacks a working clipboard path (or it is a no-op over SSH/no OSC-52), do NOT
+  fake it: leave the values as plain text and REPORT to the maintainer that copy is unavailable
+  and why. Verify capability during execution; record the outcome.
+- B2-07c: RESOLVED = the transcript-line filter uses the SAME query as the tree/search box
+  (one query drives tree filtering + transcript-line filtering).
+- B2-09: RESOLVED = add the broad-but-bounded metric set (WAL/SHM size, page count/size, freelist,
+  row counts for session/project/parts/message, largest tables, last-vacuum, DB+WAL totals). MUST
+  reuse doctor/storage's already-bounded queries and MUST NOT put a full event-log scan on the
+  synchronous mount path (run heavy bits in the existing worker pattern if needed).
+- B2-12: RESOLVED = the historical `cumulative` spend/metadata is kept IN PERPETUITY (never
+  recomputed/reduced by a log prune, so `spend --historical` is unchanged). The age-prune ONLY
+  drops old entries from the `runs[]` ACTION LOG so they no longer display in the Log tab.
+  Cumulative totals are untouched.
+
+## Follow-up questions (raised 2026-07-21; awaiting maintainer before plan-review)
+- FU-1 (search timing): should the tree + transcript re-filter LIVE as the user types (on
+  `Input.Changed`), or only on Enter (`Input.Submitted`)? Live is nicer but re-queries per
+  keystroke. RECOMMEND: filter on Enter (submit); it matches the current "Enter to run" hint and
+  avoids per-keystroke DB work on a large DB.
+- FU-2 (metadata "Project (Dir)"): item 4a says "Project (Dir): /home/.../Fariel.com". The
+  session dict has BOTH `directory` (the session's own dir) and `project_dir`/`worktree` (the
+  owning project's root). Which do you want shown on that line - the project root, or the
+  session directory? (They are often equal but not always.)
+- FU-3 (button theme reach): B2-GEN one-color buttons - apply to ALL buttons including the
+  compact footer command buttons (which currently have their own footer-btn style), or leave the
+  footer bar as-is and only unify the in-pane action/dialog buttons? RECOMMEND: unify in-pane +
+  dialog buttons; keep the footer bar its own (denser) style so the command bar stays distinct.
+- FU-4 (clipboard confirmed available): Textual `App.copy_to_clipboard` EXISTS in the installed
+  version, so B2-11 click-to-copy will be attempted; note it still depends on the terminal
+  supporting OSC-52 (works in most modern terminals; may be a no-op over some SSH setups). No
+  decision needed unless you want a different approach.
 
 ## Non-goals
 - No DB schema change; no new dependency; no change to CLI behavior except a possibly-new,
@@ -93,7 +118,9 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Create a step-granular TodoWrite checklist (one item per B2-* sub-step) BEFORE coding.
-- Open questions: B2-08, B2-11, B2-07c, B2-09 scope, B2-12 semantics (resolve in plan-review).
+- Open questions: the 5 prior design decisions are RESOLVED (see Design decisions). Remaining
+  follow-ups to settle in plan-review: FU-1 (search filter timing), FU-2 (metadata field data
+  sources), FU-3 (button-theme scope) - see "Follow-up questions" below.
 - Scope fence: `ocman_tui/**`, `tests/test_tui.py`, and (only if required for B2-12) one small
   tested helper in `ocman/cli.py`. Nothing else.
 - Honesty rule: paste the ACTUAL pytest output; never claim an unrun result.
