@@ -6,7 +6,7 @@
   possibly `ocman_tui/core.py` (read-only helpers), `tests/test_tui.py`. Item 12 (log prune by
   age) may need a small `ocman/cli.py` helper (`prune_history_older_than`) IF one does not exist;
   prefer reusing existing history helpers. No DB schema change. No new dependency.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (plan-review applied 2026-07-21; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; a delta
   release-review must cover all the TUI work before rung C).
 - Approval: awaiting maintainer review/approval
@@ -15,6 +15,14 @@
 ## Workflow history
 - 2026-07-21 (its_direct/pt3-claude-opus-4.8): second round of maintainer hand-test feedback
   (15 items + a global button-theme change) after the polish batch (20260721-2138-01).
+- 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-201..PR-206. Verified evidence: parse_duration_to_days exists with exactly h/d/w/mo/y units
+  (cli.py:4910) and db clean uses --older-than (6185); transcript is a Markdown widget (1218);
+  copy_to_clipboard present; est-cost generic-catch confirmed (1803). Decided NOT to split (one
+  coherent subsystem pass, tightly coupled). Revisions: pinned the duration parser (B2-10a/12),
+  scoped click-to-copy to metadata/model + honest transcript report (B2-11), split the est-cost
+  error handling (B2-15), defined transcript-line matching (B2-07c), added visual/CSS regression
+  guards (validation). Status -> reviewed; GO - PENDING HUMAN APPROVAL.
 
 ## Answered up front (maintainer question)
 Activity/history log storage: JSON sidecar at `~/.local/share/opencode/ocman_history.json`
@@ -36,14 +44,14 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 | B2-07 | Search box filters the TREE (projects+sessions) and TRANSCRIPT lines; no separate results box | REDESIGN: on search SUBMIT (Enter only, FU-1), filter the sidebar Tree to projects-with-matches and matching sessions; filter transcript to matching lines (same query); REMOVE the `#search-results` DataTable. Empty query => full tree/transcript. See "Item 7 design" below. | app.py:1203 search-results; sidebar.py load_data |
 | B2-08 | Remove the now-useless `^s Search` (search box always visible) | RESOLVED: remove the foot-search footer button, the `ctrl+s` binding, AND action_focus_search entirely. | footer foot-search; binding ctrl+s; action_focus_search |
 | B2-09 | Database SYSTEM METRICS: add much more info | Add rows (WAL size, page count/size, freelist, event-log row count, sessions/projects/parts counts, largest tables, last-vacuum). Reuse doctor/storage queries; read-only. | database.py:216-227 metrics-fields |
-| B2-10a | DATABASE OPERATIONS: Retention -> "Clean Older Than: [5-char box] (example: 2h or 3mo)" | Relabel + accept a duration string (2h/3d/1w/3mo/1y); parse to a cutoff. Reuse any existing duration parser in cli.py. | database.py operations card |
+| B2-10a | DATABASE OPERATIONS: Retention -> "Clean Older Than: [5-char box] (example: 2h or 3mo)" | Relabel + accept a duration string; parse via the EXISTING `parse_duration_to_days(text)` (cli.py:4910), which supports exactly `h/d/w/mo/y` and raises `DurationError` on bad input (surface that as an inline error, do not crash). Do NOT write a new parser. | cli.py:4910 parse_duration_to_days; db clean already uses --older-than AGE cli.py:6185 |
 | B2-10b | Add a units help line: h/d/w/mo/y | Static help label under the field. | database.py |
 | B2-10c | Label the non-descript operation text boxes | Add labels/hints for each operation input. | database.py operations card |
-| B2-11 | Allow selecting/copying text (Model, Transcript, SESSION METADATA) | RESOLVED "do what you can": attempt click-to-copy on metadata values + model via Textual `App.copy_to_clipboard` + a confirming toast. If the installed Textual has no working clipboard path (or SSH/no OSC-52), do NOT fake it: leave plain text and REPORT that copy is unavailable + why. Verify capability in execution. | Textual copy_to_clipboard availability |
+| B2-11 | Allow selecting/copying text (Model, Transcript, SESSION METADATA) | RESOLVED "do what you can": click-to-copy scoped to the DISCRETE metadata values + model (Static widgets we control -> on_click -> `App.copy_to_clipboard(value)` + confirming toast). The TRANSCRIPT is a `Markdown#transcript-md` widget (app.py:1218) where per-value click-to-copy is not feasible; do NOT promise transcript click-to-copy - instead note that terminal-native selection may or may not work and REPORT honestly. Textual `copy_to_clipboard` exists (verified); still OSC-52-dependent. | app.py:1218 Markdown transcript; copy_to_clipboard verified present |
 | B2-12 | Log tab: replace "Clear Historical Activity Log" with a "Clean Older Than:" duration prune + [DELETE] with confirm | UPDATED (item 12a): use the EXACT SAME time approach as B2-10a/b in Database Operations - a `Clean Older Than: [5-char box] (example: 2h or 3mo)` field + the same `h = hours, d = days, w = weeks, mo = months, y = years` legend line + the SAME shared duration parser. A [DELETE] button opens a confirm modal, then prunes `runs[]` older than the parsed cutoff ONLY. RESOLVED: `cumulative` historical spend/metadata is KEPT in perpetuity (NOT recomputed), so `spend --historical` is unchanged; only old action-log entries stop displaying. Needs a runs-only prune helper that takes the same cutoff. | app.py clear-history-log button; cli.py _load/_save_history; shared duration parser (B2-10a) |
 | B2-13 | Rename "Actions & Recovery" -> "Actions" | TabPane title. | app.py:1231 |
 | B2-14 | Rename "Activity Log" -> "Log" | TabPane title. | app.py "Activity Log" |
-| B2-15 | Actions -> LLM COMPACTION RUNNER: "Est Cost: Config load error" | update_estimated_cost catches all exceptions -> "Config load error" (app.py:1803-1807). Diagnose the real load_opencode_config failure (surface the actual error, and fix the cause; likely no compatible model / no api_key/base_url). | app.py:1795-1807 |
+| B2-15 | Actions -> LLM COMPACTION RUNNER: "Est Cost: Config load error" | `update_estimated_cost` wraps `load_opencode_config` + `extract_models_from_config` + `resolve_model` in ONE `except Exception` -> the generic "Config load error" (app.py:1803-1807). Split the handling: distinguish config-load failure from model-not-resolvable, and show the SPECIFIC reason (e.g. "no compatible model configured" / "model <spec> not found") instead of the misleading generic string. Fix the underlying cause if it is a real resolve bug. | app.py:1795-1815 |
 | B2-GEN | All buttons one color: 215 (yellow) fallback orange, black text. Dangerous buttons keep the neutral color but label `⚠Scary Thing` with `⚠` bold red. | Collapse Button.-primary/-success/-error INTO ONE style (bg ~ `#ffd75f` = xterm 215 / orange fallback, black text). FU-3: this includes the footer command bar (fold `.footer-btn` into the shared style, keeping footer height/density). Danger conveyed by the `[b red]⚠[/]` label prefix, not button color. Update all destructive button labels. | style.css Button variants + .footer-btn; all destructive buttons |
 
 ## Item 7 design (search-as-filter; the biggest change)
@@ -53,9 +61,11 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
   1. The sidebar Tree shows only projects that contain >=1 matching session, and only the matching
      sessions under them (7a/7b). Empty query => full tree.
   2. Selecting a filtered session updates BOTH metadata and transcript (ties into B2-05).
-  3. The transcript view filters to matching lines when a query is active (7c). DECIDE: is the
-     transcript-line filter the SAME query as the tree filter, or a separate control? RECOMMEND
-     same query, applied in render_current_transcript, with a note.
+  3. The transcript view filters to matching lines when a query is active (7c), using the SAME
+     query (FU-1/B2-07c). "Matching line" = case-insensitive substring match on the rendered
+     transcript line; non-matching lines are dropped (no surrounding context lines in this cut).
+     Applied in render_current_transcript AFTER the existing truncation, so an active query
+     narrows what is shown. Empty query => no line filtering.
   4. Remove the `#search-results` DataTable entirely (7d) unless a benefit is articulated (none is).
 - This needs: a sidebar `load_data(filter=...)` that prunes non-matching nodes; wiring the search
   input's `Submitted` (Enter ONLY, FU-1; not Changed) to re-filter the tree; and a transcript-line
@@ -98,6 +108,25 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 - FU-4 (clipboard): ACKNOWLEDGED = proceed with click-to-copy; terminal OSC-52 dependency noted,
   report if it no-ops. No change.
 
+## Split assessment (maintainer asked "split if it should be")
+DECISION: keep as ONE IPD (do NOT split). The 19 items are a single coherent polish pass over
+one subsystem (`ocman_tui/`), share the same files, one test file, and one hand-test acceptance
+gate, and are tightly coupled: B2-05 ties into B2-07; B2-07 removes the search-results box that
+B2-08's `^s` targeted; B2-10a's `parse_duration_to_days` is reused by B2-12; B2-GEN restyles
+every button including the footer buttons that B2-01/B2-02 add/relabel. Splitting would fracture
+these couplings and multiply the regression surface for no benefit. Execution still uses a
+step-granular TodoWrite checklist per item.
+
+## Plan-review findings (2026-07-21)
+| ID | Sev | Scope | Area | Evidence | Finding | Decision |
+|----|-----|-------|------|----------|---------|----------|
+| PR-201 | MEDIUM | IN-SCOPE | C/arch | whole IPD | Split-or-not decision (maintainer asked) | FIXED (keep one IPD; rationale above) |
+| PR-202 | LOW | UNDER-SCOPE | A/correctness | cli.py:4910 | B2-10a/B2-12 said "reuse any parser" vaguely | FIXED (pinned parse_duration_to_days; units match h/d/w/mo/y) |
+| PR-203 | MEDIUM | UNDER-SCOPE | F/UX | app.py:1218 | B2-11 implied transcript click-to-copy; transcript is a Markdown widget where that is not feasible | FIXED (scope copy to metadata/model Statics; transcript honest-report) |
+| PR-204 | MEDIUM | UNDER-SCOPE | A/correctness | app.py:1803 | B2-15 generic catch hides model-resolve vs config-load | FIXED (split handling, show specific reason) |
+| PR-205 | LOW | UNDER-SCOPE | E/testing | style.css | visual items (03a/04/06/09/GEN) had no regression guard | FIXED (CSS/label-presence asserts added to validation) |
+| PR-206 | MEDIUM | UNDER-SCOPE | A/correctness | app.py:1770 | B2-07c "matching lines" was undefined | FIXED (case-insensitive substring, drop non-matching, after truncation) |
+
 ## Non-goals
 - No DB schema change; no new dependency; no change to CLI behavior except a possibly-new,
   small, well-tested history-prune helper reused by the TUI.
@@ -113,6 +142,9 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
   B2-GEN (all buttons share one style class; destructive labels carry the warn glyph),
   B2-01/02 (footer quit/select clickable; glyph-label spacing), B2-11 (copy action fires a toast).
 - Headless pilot smoke of the new search-filter + renamed tabs.
+- PR-205 regression guards: assert (in tests) the presence of the one-color button style, the
+  transcript zero-padding CSS, the FORMAT-CONTROLS width cap, the metadata no-leading-gap, and
+  the expanded metrics rows, so a later edit cannot silently revert these visual/CSS fixes.
 - No em/en dash in authored prose.
 - Manual hand-test acceptance gate (below) for the visual items (03a, 04, 06, 09, 10, GEN).
 
