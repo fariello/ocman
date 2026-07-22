@@ -30,10 +30,10 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 | B2-02 | Remove the space between the unicode glyph and the label in the footer | Footer button labels: drop the space (e.g. `🔎Search`, `🩺Doctor`) per the maintainer mockup. | footer buttons |
 | B2-03a | FORMAT CONTROLS pane too wide; cap 25-30 cols, place right of SESSION METADATA | Layout: put SESSION METADATA + FORMAT CONTROLS in a Horizontal; `#controls-panel { width: 30; }`; metadata takes 1fr. | app.py:1211/1221 controls-panel |
 | B2-03b | Label the unnamed text boxes under FORMAT CONTROLS | They are "Max Interactions" and "Max Lines" (labels exist but may be unclear); add a one-line hint of what they do (limit transcript size). | app.py:1224-1227 |
-| B2-04 | SESSION METADATA: no blank line before data; specific field layout + labels | Rewrite update_metadata_view to the maintainer's exact field list/labels (Project (Dir), Session ID, Model, Created, Updated + duration, Cost); remove leading gap (panel-card-title margin). | app.py:1679 update_metadata_view |
+| B2-04 | SESSION METADATA: no blank line before data; specific field layout + labels | Rewrite update_metadata_view to the field list (FU-2 applied): `Project:` = project root (project_dir/worktree); `Session ID:`; `Model:`; `Created:`; `Updated:` + duration `(Nd HH:MM:SS)`; `Cost:`; then `Directory:` = session dir LAST and ONLY if it differs from Project. Remove the leading gap (panel-card-title margin -> 0). | app.py:1679 update_metadata_view |
 | B2-05 | BUG: selecting a search-matched session updates TRANSCRIPT but NOT SESSION METADATA | on_data_table_row_selected (search path, app.py:1387) sets selected_* + start_session_export but never calls update_metadata_view. Fetch the full session row and call update_metadata_view like the tree path (app.py:1614). | app.py:1387-1413 vs 1605-1615 |
 | B2-06 | TRANSCRIPT LOG: remove all inner padding (outer/inner box, scrollbar, top/bottom/left) | CSS: `.transcript-area`/`#transcript-md`/`#transcript-container` padding 0; scrollbar-gutter tight. | style.css:271 .transcript-area |
-| B2-07 | Search box filters the TREE (projects+sessions) and TRANSCRIPT lines; no separate results box | REDESIGN: on search input, filter the sidebar Tree to projects-with-matches and matching sessions; filter transcript to matching lines; REMOVE the `#search-results` DataTable. See "Item 7 design" below. | app.py:1203 search-results; sidebar.py load_data |
+| B2-07 | Search box filters the TREE (projects+sessions) and TRANSCRIPT lines; no separate results box | REDESIGN: on search SUBMIT (Enter only, FU-1), filter the sidebar Tree to projects-with-matches and matching sessions; filter transcript to matching lines (same query); REMOVE the `#search-results` DataTable. Empty query => full tree/transcript. See "Item 7 design" below. | app.py:1203 search-results; sidebar.py load_data |
 | B2-08 | Remove the now-useless `^s Search` (search box always visible) | RESOLVED: remove the foot-search footer button, the `ctrl+s` binding, AND action_focus_search entirely. | footer foot-search; binding ctrl+s; action_focus_search |
 | B2-09 | Database SYSTEM METRICS: add much more info | Add rows (WAL size, page count/size, freelist, event-log row count, sessions/projects/parts counts, largest tables, last-vacuum). Reuse doctor/storage queries; read-only. | database.py:216-227 metrics-fields |
 | B2-10a | DATABASE OPERATIONS: Retention -> "Clean Older Than: [5-char box] (example: 2h or 3mo)" | Relabel + accept a duration string (2h/3d/1w/3mo/1y); parse to a cutoff. Reuse any existing duration parser in cli.py. | database.py operations card |
@@ -44,7 +44,7 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 | B2-13 | Rename "Actions & Recovery" -> "Actions" | TabPane title. | app.py:1231 |
 | B2-14 | Rename "Activity Log" -> "Log" | TabPane title. | app.py "Activity Log" |
 | B2-15 | Actions -> LLM COMPACTION RUNNER: "Est Cost: Config load error" | update_estimated_cost catches all exceptions -> "Config load error" (app.py:1803-1807). Diagnose the real load_opencode_config failure (surface the actual error, and fix the cause; likely no compatible model / no api_key/base_url). | app.py:1795-1807 |
-| B2-GEN | All buttons one color: 215 (yellow) fallback orange, black text. Dangerous buttons keep the neutral color but label `⚠Scary Thing` with `⚠` bold red. | Collapse Button.-primary/-success/-error to ONE style (bg ~ #ffd75f-ish / orange fallback, black text). Danger conveyed by the `[b red]⚠[/]` label prefix, not button color. Update all destructive button labels. | style.css Button variants; all destructive buttons |
+| B2-GEN | All buttons one color: 215 (yellow) fallback orange, black text. Dangerous buttons keep the neutral color but label `⚠Scary Thing` with `⚠` bold red. | Collapse Button.-primary/-success/-error INTO ONE style (bg ~ `#ffd75f` = xterm 215 / orange fallback, black text). FU-3: this includes the footer command bar (fold `.footer-btn` into the shared style, keeping footer height/density). Danger conveyed by the `[b red]⚠[/]` label prefix, not button color. Update all destructive button labels. | style.css Button variants + .footer-btn; all destructive buttons |
 
 ## Item 7 design (search-as-filter; the biggest change)
 - Today: typing in the search box runs `db_search_sessions` and fills a separate `#search-results`
@@ -58,8 +58,8 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
      same query, applied in render_current_transcript, with a note.
   4. Remove the `#search-results` DataTable entirely (7d) unless a benefit is articulated (none is).
 - This needs: a sidebar `load_data(filter=...)` that prunes non-matching nodes; wiring the search
-  input's Changed/Submitted to re-filter the tree (debounce not required at this scale); and a
-  transcript-line filter in render_current_transcript.
+  input's `Submitted` (Enter ONLY, FU-1; not Changed) to re-filter the tree; and a transcript-line
+  filter in render_current_transcript keyed off the same active query.
 
 ## Design decisions (RESOLVED with maintainer 2026-07-21)
 - B2-08: RESOLVED = REMOVE `^s Search` entirely (the `ctrl+s` binding AND the foot-search button
@@ -81,23 +81,20 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
   drops old entries from the `runs[]` ACTION LOG so they no longer display in the Log tab.
   Cumulative totals are untouched.
 
-## Follow-up questions (raised 2026-07-21; awaiting maintainer before plan-review)
-- FU-1 (search timing): should the tree + transcript re-filter LIVE as the user types (on
-  `Input.Changed`), or only on Enter (`Input.Submitted`)? Live is nicer but re-queries per
-  keystroke. RECOMMEND: filter on Enter (submit); it matches the current "Enter to run" hint and
-  avoids per-keystroke DB work on a large DB.
-- FU-2 (metadata "Project (Dir)"): item 4a says "Project (Dir): /home/.../Fariel.com". The
-  session dict has BOTH `directory` (the session's own dir) and `project_dir`/`worktree` (the
-  owning project's root). Which do you want shown on that line - the project root, or the
-  session directory? (They are often equal but not always.)
-- FU-3 (button theme reach): B2-GEN one-color buttons - apply to ALL buttons including the
-  compact footer command buttons (which currently have their own footer-btn style), or leave the
-  footer bar as-is and only unify the in-pane action/dialog buttons? RECOMMEND: unify in-pane +
-  dialog buttons; keep the footer bar its own (denser) style so the command bar stays distinct.
-- FU-4 (clipboard confirmed available): Textual `App.copy_to_clipboard` EXISTS in the installed
-  version, so B2-11 click-to-copy will be attempted; note it still depends on the terminal
-  supporting OSC-52 (works in most modern terminals; may be a no-op over some SSH setups). No
-  decision needed unless you want a different approach.
+## Follow-up questions (RESOLVED with maintainer 2026-07-21)
+- FU-1 (search timing): RESOLVED = filter ONLY on Enter (`Input.Submitted`), never per-keystroke
+  ("it's slow enough already"). The tree + transcript re-filter on submit.
+- FU-2 (metadata dirs): RESOLVED = show TWO distinct lines: `Project:` = the project root
+  (`project_dir`/`worktree`), and `Directory:` = the session's own dir, placed UNDER `Cost`,
+  and shown ONLY IF it differs from the project dir. If they are equal, omit the `Directory:`
+  line. (Revises the B2-04 field list: Project replaces the old "Project (Dir)"; Directory is
+  conditional and last.)
+- FU-3 (button theme reach): RESOLVED = apply the one-color button theme to ALL buttons,
+  INCLUDING the footer command bar ("consistency is king/queen"). Collapse footer-btn into the
+  shared button style (keeping only the density/height the footer needs). B2-GEN now covers the
+  footer buttons too.
+- FU-4 (clipboard): ACKNOWLEDGED = proceed with click-to-copy; terminal OSC-52 dependency noted,
+  report if it no-ops. No change.
 
 ## Non-goals
 - No DB schema change; no new dependency; no change to CLI behavior except a possibly-new,
