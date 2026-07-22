@@ -6,10 +6,10 @@
   possibly `ocman_tui/core.py` (read-only helpers), `tests/test_tui.py`. Item 12 (log prune by
   age) may need a small `ocman/cli.py` helper (`prune_history_older_than`) IF one does not exist;
   prefer reusing existing history helpers. No DB schema change. No new dependency.
-- Status: reviewed (plan-review applied 2026-07-21; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-21; executing B2-01..B2-15 + B2-GEN)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; a delta
   release-review must cover all the TUI work before rung C).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-21 ("Approved. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -116,6 +116,18 @@ B2-08's `^s` targeted; B2-10a's `parse_duration_to_days` is reused by B2-12; B2-
 every button including the footer buttons that B2-01/B2-02 add/relabel. Splitting would fracture
 these couplings and multiply the regression surface for no benefit. Execution still uses a
 step-granular TodoWrite checklist per item.
+
+- 2026-07-21 (its_direct/pt3-claude-opus-4.8): EXECUTED B2-01..B2-15 + B2-GEN (commits 6f4aa18
+  part 1; 874a9ac part 2). Full suite 489 passed, 2 skipped. Notes: B2-11 click-to-copy uses
+  Textual `copy_to_clipboard` (OSC-52) on the metadata block - works in most terminals, may
+  no-op over some SSH; verify in hand-test. B2-09 metrics use fast PRAGMAs + COUNTs on the mount
+  path (no event-log scan). B2-12 added `prune_history_runs_older_than` (cli.py) keeping
+  cumulative in perpetuity. Search redesign (B2-07) removed `#search-results`; 4 old tests were
+  migrated + `test_tui_clear_history` rewritten for age-prune. Real user config NOT touched
+  (isolated). CAVEATS for hand-test: B2-11 clipboard (terminal-dependent), and the visual items
+  (B2-03a layout, B2-04 metadata, B2-06 transcript padding, B2-08 no ^s, B2-09 metrics,
+  B2-10/12 fields, B2-GEN button color). Plan stays in pending/ until maintainer hand-test
+  sign-off, then git mv -> executed/.
 
 ## Plan-review findings (2026-07-21)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
