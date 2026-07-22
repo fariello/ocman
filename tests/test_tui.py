@@ -309,6 +309,7 @@ async def test_tui_database_admin_widget(tui_db):
     """Test the Database Administration widget metrics refresh."""
     app = OrsessionApp()
     async with app.run_test() as pilot:
+        await pilot.pause()  # let DatabaseAdminWidget.on_mount -> refresh_metrics complete
         db_admin = app.query_one(DatabaseAdminWidget)
         assert db_admin is not None
         
@@ -584,52 +585,55 @@ async def test_tui_app_pruning(tui_db):
 
 @pytest.mark.anyio
 async def test_tui_config_tab(tui_db, tmp_path):
-    """Test TUI configuration settings load, save, reset, and auto-save on submit/change."""
+    """Config OVERLAY (formerly a tab): load on open, auto-save on submit/change, save on
+    dismiss (replaces the old auto-save-on-tab-switch), and Reset to Defaults."""
+    from ocman_tui.app import ConfigOverlay
     app = OrsessionApp()
     async with app.run_test() as pilot:
-        # Switch to config tab
-        app.query_one("TabbedContent").active = "tab-config"
+        # Open the Config overlay (^g / footer button both call this action).
+        app.action_show_config()
         await pilot.pause()
+        assert isinstance(app.screen, ConfigOverlay)
+        overlay = app.screen
 
-        # Check default value is loaded
-        db_input = app.query_one("#cfg-db-path", Input)
+        # Check default value is loaded into the overlay's fields.
+        db_input = overlay.query_one("#cfg-db-path", Input)
         assert db_input.value == str(tui_db)
 
-        # Modify values and trigger auto-save via submit
+        # Modify values and trigger auto-save via submit (the app-level cfg-* handler).
         new_db_path = tmp_path / "new_opencode.db"
         db_input.focus()
         db_input.value = str(new_db_path)
-        
-        # Fire submitted event
         await pilot.press("enter")
         await pilot.pause()
-
-        # Verify configuration was saved to the custom OCMAN_CONFIG_PATH
         config = ocman.load_ocman_config()
         assert config["db_path"] == str(new_db_path)
 
-        # Modify values and test auto-save via tab activation
-        tab_db_path = tmp_path / "tab_opencode.db"
-        db_input.value = str(tab_db_path)
-        app.query_one("TabbedContent").active = "tab-details"
-        await pilot.pause()
-
-        config = ocman.load_ocman_config()
-        assert config["db_path"] == str(tab_db_path)
-
-        # Toggle a checkbox and verify silent auto-save
-        app.query_one("TabbedContent").active = "tab-config"
-        await pilot.pause()
-        keep_temp_check = app.query_one("#cfg-keep-temp", Checkbox)
+        # Toggle a checkbox and verify silent auto-save (cfg-* Changed handler).
+        keep_temp_check = overlay.query_one("#cfg-keep-temp", Checkbox)
         assert keep_temp_check.value is False
         keep_temp_check.focus()
         await pilot.press("space")
         await pilot.pause()
-        
         config = ocman.load_ocman_config()
         assert config["keep_temp"] is True
 
-        # Test Reset to Defaults
+        # SAVE-ON-DISMISS: change a value, dismiss the overlay (^m), and confirm it persisted.
+        # This replaces the old auto-save-on-tab-switch path that no longer exists.
+        dismiss_db_path = tmp_path / "dismiss_opencode.db"
+        db_input.value = str(dismiss_db_path)
+        await pilot.press("ctrl+m")
+        await pilot.pause()
+        assert not isinstance(app.screen, ConfigOverlay)
+        config = ocman.load_ocman_config()
+        assert config["db_path"] == str(dismiss_db_path)
+
+        # Reopen and test Reset to Defaults.
+        app.action_show_config()
+        await pilot.pause()
+        overlay = app.screen
+        assert isinstance(overlay, ConfigOverlay)
+        keep_temp_check = overlay.query_one("#cfg-keep-temp", Checkbox)
         await pilot.click("#btn-reset-config")
         await pilot.pause()
         assert keep_temp_check.value is False
@@ -696,9 +700,9 @@ async def test_tui_storage_doctor_renders_and_totals(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "tab-storage"
+        app.action_show_doctor()
         await pilot.pause()
-        sw = app.query_one(StorageWidget)
+        sw = app.screen.query_one(StorageWidget)
         await _wait_doctor_rows(pilot, sw)
         tbl = sw.query_one("#doctor-table", DataTable)
         assert tbl.row_count > 0
@@ -720,9 +724,9 @@ async def test_tui_storage_no_snapshot_control(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "tab-storage"
+        app.action_show_doctor()
         await pilot.pause()
-        sw = app.query_one(StorageWidget)
+        sw = app.screen.query_one(StorageWidget)
         btn_ids = {b.id for b in sw.query(Button)}
         assert not any("snapshot" in (bid or "") for bid in btn_ids)
         texts = " ".join(str(s.render()) for s in sw.query("Static"))
@@ -737,9 +741,9 @@ async def test_tui_storage_checkpoint_vacuum(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "tab-storage"
+        app.action_show_doctor()
         await pilot.pause()
-        sw = app.query_one(StorageWidget)
+        sw = app.screen.query_one(StorageWidget)
         await _wait_doctor_rows(pilot, sw)
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
@@ -781,9 +785,9 @@ async def test_tui_storage_reclaim_refuses_while_running(tui_db, monkeypatch):
         orig_notify = app.notify
         monkeypatch.setattr(app, "notify",
                             lambda msg, *a, **k: (notes.append((msg, k.get("severity"))), None)[1])
-        app.query_one(TabbedContent).active = "tab-storage"
+        app.action_show_doctor()
         await pilot.pause()
-        sw = app.query_one(StorageWidget)
+        sw = app.screen.query_one(StorageWidget)
         await _wait_doctor_rows(pilot, sw)
         sw.query_one("#btn-reclaim-vacuum", Button).press()
         await pilot.pause()
@@ -876,9 +880,9 @@ async def test_tui_running_tab_renders_instances_and_banner(tui_db, monkeypatch)
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "tab-running"
+        app.action_show_running()
         await pilot.pause()
-        rw = app.query_one(RunningWidget)
+        rw = app.screen.query_one(RunningWidget)
         for _ in range(40):
             if rw.query_one("#running-table", DataTable).row_count > 0:
                 break
@@ -903,9 +907,9 @@ async def test_tui_running_tab_fail_loud(tui_db, monkeypatch):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.query_one(TabbedContent).active = "tab-running"
+        app.action_show_running()
         await pilot.pause()
-        rw = app.query_one(RunningWidget)
+        rw = app.screen.query_one(RunningWidget)
         for _ in range(40):
             if "NOT an all-clear" in str(rw.query_one("#lbl-running-status").render()):
                 break
@@ -1315,3 +1319,119 @@ async def test_tui_prune_worker_error_is_surfaced_not_crashed(tui_db, monkeypatc
             await pilot.pause(0.1)
     assert any(sev == "error" and "boom in cleanup" in msg for msg, sev in notifications), \
         f"expected an error notify surfacing the failure; got {notifications}"
+
+
+# ---------------------------------------------------------------------------
+# Footer command bar + Doctor/Running/Config overlays + sidebar-pane toggle
+# (IPD 20260721-1925-01, TF-01..TF-15)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_tui_footer_bar_buttons_present(tui_db):
+    """The custom footer bar exposes the clickable command buttons."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        for bid in ("foot-sidebar", "foot-update", "foot-search",
+                    "foot-doctor", "foot-running", "foot-config", "foot-main"):
+            assert app.query_one("#" + bid, Button) is not None
+
+
+@pytest.mark.anyio
+async def test_tui_sidebar_pane_toggle_hides_search(tui_db):
+    """Toggling the sidebar hides the whole pane (search box + tree + results), not just the
+    tree, and the footer glyph flips checked/unchecked (TF-15)."""
+    from textual.containers import Vertical
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        pane = app.query_one("#sidebar-pane", Vertical)
+        search = app.query_one("#input-session-search", Input)
+        assert pane.display is True
+        # hide
+        app.action_toggle_sidebar()
+        await pilot.pause()
+        assert pane.display is False
+        assert search.size.width == 0 and search.size.height == 0
+        assert "\u2610" in str(app.query_one("#foot-sidebar", Button).label)
+        # show
+        app.action_toggle_sidebar()
+        await pilot.pause()
+        assert pane.display is True and search.size.width > 0
+        assert "\U0001f5f9" in str(app.query_one("#foot-sidebar", Button).label)
+
+
+@pytest.mark.anyio
+async def test_tui_focus_search_unhides_pane(tui_db):
+    """^s / focus-search un-hides the sidebar pane and focuses the search input."""
+    from textual.containers import Vertical
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.action_toggle_sidebar()  # hide
+        await pilot.pause()
+        assert app.query_one("#sidebar-pane", Vertical).display is False
+        app.action_focus_search()
+        await pilot.pause()
+        assert app.query_one("#sidebar-pane", Vertical).display is True
+        assert app.focused is app.query_one("#input-session-search", Input)
+
+
+@pytest.mark.anyio
+async def test_tui_doctor_running_config_overlays_open_and_close(tui_db):
+    """^d/^r/^g open the Doctor/Running/Config overlays; ^m and Esc return to main."""
+    from ocman_tui.app import DoctorOverlay, RunningOverlay, ConfigOverlay, _FooterOverlay
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Doctor via key
+        await pilot.press("ctrl+d")
+        await pilot.pause()
+        assert isinstance(app.screen, DoctorOverlay)
+        await pilot.press("ctrl+m")  # Main
+        await pilot.pause()
+        assert not isinstance(app.screen, _FooterOverlay)
+        # Running via key, close with Esc
+        await pilot.press("ctrl+r")
+        await pilot.pause()
+        assert isinstance(app.screen, RunningOverlay)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, _FooterOverlay)
+        # Config via key
+        await pilot.press("ctrl+g")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfigOverlay)
+        await pilot.press("ctrl+m")
+        await pilot.pause()
+        assert not isinstance(app.screen, _FooterOverlay)
+
+
+@pytest.mark.anyio
+async def test_tui_removed_tabs_absent(tui_db):
+    """Storage/Running/Config are no longer TabPanes (they are overlays now)."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        tab_ids = {tp.id for tp in app.query("TabPane")}
+        assert "tab-storage" not in tab_ids
+        assert "tab-running" not in tab_ids
+        assert "tab-config" not in tab_ids
+        # the surviving tabs are still there
+        assert "tab-details" in tab_ids and "tab-admin" in tab_ids and "tab-spend" in tab_ids
+
+
+@pytest.mark.anyio
+async def test_tui_config_g_binding_and_quit_intact(tui_db):
+    """^g opens Config (not ^c), and ^q remains the quit binding (not remapped)."""
+    from ocman_tui.app import ConfigOverlay
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("ctrl+g")
+        await pilot.pause()
+        assert isinstance(app.screen, ConfigOverlay)
+        # ^q is still bound to quit
+        quit_keys = {b.key for b in app.BINDINGS if b.action == "quit"}
+        assert "ctrl+q" in quit_keys
+        # nothing binds ctrl+c to an action (freed from the surprising Config mapping)
+        assert not any(b.key == "ctrl+c" for b in app.BINDINGS)

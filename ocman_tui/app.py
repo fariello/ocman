@@ -1018,20 +1018,152 @@ class PostExecutionSummaryModal(ModalScreen[None]):
         self.dismiss()
 
 
+# ---------------------------------------------------------------------------
+# Footer-command overlays: Doctor (Storage), Running, and Config.
+# These were formerly TabPanes; they now open as full-screen overlays reached
+# from the footer command bar (^d / ^r / ^g) and dismissed with ^m / Esc.
+# Each hosts a FRESH widget that self-loads on mount, so no tab-pane state is
+# re-parented (the storage-worker lifecycle stays as-is).
+# ---------------------------------------------------------------------------
+class _FooterOverlay(ModalScreen[None]):
+    """Base for the footer-command overlays: a large centered panel that dismisses
+    on Escape or Ctrl+M (Main)."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss_overlay", "Main", show=False),
+        Binding("ctrl+m", "dismiss_overlay", "Main", show=False),
+    ]
+
+    CSS = """
+    _FooterOverlay {
+        align: center middle;
+    }
+    .overlay-panel {
+        width: 90%;
+        height: 90%;
+        background: #1e1e2e;
+        border: round #cba6f7;
+        padding: 1 2;
+    }
+    .overlay-title {
+        color: #cba6f7;
+        text-style: bold;
+        margin-bottom: 1;
+    }
+    #overlay-close-row {
+        height: auto;
+        align: center middle;
+        margin-top: 1;
+    }
+    """
+
+    title_text: str = "OVERLAY"
+
+    def action_dismiss_overlay(self) -> None:
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-overlay-close":
+            self.dismiss()
+
+
+class DoctorOverlay(_FooterOverlay):
+    """`^d` Doctor: the read-only storage checkup (a fresh StorageWidget)."""
+    title_text = "🩺 STORAGE / DOCTOR CHECKUP  (Esc or ^m to return)"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="overlay-panel"):
+            yield Label(self.title_text, classes="overlay-title")
+            yield StorageWidget()
+            with Horizontal(id="overlay-close-row"):
+                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+
+
+class RunningOverlay(_FooterOverlay):
+    """`^r` Running: observe-only running OpenCode instances (a fresh RunningWidget)."""
+    title_text = "▶ RUNNING OPENCODE INSTANCES  (Esc or ^m to return)"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="overlay-panel"):
+            yield Label(self.title_text, classes="overlay-title")
+            yield RunningWidget()
+            with Horizontal(id="overlay-close-row"):
+                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+
+
+class ConfigOverlay(_FooterOverlay):
+    """`^g` Config: the configuration form. Loads on mount; auto-saves on change
+    (the app-level cfg-* handlers) and, critically, saves on dismiss (replacing the
+    old auto-save-on-tab-switch that no longer fires now that Config is not a tab)."""
+    title_text = "⚙ CONFIGURATION SETTINGS  (Esc or ^m to return)"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="overlay-panel"):
+            yield Label(self.title_text, classes="overlay-title")
+            with VerticalScroll(classes="panel-card"):
+                yield Label("SQLite Database Path:", classes="info-label")
+                yield Input(id="cfg-db-path", placeholder="e.g. ~/.local/share/opencode/opencode.db")
+                yield Label("Historical Metrics JSON Path:", classes="info-label")
+                yield Input(id="cfg-history-path", placeholder="e.g. ~/.local/share/opencode/ocman_history.json")
+                yield Label("Default Output Directory:", classes="info-label")
+                yield Input(id="cfg-out-dir", placeholder="e.g. opencode-recovery")
+                yield Label("Default Backup Directory:", classes="info-label")
+                yield Input(id="cfg-backup-dir", placeholder="e.g. ~/.local/share/opencode/backups")
+                yield Label("Default Compaction Model:", classes="info-label")
+                yield Input(id="cfg-compaction-model", placeholder="e.g. uri/its_direct/pt1-qwen3-32b-us")
+                yield Label("Default Retention Days:", classes="info-label")
+                yield Input(id="cfg-retention-days", placeholder="e.g. 5")
+                yield Checkbox("Keep Temporary Files", value=False, id="cfg-keep-temp")
+                yield Checkbox("Include Tools in Transcripts", value=False, id="cfg-include-tools")
+                yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
+            with Horizontal(id="config-buttons-container"):
+                yield Button("Save Configuration", id="btn-save-config", variant="primary")
+                yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
+            with Horizontal(id="overlay-close-row"):
+                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+
+    def on_mount(self) -> None:
+        # Load current config into THIS overlay's fields.
+        with contextlib.suppress(Exception):
+            self.app.load_tui_config(root=self)
+
+    def action_dismiss_overlay(self) -> None:
+        # Save-on-dismiss: replaces the old auto-save-on-tab-switch path.
+        with contextlib.suppress(Exception):
+            self.app.save_tui_config(notify=False, root=self)
+        self.dismiss()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn-overlay-close":
+            with contextlib.suppress(Exception):
+                self.app.save_tui_config(notify=False, root=self)
+            self.dismiss()
+        elif event.button.id == "btn-save-config":
+            with contextlib.suppress(Exception):
+                self.app.save_tui_config(notify=True, root=self)
+        elif event.button.id == "btn-reset-config":
+            with contextlib.suppress(Exception):
+                self.app.reset_tui_config(root=self)
+
+
 class OrsessionApp(App):
     """The main interactive TUI manager application."""
 
     CSS_PATH = "css/style.css"
 
     BINDINGS = [
+        # Select (space) is NOT priority: it must yield to a focused Input/typing.
         Binding("space", "toggle_select", "Select session", show=False),
-        Binding("ctrl+q", "quit", "Quit", show=False),
-        Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False),
-        Binding("ctrl+u", "refresh_data", "Update", show=False),
-        Binding("ctrl+s", "focus_search", "Search", show=False),
-        Binding("ctrl+d", "show_doctor", "Doctor", show=False),
-        Binding("ctrl+r", "show_running", "Running", show=False),
-        Binding("ctrl+c", "show_config", "Config", show=False),
+        # The footer command keys are priority=True so a focused Input/DataTable (which has its
+        # own ctrl+d/ctrl+u/etc. bindings) cannot swallow them; these are app-global commands.
+        Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
+        Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False, priority=True),
+        Binding("ctrl+u", "refresh_data", "Update", show=False, priority=True),
+        Binding("ctrl+s", "focus_search", "Search", show=False, priority=True),
+        Binding("ctrl+d", "show_doctor", "Doctor", show=False, priority=True),
+        Binding("ctrl+r", "show_running", "Running", show=False, priority=True),
+        Binding("ctrl+g", "show_config", "Config", show=False, priority=True),
+        Binding("ctrl+m", "show_main", "Main", show=False, priority=True),
     ]
 
     # Custom messages
@@ -1146,18 +1278,13 @@ class OrsessionApp(App):
                     with TabPane("Database Admin", id="tab-admin"):
                         yield DatabaseAdminWidget()
 
-                    # Tab: Storage (doctor checkup + guarded reclaim)
-                    with TabPane("Storage", id="tab-storage"):
-                        yield StorageWidget()
+                    # Storage (Doctor), Running, and Config were formerly tabs here; they now
+                    # open as footer-command overlays (^d / ^r / ^g), dismissed with ^m / Esc.
 
                     # Tab: Spend (per-project LLM spend, read-only)
                     with TabPane("Spend", id="tab-spend"):
                         yield SpendWidget()
 
-                    # Tab: Running (running OpenCode instances, observe-only)
-                    with TabPane("Running", id="tab-running"):
-                        yield RunningWidget()
-                    
                     # Tab 4: Models Library
                     with TabPane("Models Library", id="tab-models"):
                         yield ModelsWidget()
@@ -1169,29 +1296,7 @@ class OrsessionApp(App):
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
                             yield Button("Clear Historical Activity Log", id="btn-clear-history-log", variant="error")
 
-                    # Tab 6: Configuration Settings
-                    with TabPane("Configuration Settings", id="tab-config"):
-                        with Vertical():
-                            with VerticalScroll(classes="panel-card"):
-                                yield Label("CONFIGURATION SETTINGS", classes="panel-card-title")
-                                yield Label("SQLite Database Path:", classes="info-label")
-                                yield Input(id="cfg-db-path", placeholder="e.g. ~/.local/share/opencode/opencode.db")
-                                yield Label("Historical Metrics JSON Path:", classes="info-label")
-                                yield Input(id="cfg-history-path", placeholder="e.g. ~/.local/share/opencode/ocman_history.json")
-                                yield Label("Default Output Directory:", classes="info-label")
-                                yield Input(id="cfg-out-dir", placeholder="e.g. opencode-recovery")
-                                yield Label("Default Backup Directory:", classes="info-label")
-                                yield Input(id="cfg-backup-dir", placeholder="e.g. ~/.local/share/opencode/backups")
-                                yield Label("Default Compaction Model:", classes="info-label")
-                                yield Input(id="cfg-compaction-model", placeholder="e.g. uri/its_direct/pt1-qwen3-32b-us")
-                                yield Label("Default Retention Days:", classes="info-label")
-                                yield Input(id="cfg-retention-days", placeholder="e.g. 5")
-                                yield Checkbox("Keep Temporary Files", value=False, id="cfg-keep-temp")
-                                yield Checkbox("Include Tools in Transcripts", value=False, id="cfg-include-tools")
-                                yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
-                            with Horizontal(id="config-buttons-container"):
-                                yield Button("Save Configuration", id="btn-save-config", variant="primary")
-                                yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
+                    # Configuration Settings moved to the ^g Config overlay (ConfigOverlay).
         with Horizontal(id="footer-bar"):
             yield Static("[b]␣[/b] Select", classes="footer-key")
             yield Static("[b]^q[/b] Quit", classes="footer-key")
@@ -1200,7 +1305,8 @@ class OrsessionApp(App):
             yield Button("[b]^s[/b] 🔎 Search", id="foot-search", classes="footer-btn")
             yield Button("[b]^d[/b] 🩺 Doctor", id="foot-doctor", classes="footer-btn")
             yield Button("[b]^r[/b] ▶ Running", id="foot-running", classes="footer-btn")
-            yield Button("[b]^c[/b] ⚙ Config", id="foot-config", classes="footer-btn")
+            yield Button("[b]^g[/b] ⚙ Config", id="foot-config", classes="footer-btn")
+            yield Button("[b]^m[/b] ⌂ Main", id="foot-main", classes="footer-btn")
 
     def on_mount(self) -> None:
         import asyncio
@@ -1223,7 +1329,13 @@ class OrsessionApp(App):
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.populate_compaction_models()
         self.load_audit_trail()
-        self.load_tui_config()
+        # Config fields now live in the ^g Config overlay; ConfigOverlay.on_mount loads them
+        # when the overlay opens (config_loaded flips to True then). Not loaded at app mount.
+        # Refresh the Database Admin metrics once the full tree is mounted. The widget's own
+        # on_mount can fire before its child Statics are queryable (mount ordering), so drive a
+        # deterministic refresh here from the app (mirrors action_refresh_data).
+        with contextlib.suppress(Exception):
+            self.query_one(DatabaseAdminWidget).refresh_metrics()
         with contextlib.suppress(Exception):
             results = self.query_one("#search-results", DataTable)
             results.add_column("Match", width=8)
@@ -1402,10 +1514,9 @@ class OrsessionApp(App):
         with contextlib.suppress(Exception):
             self.query_one("#foot-sidebar", Button).label = self._sidebar_footer_label(pane.display)
 
-    def _activate_tab(self, tab_id: str) -> None:
-        """Switch the workspace TabbedContent to ``tab_id`` (best-effort)."""
-        with contextlib.suppress(Exception):
-            self.query_one(TabbedContent).active = tab_id
+    def _overlay_active(self) -> bool:
+        """True if a footer-command overlay is currently on top of the screen stack."""
+        return isinstance(self.screen, _FooterOverlay)
 
     def action_focus_search(self) -> None:
         """Ensure the sidebar pane is visible and focus the session-search field."""
@@ -1417,16 +1528,33 @@ class OrsessionApp(App):
             self.query_one("#input-session-search", Input).focus()
 
     def action_show_doctor(self) -> None:
-        """Jump to the Storage tab (the read-only doctor checkup lives there)."""
-        self._activate_tab("tab-storage")
+        """Open the Doctor (Storage checkup) overlay."""
+        if not self._overlay_active():
+            self.push_screen(DoctorOverlay())
 
     def action_show_running(self) -> None:
-        """Jump to the Running instances tab."""
-        self._activate_tab("tab-running")
+        """Open the Running-instances overlay."""
+        if not self._overlay_active():
+            self.push_screen(RunningOverlay())
 
     def action_show_config(self) -> None:
-        """Jump to the Configuration Settings tab."""
-        self._activate_tab("tab-config")
+        """Open the Configuration overlay."""
+        if not self._overlay_active():
+            self.push_screen(ConfigOverlay())
+
+    def action_show_main(self) -> None:
+        """Return to the main workspace by dismissing any open footer overlay.
+
+        Delegate to the overlay's own dismiss so per-overlay teardown runs (e.g. the Config
+        overlay saves on dismiss). Falls back to pop_screen if the screen lacks the hook.
+        """
+        if self._overlay_active():
+            screen = self.screen
+            dismisser = getattr(screen, "action_dismiss_overlay", None)
+            if callable(dismisser):
+                dismisser()
+            else:
+                self.pop_screen()
 
     def action_refresh_data(self) -> None:
         self.query_one("#sidebar", SidebarWidget).load_data()
@@ -1668,6 +1796,9 @@ class OrsessionApp(App):
             return
         elif event.button.id == "foot-config":
             self.action_show_config()
+            return
+        elif event.button.id == "foot-main":
+            self.action_show_main()
             return
 
         # Transcript reload controls
@@ -2267,36 +2398,50 @@ class OrsessionApp(App):
         except Exception as e:
             self._safe_call_from_thread(self.app.notify, f"Deletion failed: {e}", severity="error")
 
-    def load_tui_config(self) -> None:
-        """Load TOML configuration settings into input widgets."""
+    def _cfg_root(self, root=None):
+        """Where the #cfg-* widgets live. They now live in the ConfigOverlay screen, not the
+        app's default screen, so App.query_one cannot see them. Query within the overlay when
+        it is open; fall back to self otherwise."""
+        if root is not None:
+            return root
+        if isinstance(self.screen, ConfigOverlay):
+            return self.screen
+        return self
+
+    def load_tui_config(self, root=None) -> None:
+        """Load TOML configuration settings into input widgets (within ``root``, default the
+        open ConfigOverlay)."""
+        q = self._cfg_root(root)
         try:
             config = load_ocman_config()
-            self.query_one("#cfg-db-path", Input).value = str(config.get("db_path", ""))
-            self.query_one("#cfg-history-path", Input).value = str(config.get("history_path", ""))
-            self.query_one("#cfg-out-dir", Input).value = str(config.get("default_out_dir", ""))
-            self.query_one("#cfg-backup-dir", Input).value = str(config.get("default_backup_dir", ""))
-            self.query_one("#cfg-compaction-model", Input).value = str(config.get("default_compaction_model", ""))
-            self.query_one("#cfg-retention-days", Input).value = str(config.get("default_retention_days", ""))
-            self.query_one("#cfg-keep-temp", Checkbox).value = bool(config.get("keep_temp", False))
-            self.query_one("#cfg-include-tools", Checkbox).value = bool(config.get("include_tools", False))
-            self.query_one("#cfg-all-roles", Checkbox).value = bool(config.get("all_roles", False))
+            q.query_one("#cfg-db-path", Input).value = str(config.get("db_path", ""))
+            q.query_one("#cfg-history-path", Input).value = str(config.get("history_path", ""))
+            q.query_one("#cfg-out-dir", Input).value = str(config.get("default_out_dir", ""))
+            q.query_one("#cfg-backup-dir", Input).value = str(config.get("default_backup_dir", ""))
+            q.query_one("#cfg-compaction-model", Input).value = str(config.get("default_compaction_model", ""))
+            q.query_one("#cfg-retention-days", Input).value = str(config.get("default_retention_days", ""))
+            q.query_one("#cfg-keep-temp", Checkbox).value = bool(config.get("keep_temp", False))
+            q.query_one("#cfg-include-tools", Checkbox).value = bool(config.get("include_tools", False))
+            q.query_one("#cfg-all-roles", Checkbox).value = bool(config.get("all_roles", False))
             self.config_loaded = True
         except Exception as e:
             self.notify(f"Failed to load configuration: {e}", severity="error")
 
-    def save_tui_config(self, notify: bool = True) -> None:
-        """Save form field values back to the TOML configuration file."""
+    def save_tui_config(self, notify: bool = True, root=None) -> None:
+        """Save form field values back to the TOML configuration file (querying within
+        ``root``, default the open ConfigOverlay)."""
         if not getattr(self, "config_loaded", False):
             return
+        q = self._cfg_root(root)
         try:
-            db_path = self.query_one("#cfg-db-path", Input).value.strip()
-            history_path = self.query_one("#cfg-history-path", Input).value.strip()
-            out_dir = self.query_one("#cfg-out-dir", Input).value.strip()
-            backup_dir = self.query_one("#cfg-backup-dir", Input).value.strip()
-            compaction_model = self.query_one("#cfg-compaction-model", Input).value.strip()
+            db_path = q.query_one("#cfg-db-path", Input).value.strip()
+            history_path = q.query_one("#cfg-history-path", Input).value.strip()
+            out_dir = q.query_one("#cfg-out-dir", Input).value.strip()
+            backup_dir = q.query_one("#cfg-backup-dir", Input).value.strip()
+            compaction_model = q.query_one("#cfg-compaction-model", Input).value.strip()
 
             try:
-                retention_days = int(self.query_one("#cfg-retention-days", Input).value.strip())
+                retention_days = int(q.query_one("#cfg-retention-days", Input).value.strip())
             except ValueError:
                 if notify:
                     self.notify("Retention Days must be an integer.", severity="error")
@@ -2309,9 +2454,9 @@ class OrsessionApp(App):
                 "default_compaction_model": compaction_model,
                 "default_backup_dir": backup_dir,
                 "default_retention_days": retention_days,
-                "keep_temp": self.query_one("#cfg-keep-temp", Checkbox).value,
-                "include_tools": self.query_one("#cfg-include-tools", Checkbox).value,
-                "all_roles": self.query_one("#cfg-all-roles", Checkbox).value,
+                "keep_temp": q.query_one("#cfg-keep-temp", Checkbox).value,
+                "include_tools": q.query_one("#cfg-include-tools", Checkbox).value,
+                "all_roles": q.query_one("#cfg-all-roles", Checkbox).value,
             }
 
             save_ocman_config(config)
@@ -2338,8 +2483,8 @@ class OrsessionApp(App):
             if notify:
                 self.notify(f"Failed to save configuration: {e}", severity="error")
 
-    def reset_tui_config(self) -> None:
-        """Reset form inputs to defaults and save."""
+    def reset_tui_config(self, root=None) -> None:
+        """Reset form inputs to defaults and save (reloading fields within ``root``)."""
         try:
             save_ocman_config(DEFAULT_CONFIG)
 
@@ -2348,7 +2493,7 @@ class OrsessionApp(App):
             ocman.OPENCODE_DB_PATH = Path(DEFAULT_CONFIG["db_path"]).expanduser()
             ocman.OPENCODE_HISTORY_PATH = Path(DEFAULT_CONFIG["history_path"]).expanduser()
 
-            self.load_tui_config()
+            self.load_tui_config(root=root)
             self.notify("Configuration reset to defaults.", severity="information")
 
             self.query_one("#sidebar", SidebarWidget).load_data()
@@ -2373,9 +2518,9 @@ class OrsessionApp(App):
             self.save_tui_config(notify=False)
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
-        """Auto-save configuration settings when switching tabs."""
-        if getattr(self, "config_loaded", False):
-            self.save_tui_config(notify=False)
+        """No-op: configuration is no longer a tab. The ^g Config overlay saves on change
+        and on dismiss (ConfigOverlay), so switching workspace tabs must not touch config."""
+        return
 
     def _safe_call_from_thread(self, callback, *args, **kwargs) -> None:
         """Marshal ``callback`` onto the UI thread, tolerating a stopped app.
