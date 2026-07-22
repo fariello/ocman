@@ -40,7 +40,7 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 | B2-10b | Add a units help line: h/d/w/mo/y | Static help label under the field. | database.py |
 | B2-10c | Label the non-descript operation text boxes | Add labels/hints for each operation input. | database.py operations card |
 | B2-11 | Allow selecting/copying text (Model, Transcript, SESSION METADATA) | RESOLVED "do what you can": attempt click-to-copy on metadata values + model via Textual `App.copy_to_clipboard` + a confirming toast. If the installed Textual has no working clipboard path (or SSH/no OSC-52), do NOT fake it: leave plain text and REPORT that copy is unavailable + why. Verify capability in execution. | Textual copy_to_clipboard availability |
-| B2-12 | Activity Log: replace "Clear Historical Activity Log" with "Delete entries older than [box] days" + [DELETE] with confirm | New input + Delete button -> confirm modal -> prune `runs[]` older than N days ONLY. RESOLVED: `cumulative` historical spend/metadata is KEPT in perpetuity (NOT recomputed), so `spend --historical` is unchanged; only old action-log entries stop displaying. Needs a runs-only prune helper. | app.py clear-history-log button; cli.py _load/_save_history |
+| B2-12 | Log tab: replace "Clear Historical Activity Log" with a "Clean Older Than:" duration prune + [DELETE] with confirm | UPDATED (item 12a): use the EXACT SAME time approach as B2-10a/b in Database Operations - a `Clean Older Than: [5-char box] (example: 2h or 3mo)` field + the same `h = hours, d = days, w = weeks, mo = months, y = years` legend line + the SAME shared duration parser. A [DELETE] button opens a confirm modal, then prunes `runs[]` older than the parsed cutoff ONLY. RESOLVED: `cumulative` historical spend/metadata is KEPT in perpetuity (NOT recomputed), so `spend --historical` is unchanged; only old action-log entries stop displaying. Needs a runs-only prune helper that takes the same cutoff. | app.py clear-history-log button; cli.py _load/_save_history; shared duration parser (B2-10a) |
 | B2-13 | Rename "Actions & Recovery" -> "Actions" | TabPane title. | app.py:1231 |
 | B2-14 | Rename "Activity Log" -> "Log" | TabPane title. | app.py "Activity Log" |
 | B2-15 | Actions -> LLM COMPACTION RUNNER: "Est Cost: Config load error" | update_estimated_cost catches all exceptions -> "Config load error" (app.py:1803-1807). Diagnose the real load_opencode_config failure (surface the actual error, and fix the cause; likely no compatible model / no api_key/base_url). | app.py:1795-1807 |
@@ -77,9 +77,11 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
   reuse doctor/storage's already-bounded queries and MUST NOT put a full event-log scan on the
   synchronous mount path (run heavy bits in the existing worker pattern if needed).
 - B2-12: RESOLVED = the historical `cumulative` spend/metadata is kept IN PERPETUITY (never
-  recomputed/reduced by a log prune, so `spend --historical` is unchanged). The age-prune ONLY
+  recomputed/reduced by a log prune, so `spend --historical` is unchanged). The prune ONLY
   drops old entries from the `runs[]` ACTION LOG so they no longer display in the Log tab.
-  Cumulative totals are untouched.
+  Cumulative totals are untouched. UPDATED (item 12a): the cutoff is entered with the SAME
+  "Clean Older Than:" duration field + legend + shared parser as Database Operations (B2-10a/b),
+  NOT a plain "N days" box.
 
 ## Follow-up questions (RESOLVED with maintainer 2026-07-21)
 - FU-1 (search timing): RESOLVED = filter ONLY on Enter (`Input.Submitted`), never per-keystroke
@@ -105,7 +107,8 @@ record with a "timestamp"..} ]}` (not line-oriented). Confirmed run records carr
 - `PYTHONPATH=. pytest -q` full suite green; paste ACTUAL output. Every TUI test isolates
   `OCMAN_CONFIG_PATH` (never write the real user config).
 - New/updated tests: B2-05 (search-select updates metadata), B2-07 (tree filters to matches;
-  no #search-results widget), B2-12 (age-prune keeps newer runs, drops older, confirm modal),
+  no #search-results widget), B2-12 (duration-string prune keeps newer runs, drops older,
+  confirm modal, cumulative untouched; parses 2h/3mo via the shared B2-10a parser),
   B2-13/14 (tab titles), B2-15 (est-cost path surfaces a real reason, not a generic error),
   B2-GEN (all buttons share one style class; destructive labels carry the warn glyph),
   B2-01/02 (footer quit/select clickable; glyph-label spacing), B2-11 (copy action fires a toast).
