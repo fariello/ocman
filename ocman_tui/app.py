@@ -52,6 +52,7 @@ from .core import (
     SESSION_RELATIONAL_TABLES,
     get_db_path,
     truncate_turns_by_interactions,
+    truncate_turns_by_lines,
     db_create_rollback_backup,
     db_restore_rollback_backup,
     move_directory_structure,
@@ -1030,8 +1031,9 @@ class _FooterOverlay(ModalScreen[None]):
     on Escape or Ctrl+M (Main)."""
 
     BINDINGS = [
+        # Esc dismisses the overlay. No ctrl+m: in many terminals ctrl+m IS Enter (CR),
+        # so binding it risked hijacking Enter. The footer "Esc Main" button is the click path.
         Binding("escape", "dismiss_overlay", "Main", show=False),
-        Binding("ctrl+m", "dismiss_overlay", "Main", show=False),
     ]
 
     CSS = """
@@ -1076,7 +1078,7 @@ class DoctorOverlay(_FooterOverlay):
             yield Label(self.title_text, classes="overlay-title")
             yield StorageWidget()
             with Horizontal(id="overlay-close-row"):
-                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
 
 class RunningOverlay(_FooterOverlay):
@@ -1088,7 +1090,7 @@ class RunningOverlay(_FooterOverlay):
             yield Label(self.title_text, classes="overlay-title")
             yield RunningWidget()
             with Horizontal(id="overlay-close-row"):
-                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
 
 class ConfigOverlay(_FooterOverlay):
@@ -1120,7 +1122,7 @@ class ConfigOverlay(_FooterOverlay):
                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
                 yield Button("Reset to Defaults", id="btn-reset-config", variant="error")
             with Horizontal(id="overlay-close-row"):
-                yield Button("Main (^m)", id="btn-overlay-close", variant="primary")
+                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
     def on_mount(self) -> None:
         # Load current config into THIS overlay's fields.
@@ -1163,7 +1165,8 @@ class OrsessionApp(App):
         Binding("ctrl+d", "show_doctor", "Doctor", show=False, priority=True),
         Binding("ctrl+r", "show_running", "Running", show=False, priority=True),
         Binding("ctrl+g", "show_config", "Config", show=False, priority=True),
-        Binding("ctrl+m", "show_main", "Main", show=False, priority=True),
+        # No ctrl+m for Main: ctrl+m == Enter (CR) in many terminals. Overlays close with Esc
+        # (or the footer/overlay "Esc Main" button); the main screen has no overlay to close.
     ]
 
     # Custom messages
@@ -1201,7 +1204,7 @@ class OrsessionApp(App):
             with Container(id="workspace"):
                 with TabbedContent():
                     # Tab 1: Details & Transcript
-                    with TabPane("Details & Transcript", id="tab-details"):
+                    with TabPane("Details", id="tab-details"):
                         with Vertical():
                             # Metadata grid
                             with Vertical(classes="panel-card"):
@@ -1219,6 +1222,7 @@ class OrsessionApp(App):
                                     yield Label("FORMAT CONTROLS", classes="panel-card-title")
                                     yield Checkbox("Include Tools", value=False, id="check-include-tools")
                                     yield Checkbox("All Roles", value=False, id="check-all-roles")
+                                    yield Checkbox("Full lines", value=False, id="check-full-lines")
                                     yield Label("Max Interactions:", classes="info-label")
                                     yield Input("100", id="input-max-interactions")
                                     yield Label("Max Lines:", classes="info-label")
@@ -1275,7 +1279,7 @@ class OrsessionApp(App):
                                                  disabled=True)
                     
                     # Tab 3: Database Admin
-                    with TabPane("Database Admin", id="tab-admin"):
+                    with TabPane("Database", id="tab-admin"):
                         yield DatabaseAdminWidget()
 
                     # Storage (Doctor), Running, and Config were formerly tabs here; they now
@@ -1286,7 +1290,7 @@ class OrsessionApp(App):
                         yield SpendWidget()
 
                     # Tab 4: Models Library
-                    with TabPane("Models Library", id="tab-models"):
+                    with TabPane("Models", id="tab-models"):
                         yield ModelsWidget()
 
                     # Tab 5: Activity Log
@@ -1306,7 +1310,7 @@ class OrsessionApp(App):
             yield Button("[b]^d[/b] 🩺 Doctor", id="foot-doctor", classes="footer-btn")
             yield Button("[b]^r[/b] ▶ Running", id="foot-running", classes="footer-btn")
             yield Button("[b]^g[/b] ⚙ Config", id="foot-config", classes="footer-btn")
-            yield Button("[b]^m[/b] ⌂ Main", id="foot-main", classes="footer-btn")
+            yield Button("⌂ Main", id="foot-main", classes="footer-btn")
 
     def on_mount(self) -> None:
         import asyncio
@@ -1651,11 +1655,33 @@ class OrsessionApp(App):
                 # Export now supports projects too (a project .ocbox bundle).
                 self.query_one("#btn-export-session", Button).disabled = False
 
+    @staticmethod
+    def _model_display(raw) -> str:
+        """Return just the model id for display.
+
+        The DB `session.model` field is usually a JSON object like
+        {"id": "...", "providerID": "..."}; show only the id (not the provider suffix the CLI
+        adds). Older rows may store a plain string; show it as-is. Empty -> 'N/A'.
+        """
+        if not raw:
+            return "N/A"
+        text = str(raw).strip()
+        if text.startswith("{"):
+            try:
+                import json
+                obj = json.loads(text)
+                if isinstance(obj, dict):
+                    return str(obj.get("id") or obj.get("modelID") or text) or "N/A"
+            except Exception:
+                pass
+        return text
+
     def update_metadata_view(self, s: dict) -> None:
         """Update the top metadata card with session info."""
+        model_disp = self._model_display(s.get("model"))
         metadata_str = (
             f"Title:   [bold]{s.get('title', '(untitled)')}[/]\n"
-            f"ID:      {s.get('id', 'N/A')}  |  Model: {s.get('model', 'N/A')}  |  Cost: ${s.get('cost', 0.0):.4f}\n"
+            f"ID:      {s.get('id', 'N/A')}  |  Model: {model_disp}  |  Cost: ${s.get('cost', 0.0):.4f}\n"
             f"Created: {s.get('created', 'N/A')}  |  Updated: {s.get('updated', 'N/A')}\n"
             f"Dir:     {s.get('directory', 'N/A')}"
         )
@@ -1720,11 +1746,16 @@ class OrsessionApp(App):
         # Fetch control filter configurations
         include_tools = self.query_one("#check-include-tools", Checkbox).value
         all_roles = self.query_one("#check-all-roles", Checkbox).value
-        
+        full_lines = self.query_one("#check-full-lines", Checkbox).value
+
         try:
             max_interactions = int(self.query_one("#input-max-interactions", Input).value)
         except ValueError:
             max_interactions = 100
+        try:
+            max_lines = int(self.query_one("#input-max-lines", Input).value)
+        except ValueError:
+            max_lines = 2500
 
         # Filter turns
         turns = self.current_turns
@@ -1736,15 +1767,29 @@ class OrsessionApp(App):
         # Consolidate sequential roles
         turns = consolidate_turns(turns)
 
-        # Truncate
+        # Truncate by interactions
         if max_interactions > 0:
             turns = truncate_turns_by_interactions(turns, max_interactions)
+
+        # PB-06: by default show CLI-style TRUNCATED lines (per the "Max Lines" budget); only
+        # when "Full lines" is toggled do we render every line, and then warn if the rendered
+        # transcript is very large.
+        if not full_lines and max_lines > 0:
+            turns = truncate_turns_by_lines(turns, max_lines)
 
         # Estimate compaction cost info based on chosen model
         self.update_estimated_cost(turns)
 
         # Render Markdown
         transcript_markdown = render_transcript(turns, self.selected_session_title)
+        if full_lines:
+            line_count = transcript_markdown.count("\n") + 1
+            if line_count > 2500:
+                self.app.notify(
+                    f"Full transcript is {line_count:,} lines (over 2,500). Untick 'Full lines' "
+                    "to show truncated lines.",
+                    severity="warning",
+                )
         self.query_one("#transcript-md", Markdown).update(transcript_markdown)
 
     def update_estimated_cost(self, turns: list) -> None:

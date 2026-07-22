@@ -81,34 +81,81 @@ Tab.--active {
     text-style: bold;
 }
 
-/* Forms, Fields and Inputs */
+/* Forms, Fields and Inputs
+   PB-08 (accessibility): high-contrast text on a lighter field so values are readable in dark
+   mode. PB-10: no vertical padding, at most 1 col horizontal. A `tall` border makes an Input 3
+   rows and can clip 1-row text, so we drop the border in favour of a solid field + a bright
+   left focus bar, keeping the field a single readable row. */
 Input {
-    background: #313244;
-    color: #cdd6f4;
-    border: tall #45475a;
+    background: #45475a;
+    color: #f5f5f5;
+    border: none;
+    height: 1;
+    padding: 0 1;
+    margin: 0;
 }
 
 Input:focus {
-    border: tall #cba6f7;
+    background: #585b70;
+    color: #ffffff;
+    border-left: thick #cba6f7;
+}
+
+Input > .input--placeholder {
+    color: #bac2de;
 }
 
 Select {
-    background: #313244;
-    color: #cdd6f4;
-    border: tall #45475a;
+    background: #45475a;
+    color: #f5f5f5;
+    border: none;
+    height: 1;
+    padding: 0 1;
+    margin: 0;
 }
 
 Select:focus {
-    border: tall #cba6f7;
+    background: #585b70;
+    color: #ffffff;
+    border-left: thick #cba6f7;
 }
 
 Checkbox {
-    color: #a6adc8;
+    color: #cdd6f4;
     background: transparent;
+    height: 1;
+    padding: 0 1;
+    margin: 0;
 }
 
 Checkbox:focus {
     color: #cba6f7;
+}
+
+/* PB-02: status toasts colored like the CLI (green info / yellow warn / red error). */
+Toast {
+    padding: 0 1;
+}
+Toast.-information {
+    border-left: thick #a6e3a1;
+}
+Toast.-information .toast--title {
+    color: #a6e3a1;
+    text-style: bold;
+}
+Toast.-warning {
+    border-left: thick #f9e2af;
+}
+Toast.-warning .toast--title {
+    color: #f9e2af;
+    text-style: bold;
+}
+Toast.-error {
+    border-left: thick #f38ba8;
+}
+Toast.-error .toast--title {
+    color: #f38ba8;
+    text-style: bold;
 }
 
 Checkbox > .checkbox--box {
@@ -120,24 +167,27 @@ Checkbox > .checkbox--box.--checked {
 }
 
 /* Buttons */
+/* PB-10: compact buttons - no vertical padding/margin, 1 col horizontal. A `tall` border
+   forces height 3; drop it for a 1-row button with a solid background. */
 Button {
-    background: #313244;
-    color: #cdd6f4;
-    border: tall #45475a;
+    background: #45475a;
+    color: #f5f5f5;
+    border: none;
+    height: 1;
     text-style: bold;
-    margin: 1 2;
+    margin: 0 1;
+    padding: 0 1;
 }
 
 Button:hover {
-    background: #45475a;
+    background: #585b70;
     color: #f5c2e7;
-    border: tall #f5c2e7;
 }
 
 Button.-primary {
     background: #89b4fa;
     color: #11111b;
-    border: tall #b4befe;
+    border: none;
 }
 
 Button.-primary:hover {
@@ -148,7 +198,7 @@ Button.-primary:hover {
 Button.-success {
     background: #a6e3a1;
     color: #11111b;
-    border: tall #94e2d5;
+    border: none;
 }
 
 Button.-success:hover {
@@ -159,7 +209,7 @@ Button.-success:hover {
 Button.-error {
     background: #f38ba8;
     color: #11111b;
-    border: tall #f9e2af;
+    border: none;
 }
 
 Button.-error:hover {
@@ -317,4 +367,27 @@ ModalScreen {
 #footer-bar Button {
     height: 1;
     border: none;
+}
+
+/* PB-03 / PB-04a: let the Spend and Models tables fill the space below their top controls. */
+#spend-table {
+    height: 1fr;
+}
+#models-table {
+    height: 1fr;
+}
+
+/* PB-07b: tighter Database metrics rows (one row each, no inter-row gap). */
+#metrics-fields {
+    height: auto;
+}
+#metrics-fields Horizontal {
+    height: 1;
+    margin: 0;
+}
+#metrics-fields .info-label,
+#metrics-fields .info-value {
+    height: 1;
+    margin: 0;
+    padding: 0 1 0 0;
 }

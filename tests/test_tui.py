@@ -622,7 +622,7 @@ async def test_tui_config_tab(tui_db, tmp_path):
         # This replaces the old auto-save-on-tab-switch path that no longer exists.
         dismiss_db_path = tmp_path / "dismiss_opencode.db"
         db_input.value = str(dismiss_db_path)
-        await pilot.press("ctrl+m")
+        await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, ConfigOverlay)
         config = ocman.load_ocman_config()
@@ -1387,7 +1387,7 @@ async def test_tui_doctor_running_config_overlays_open_and_close(tui_db):
         await pilot.press("ctrl+d")
         await pilot.pause()
         assert isinstance(app.screen, DoctorOverlay)
-        await pilot.press("ctrl+m")  # Main
+        await pilot.press("escape")  # Main (Esc)
         await pilot.pause()
         assert not isinstance(app.screen, _FooterOverlay)
         # Running via key, close with Esc
@@ -1401,7 +1401,7 @@ async def test_tui_doctor_running_config_overlays_open_and_close(tui_db):
         await pilot.press("ctrl+g")
         await pilot.pause()
         assert isinstance(app.screen, ConfigOverlay)
-        await pilot.press("ctrl+m")
+        await pilot.press("escape")
         await pilot.pause()
         assert not isinstance(app.screen, _FooterOverlay)
 
@@ -1435,3 +1435,76 @@ async def test_tui_config_g_binding_and_quit_intact(tui_db):
         assert "ctrl+q" in quit_keys
         # nothing binds ctrl+c to an action (freed from the surprising Config mapping)
         assert not any(b.key == "ctrl+c" for b in app.BINDINGS)
+
+
+# ---------------------------------------------------------------------------
+# TUI polish batch (IPD 20260721-2138-01, PB-01..PB-10)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_tui_no_ctrl_m_binding_esc_dismisses(tui_db):
+    """PB-01: ctrl+m is gone (it collides with Enter); Esc dismisses overlays; footer relabeled."""
+    from ocman_tui.app import DoctorOverlay, _FooterOverlay
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert not any(b.key == "ctrl+m" for b in app.BINDINGS)
+        assert "Main" in str(app.query_one("#foot-main", Button).label)
+        app.action_show_doctor()
+        await pilot.pause()
+        assert isinstance(app.screen, DoctorOverlay)
+        # the overlay has no ctrl+m binding either
+        assert not any(b.key == "ctrl+m" for b in app.screen.BINDINGS)
+        await pilot.press("escape")
+        await pilot.pause()
+        assert not isinstance(app.screen, _FooterOverlay)
+
+
+@pytest.mark.anyio
+async def test_tui_tab_titles_renamed(tui_db):
+    """PB-04b/05b/07a: Details, Database, Models tab titles."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        labels = {str(t.label) for t in app.query("Tab")}
+        assert "Details" in labels
+        assert "Database" in labels
+        assert "Models" in labels
+        assert "Details & Transcript" not in labels
+        assert "Database Admin" not in labels
+        assert "Models Library" not in labels
+
+
+@pytest.mark.anyio
+async def test_tui_full_lines_checkbox_present(tui_db):
+    """PB-06: the transcript controls include a 'Full lines' checkbox, default off (truncated)."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        cb = app.query_one("#check-full-lines", Checkbox)
+        assert cb.value is False  # default = truncated (CLI-style)
+
+
+def test_tui_model_display_helper():
+    """PB-09: session metadata shows the bare model id, not JSON (and tolerates plain strings)."""
+    assert OrsessionApp._model_display('{"id": "gpt-x", "providerID": "openai"}') == "gpt-x"
+    assert OrsessionApp._model_display("plain-model-id") == "plain-model-id"
+    assert OrsessionApp._model_display("") == "N/A"
+    assert OrsessionApp._model_display(None) == "N/A"
+    # malformed JSON falls back to the raw (stripped) text
+    assert OrsessionApp._model_display('{"id": ') == '{"id":'
+
+
+def test_tui_accessibility_css_present():
+    """PB-02/08/10 regression guard: the status-toast colors, high-contrast inputs, and compact
+    (zero-vertical-padding) widget rules are present in the stylesheet, so a later edit cannot
+    silently revert the accessibility fix."""
+    from pathlib import Path as _P
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    # PB-02 toast colors
+    assert "Toast.-information" in css and "Toast.-warning" in css and "Toast.-error" in css
+    # PB-08 high-contrast input text
+    assert "#f5f5f5" in css
+    # PB-10 compact controls (no tall border on Input/Button -> height 1)
+    assert "height: 1;" in css
+    # PB-03/04a fill tables
+    assert "#spend-table" in css and "#models-table" in css
