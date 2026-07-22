@@ -5,7 +5,7 @@
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{spend,models,database}.py`
   (layout heights), `tests/test_tui.py`. No `ocman/cli.py` change. No DB schema change. No new
   dependency.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (plan-review applied 2026-07-21; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused; a delta
   release-review must cover this + the footer/overlay work before rung C resumes).
 - Approval: awaiting maintainer review/approval
@@ -14,6 +14,21 @@
 ## Workflow history
 - 2026-07-21 (its_direct/pt3-claude-opus-4.8): 10 refinements raised by the maintainer after
   hand-testing the footer/overlay work (IPD 20260721-1925-01). Captured here as one polish batch.
+- 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-101..PR-104. Verified all path:line claims against code (no toast CSS; truncate_turns_by_lines
+  imported-but-unused; CLI model-json parse; tab titles; table ids). Revisions: PB-06 now pins
+  take-effect via the existing Refresh-View button (existing checkboxes do not auto-re-render,
+  app.py:2515) + counts RENDERED-markdown lines; PB-09 pins bare id only (not the CLI providerID
+  suffix) + non-JSON fallback; PB-08/PB-10 gain a CSS-presence regression-guard test. Both prior
+  decisions resolved (PB-01 Esc, PB-06 2500). Status -> reviewed; GO - PENDING HUMAN APPROVAL.
+
+## Plan-review findings
+| ID | Sev | Scope | Area | Evidence | Finding | Decision |
+|----|-----|-------|------|----------|---------|----------|
+| PR-101 | MEDIUM | UNDER-SCOPE | F/UX | app.py:2515,1805 | PB-06 did not state how "Full lines" takes effect; existing transcript checkboxes only re-render on Refresh View | FIXED (pinned to Refresh-View pattern) |
+| PR-102 | MEDIUM | UNDER-SCOPE | A/correctness | app.py:1747 | "2500 lines" unit ambiguous | FIXED (count rendered-markdown newlines) |
+| PR-103 | LOW | IN-SCOPE | F/UX | cli.py:12905 | "id only" could accidentally copy CLI's `id (providerID)` + no non-JSON fallback | FIXED (bare id + fallback specified) |
+| PR-104 | MEDIUM | UNDER-SCOPE | E/testing | style.css:85 | PB-08/PB-10 visual-only, no regression guard | FIXED (CSS-presence test added) |
 
 ## Goal / itemized requirements
 
@@ -28,11 +43,11 @@ Each maintainer item mapped to a requirement with evidence and approach:
 | PB-04b | Rename "Models Library" -> "Models" | TabPane title string | app.py TabPane "Models Library" |
 | PB-05a | Details & Transcript transcript fills space | transcript area height 1fr | app.py transcript-area/#transcript-md |
 | PB-05b | Rename "Details & Transcript" -> "Details" | TabPane title string | app.py:1068 |
-| PB-06 | Transcript shows CLI-style TRUNCATED lines unless user toggles "Full lines"; warn if >2500 lines | Add a "Full lines" Checkbox (default off). Off => apply the CLI per-line truncation (`truncate_turns_by_lines`, already imported in core). On => full render; if the full render exceeds 2500 lines, show a warning notify (threshold DECIDED: 2500). | render_current_transcript app.py:1714; core imports truncate_turns_by_lines |
+| PB-06 | Transcript shows CLI-style TRUNCATED lines unless user toggles "Full lines"; warn if >2500 lines | Add a "Full lines" Checkbox (default off) NEXT TO the existing Include-Tools/All-Roles checkboxes. It takes effect the SAME way those do: on the existing "Refresh View" button (they do NOT auto-re-render; see on_checkbox_changed app.py:2515 which only handles cfg-* config checkboxes). In render_current_transcript: OFF => apply `truncate_turns_by_lines(turns, <max_lines>)` (max_lines from the existing "Max Lines" input, default 2500); ON => render full, then if the rendered markdown line count (`transcript_markdown.count(chr(10))`) exceeds 2500, emit a warning notify. Line count is the RENDERED-markdown lines, matching what the user sees. | render_current_transcript app.py:1714; truncate_turns_by_lines imported core.py:41; checkboxes re-render only via btn-refresh-transcript app.py:1805 |
 | PB-07a | "Database Admin" -> "Database" | TabPane title | app.py:1271 "Database Admin" |
 | PB-07b | Database rows less separated | reduce vertical margins/padding on the admin metric rows | database.py Horizontal rows |
 | PB-08 | Text boxes hard to read in dark mode (accessibility) | Raise Input text/background contrast: brighter text (#cdd6f4 on a lighter field, or a higher-contrast pairing), placeholder contrast too. Applies to Input AND Select AND cfg-* fields. This is a GUIDING-PRINCIPLE (accessibility) fix. | style.css:85-92 Input |
-| PB-09 | Details -> Session Metadata: model should be just the model id, not JSON | `s['model']` is a JSON blob (`{"id":...,"providerID":...}`); parse like the CLI does and show the id only. | app.py:1658 raw s.get('model'); CLI parses at cli.py:12903-12905 |
+| PB-09 | Details -> Session Metadata: model should be just the model id, not JSON | Parse `s['model']` with a small helper: JSON dict => show ONLY `obj.get("id")` (NOT the CLI's `id (providerID)` form; maintainer wants the bare id); plain non-JSON string (older rows) => show as-is; empty => "N/A". Robust to malformed JSON. | app.py:1658 raw s.get('model'); CLI uses the providerID suffix (which we do NOT copy) at cli.py:12903-12905 |
 | PB-10 | All buttons + text boxes: no top/bottom padding, at most 1 space left/right | Global rule: `Button, Input, Select { padding: 0 1; margin: 0; }` (audit for height:3 defaults on Button). Reconcile with the footer buttons (already height 1). | style.css Input/Button/Select |
 
 ## Design decisions (RESOLVED with maintainer 2026-07-21)
@@ -56,9 +71,12 @@ Each maintainer item mapped to a requirement with evidence and approach:
 - `PYTHONPATH=. pytest -q` full suite green (paste ACTUAL runner output). Isolate config via
   `OCMAN_CONFIG_PATH` in any TUI test so the REAL user config is never written (a prior run
   clobbered `~/.config/opencode/ocman.toml`; do not repeat).
-- New/updated tests: PB-01 (new Main key works, Enter NOT hijacked), PB-06 (truncated by default,
-  full-lines toggle, >5000 warning), PB-09 (metadata shows model id not JSON), PB-05b/04b/07a
-  (tab titles), PB-03/04a/05a (table/transcript height 1fr present).
+- New/updated tests: PB-01 (Esc dismisses overlay; no `ctrl+m` binding remains; footer button
+  relabeled), PB-06 (truncated by default; Full-lines checkbox exists; full render >2500 lines
+  emits a warning notify), PB-09 (metadata shows bare model id, not JSON, and tolerates a plain
+  string), PB-05b/04b/07a (tab titles renamed), PB-03/04a/05a (table/transcript height 1fr),
+  PB-08/PB-10 (regression guard: assert the Input/Button contrast + zero-vertical-padding CSS
+  rules are present, so a later edit cannot silently revert the accessibility fix).
 - Headless pilot smoke of the renamed tabs + overlays still open/close.
 - No em/en dash in authored prose.
 - Manual accessibility check (PB-08/PB-10): maintainer hand-test confirms text is readable and
