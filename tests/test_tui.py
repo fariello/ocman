@@ -298,7 +298,7 @@ async def test_tui_app_startup(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         # Check app metadata title
-        assert "Ocman TUI" in app.title
+        assert "OCMan (OpenCode Manager)" in app.title
 
         # Check that sidebar widget is compose-loaded
         sidebar = app.query_one("#sidebar", SidebarWidget)
@@ -1656,3 +1656,94 @@ async def test_tui_log_prune_controls_visible(tui_db):
         assert legend.region.height > 0 and legend.region.width > 0, "legend not rendered"
         assert legend.region.y < 40, "legend off-screen"
         assert "h = hours" in str(legend.render())
+
+
+# ---------------------------------------------------------------------------
+# TUI polish batch 3 (IPD 20260722-1800-01, B3-01..B3-11; B3-09 dropped)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_tui_search_input_one_row(tui_db):
+    """B3-08: the search/filter input is one row high."""
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.query_one("#input-session-search", Input).size.height == 1
+
+
+@pytest.mark.anyio
+async def test_tui_title_is_ocman(tui_db):
+    """B3-11: app title is 'OCMan (OpenCode Manager) v<ver>'."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.title.startswith("OCMan (OpenCode Manager) v")
+
+
+@pytest.mark.anyio
+async def test_tui_footer_label_format(tui_db):
+    """B3-01: footer labels are '[key] [glyph][label]' (space after key, none before label)."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # bold markup is stripped in the rendered label; check the visible text form.
+        assert str(app.query_one("#foot-update", Button).label) == "^u ↻Update"
+        assert str(app.query_one("#foot-doctor", Button).label) == "^d 🩺Doctor"
+        assert str(app.query_one("#foot-quit", Button).label) == "^q Quit"
+
+
+@pytest.mark.anyio
+async def test_tui_details_transcript_has_space(tui_db):
+    """B3-02: the transcript container gets real vertical space (details-top is capped)."""
+    from textual.containers import Vertical
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        top = app.query_one("#details-top")
+        cont = app.query_one("#transcript-container", Vertical)
+        assert top.region.height <= 12, top.region.height
+        assert cont.region.height >= 12, cont.region.height
+
+
+@pytest.mark.anyio
+async def test_tui_spend_models_tables_fill(tui_db):
+    """B3-06/07: the Spend and Models tables fill the space below their controls."""
+    from textual.widgets import DataTable
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-spend"
+        await pilot.pause()
+        assert app.query_one("#spend-table", DataTable).region.height >= 10
+        app.query_one("TabbedContent").active = "tab-models"
+        await pilot.pause()
+        assert app.query_one("#models-table", DataTable).region.height >= 10
+
+
+@pytest.mark.anyio
+async def test_tui_esc_cancels_dialogs(tui_db):
+    """B3-03: Esc cancels a cancelable dialog, dismissing with its specific cancel value."""
+    from ocman_tui.app import ClearHistoryModal, RestoreBackupModal
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        for Modal, expect in ((ClearHistoryModal, False), (RestoreBackupModal, None)):
+            result = {}
+            app.push_screen(Modal(), lambda r, _res=result: _res.setdefault("r", r))
+            await pilot.pause()
+            assert isinstance(app.screen, Modal)
+            await pilot.press("escape")
+            await pilot.pause()
+            assert not isinstance(app.screen, Modal), f"{Modal.__name__} not dismissed by Esc"
+            assert result.get("r") == expect, f"{Modal.__name__} wrong cancel value: {result}"
+
+
+def test_tui_warn_glyph_has_trailing_space():
+    """B3-04/B3-05: destructive labels use U+26A0 with a trailing space ('⚠ LABEL')."""
+    from pathlib import Path as _P
+    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text()
+                    for f in ("app.py", "widgets/database.py", "widgets/storage.py"))
+    # every warn prefix is exactly '[b red]⚠[/] ' (glyph then closing tag then a space)
+    import re
+    bad = re.findall(r'\[b red\]⚠\[/\](?! )', src)
+    assert not bad, f"warn glyph without trailing space: {len(bad)} occurrence(s)"
+    assert "\u26a0" in src  # U+26A0

@@ -17,6 +17,7 @@ from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import Static, Button, Checkbox, Input, Label, RichLog, DataTable
 from textual.screen import ModalScreen
 from textual.css.query import NoMatches
+from textual.binding import Binding
 
 from ..core import (
     discover_storage_locations,
@@ -41,6 +42,19 @@ def _status_label(status: str) -> str:
 
 class ReclaimConfirmModal(ModalScreen[bool]):
     """Preview + confirm for a single reclaim action. Dismisses True on confirm."""
+    # B3-03: Esc cancels (same as the Cancel button -> dismiss(False)). priority so a focused
+    # child Input cannot swallow it.
+    BINDINGS = [Binding("escape", "cancel_dialog", "Cancel", show=False, priority=True)]
+
+    def action_cancel_dialog(self) -> None:
+        self.dismiss(False)
+
+    def on_key(self, event) -> None:
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self.dismiss(False)
+
     def __init__(self, title: str, preview: str) -> None:
         super().__init__()
         self._title = title
@@ -53,7 +67,7 @@ class ReclaimConfirmModal(ModalScreen[bool]):
             Label("Proceed?", classes="info-label"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-reclaim"),
-                Button("[b red]⚠[/]PROCEED", id="btn-confirm-reclaim", variant="error"),
+                Button("[b red]⚠[/] PROCEED", id="btn-confirm-reclaim", variant="error"),
                 classes="horizontal-buttons",
             ),
             id="dialog-container",
@@ -89,14 +103,14 @@ class StorageWidget(Static):
                 Checkbox("Proceed even if OpenCode is running (--while-running)",
                          value=False, id="check-reclaim-while-running"),
                 Horizontal(
-                    Button("[b red]⚠[/]Compact database (checkpoint + VACUUM)", id="btn-reclaim-vacuum", variant="warning"),
-                    Button("[b red]⚠[/]Reclaim temp files", id="btn-reclaim-temp"),
-                    Button("[b red]⚠[/]Reclaim compacted tool output (parts)", id="btn-reclaim-parts"),
+                    Button("[b red]⚠[/] Compact database (checkpoint + VACUUM)", id="btn-reclaim-vacuum", variant="warning"),
+                    Button("[b red]⚠[/] Reclaim temp files", id="btn-reclaim-temp"),
+                    Button("[b red]⚠[/] Reclaim compacted tool output (parts)", id="btn-reclaim-parts"),
                     classes="horizontal-buttons",
                 ),
                 Horizontal(
                     Input(placeholder="Backups dir to prune (path)", id="input-reclaim-backups-dir"),
-                    Button("[b red]⚠[/]Prune backups dir", id="btn-reclaim-backups"),
+                    Button("[b red]⚠[/] Prune backups dir", id="btn-reclaim-backups"),
                     classes="search-bar-row",
                 ),
                 Static(

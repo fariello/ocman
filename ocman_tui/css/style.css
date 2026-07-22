@@ -9,9 +9,8 @@ Header {
     background: #11111b;
     color: #89b4fa;
     text-style: bold;
-    height: 3;
+    height: 1;
     content-align: center middle;
-    border-bottom: double #313244;
 }
 
 Footer {
@@ -30,7 +29,7 @@ Footer {
 
 #input-session-search {
     width: 1fr;
-    height: 3;
+    height: 1;
     margin: 0 0 1 0;
 }
 
@@ -218,8 +217,10 @@ Button.-warning:hover {
 }
 
 /* B2-03a: Details top row - metadata fills width, FORMAT CONTROLS is a narrow right pane. */
+/* B3-02: cap the metadata + FORMAT CONTROLS row so it does not eat the transcript. The 8
+   FORMAT CONTROLS rows + the metadata (7-8 lines) fit in ~11; the transcript takes the rest. */
 #details-top {
-    height: auto;
+    height: 11;
 }
 #metadata-panel {
     width: 1fr;
@@ -396,7 +397,16 @@ ModalScreen {
     border: none;
 }
 
-/* PB-03 / PB-04a: let the Spend and Models tables fill the space below their top controls. */
+/* PB-03 / PB-04a / B3-06 / B3-07: let the Spend and Models tables fill the space below their
+   top controls. The table's `1fr` only fills its parent, so the whole chain must expand:
+   the widget (a Static) and its inner .panel-card Vertical are made 1fr too. */
+SpendWidget, ModelsWidget {
+    height: 1fr;
+}
+SpendWidget > .panel-card,
+ModelsWidget > .panel-card {
+    height: 1fr;
+}
 #spend-table {
     height: 1fr;
 }

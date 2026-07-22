@@ -76,8 +76,30 @@ from .widgets.spend import SpendWidget
 from .widgets.running import RunningWidget
 
 
-class RestoreBackupModal(ModalScreen[Optional[str]]):
+class _EscCancelMixin:
+    """B3-03: Esc cancels any dialog with a Cancel option, dismissing with the SAME value that
+    dialog's Cancel button uses. Subclasses set ``CANCEL_RESULT`` to that value (None or False).
+    Mixed in BEFORE ModalScreen so its BINDINGS merge with the screen's.
+    """
+    CANCEL_RESULT = None
+    # priority=True so Esc fires even when a child Input inside the dialog has focus.
+    BINDINGS = [Binding("escape", "cancel_dialog", "Cancel", show=False, priority=True)]
+
+    def action_cancel_dialog(self) -> None:
+        self.dismiss(self.CANCEL_RESULT)
+
+    def on_key(self, event) -> None:
+        # Belt-and-suspenders for B3-03: a focused child Input can swallow the Escape key
+        # before the screen binding fires, so handle it explicitly here too.
+        if event.key == "escape":
+            event.stop()
+            event.prevent_default()
+            self.dismiss(self.CANCEL_RESULT)
+
+
+class RestoreBackupModal(_EscCancelMixin, ModalScreen[Optional[str]]):
     """Modal dialog asking the user for a path to restore from."""
+    CANCEL_RESULT = None
 
     CSS = """
     #dialog-container {
@@ -112,7 +134,7 @@ class RestoreBackupModal(ModalScreen[Optional[str]]):
             Input("", id="input-restore-path", placeholder="e.g. /path/to/backup.zip"),
             Label("Warning: This will overwrite active database, history, and storage!", id="dialog-message"),
             Horizontal(
-                Button("[b red]⚠[/]Restore Now", id="btn-confirm-restore", variant="error"),
+                Button("[b red]⚠[/] Restore Now", id="btn-confirm-restore", variant="error"),
                 Button("Cancel", id="btn-cancel-restore", variant="primary"),
                 classes="horizontal-buttons"
             ),
@@ -127,8 +149,9 @@ class RestoreBackupModal(ModalScreen[Optional[str]]):
             self.dismiss(None)
 
 
-class ClearHistoryModal(ModalScreen[bool]):
+class ClearHistoryModal(_EscCancelMixin, ModalScreen[bool]):
     """Typed-yes confirmation for wiping the activity ledger (runs + all-time totals)."""
+    CANCEL_RESULT = False
     def compose(self) -> ComposeResult:
         yield Container(
             Label("CLEAR ACTIVITY HISTORY", id="dialog-title"),
@@ -141,7 +164,7 @@ class ClearHistoryModal(ModalScreen[bool]):
             Input(placeholder="Type 'yes' to confirm", id="input-clear-history-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-clear-history"),
-                Button("[b red]⚠[/]CLEAR HISTORY", id="btn-confirm-clear-history", variant="error", disabled=True),
+                Button("[b red]⚠[/] CLEAR HISTORY", id="btn-confirm-clear-history", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -160,13 +183,14 @@ class ClearHistoryModal(ModalScreen[bool]):
             self.dismiss(True)
 
 
-class BatchDeleteModal(ModalScreen[Optional[dict]]):
+class BatchDeleteModal(_EscCancelMixin, ModalScreen[Optional[dict]]):
     """Typed-yes confirmation for deleting MANY selected sessions in one batch.
 
     Dismisses None on cancel, or {"extracts": bool} on confirm (whether to write recovery
     extracts for the selected sessions first). db_delete_sessions_batch does not confirm on
     its own, so this modal is the required gate.
     """
+    CANCEL_RESULT = None
     def __init__(self, count: int) -> None:
         super().__init__()
         self._count = count
@@ -183,7 +207,7 @@ class BatchDeleteModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-batch-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-batch-del"),
-                Button("[b red]⚠[/]CONFIRM BATCH DELETE", id="btn-confirm-batch-del",
+                Button("[b red]⚠[/] CONFIRM BATCH DELETE", id="btn-confirm-batch-del",
                        variant="error", disabled=True),
                 classes="horizontal-buttons",
             ),
@@ -205,12 +229,13 @@ class BatchDeleteModal(ModalScreen[Optional[dict]]):
             self.dismiss({"extracts": bool(extracts)})
 
 
-class DeletionSafetyModal(ModalScreen[Optional[dict]]):
+class DeletionSafetyModal(_EscCancelMixin, ModalScreen[Optional[dict]]):
     """Safety modal confirming recursive deletion of sessions and related data.
 
     Dismisses with None on cancel, or a dict ``{"extracts": bool}`` on confirm, so the
     caller learns whether to write recovery extracts (prompt/restart/transcript) first.
     """
+    CANCEL_RESULT = None
     def __init__(self, session_id: str, title: str) -> None:
         super().__init__()
         self.session_id = session_id
@@ -237,7 +262,7 @@ class DeletionSafetyModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-del"),
-                Button("[b red]⚠[/]CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
+                Button("[b red]⚠[/] CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -335,8 +360,9 @@ class DeletionSafetyModal(ModalScreen[Optional[dict]]):
             self.dismiss({"extracts": bool(extracts)})
 
 
-class ProjectDeletionSafetyModal(ModalScreen[Optional[dict]]):
+class ProjectDeletionSafetyModal(_EscCancelMixin, ModalScreen[Optional[dict]]):
     """Safety modal confirming deletion of projects and related data."""
+    CANCEL_RESULT = None
     def __init__(self, project_id: str, name: str) -> None:
         super().__init__()
         self.project_id = project_id
@@ -365,7 +391,7 @@ class ProjectDeletionSafetyModal(ModalScreen[Optional[dict]]):
             Input(placeholder="Type 'yes' to confirm", id="input-confirm-yes"),
             Horizontal(
                 Button("Cancel", id="btn-cancel-del"),
-                Button("[b red]⚠[/]CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
+                Button("[b red]⚠[/] CONFIRM DELETE", id="btn-confirm-del", variant="error", disabled=True),
                 classes="horizontal-buttons"
             ),
             id="dialog-container"
@@ -479,8 +505,9 @@ class ProjectDeletionSafetyModal(ModalScreen[Optional[dict]]):
             self.dismiss({"extracts": bool(extracts)})
 
 
-class MoveProjectModal(ModalScreen[bool]):
+class MoveProjectModal(_EscCancelMixin, ModalScreen[bool]):
     """Modal screen for moving a project (physically or metadata-only)."""
+    CANCEL_RESULT = False
     def __init__(self, project_id: str, name: str) -> None:
         super().__init__()
         self.project_id = project_id
@@ -650,12 +677,13 @@ class MoveProjectModal(ModalScreen[bool]):
             self.app._safe_call_from_thread(update_failure)
 
 
-class MoveSessionModal(ModalScreen[bool]):
+class MoveSessionModal(_EscCancelMixin, ModalScreen[bool]):
     """Local session move: update the session's working directory in the DB (metadata-only).
 
     Remote/git-aware move stays on the CLI (`ocman session move ID --to host:/path`); a note
     says so. This modal performs the local DB metadata update via db_move_session_metadata.
     """
+    CANCEL_RESULT = False
     def __init__(self, session_id: str, title: str, current_dir: str) -> None:
         super().__init__()
         self.session_id = session_id
@@ -707,13 +735,14 @@ class MoveSessionModal(ModalScreen[bool]):
                 self.app.notify, f"Session move failed: {e}", severity="error")
 
 
-class FilterModal(ModalScreen[bool]):
+class FilterModal(_EscCancelMixin, ModalScreen[bool]):
     """LLM re-scope a recovery/compacted document to a project/scope (CLI `filter` parity).
 
     Reuses cli_filter, which enforces the same egress guards as compaction (size cap
     filter_max_bytes + secret/PII scan). Runs in a worker; the cost confirmation is
     auto-accepted (the user opted in by launching it) and output is captured to a log.
     """
+    CANCEL_RESULT = False
     def compose(self) -> ComposeResult:
         from textual.widgets import Select
         yield Container(
@@ -793,8 +822,9 @@ class FilterModal(ModalScreen[bool]):
             builtins.input = original_input
 
 
-class ExportSessionModal(ModalScreen[bool]):
+class ExportSessionModal(_EscCancelMixin, ModalScreen[bool]):
     """Modal screen for exporting a session (or a whole project) to an .ocbox bundle."""
+    CANCEL_RESULT = False
     def __init__(self, target_id: str, title: str, is_project: bool = False) -> None:
         super().__init__()
         self.session_id = target_id  # session id OR project id (see is_project)
@@ -864,8 +894,9 @@ class ExportSessionModal(ModalScreen[bool]):
             self.app._safe_call_from_thread(on_failure)
 
 
-class ImportSessionModal(ModalScreen[bool]):
+class ImportSessionModal(_EscCancelMixin, ModalScreen[bool]):
     """Modal screen for importing a session from an .ocbox bundle."""
+    CANCEL_RESULT = False
     def compose(self) -> ComposeResult:
         from textual.widgets import Select
         yield Container(
@@ -1120,7 +1151,7 @@ class ConfigOverlay(_FooterOverlay):
                 yield Checkbox("Write All Roles", value=False, id="cfg-all-roles")
             with Horizontal(id="config-buttons-container"):
                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
-                yield Button("[b red]⚠[/]Reset to Defaults", id="btn-reset-config", variant="error")
+                yield Button("[b red]⚠[/] Reset to Defaults", id="btn-reset-config", variant="error")
             with Horizontal(id="overlay-close-row"):
                 yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
@@ -1263,8 +1294,8 @@ class OrsessionApp(App):
                                 yield Label("DANGER ZONE", classes="panel-card-title")
                                 yield Label("Delete selected session/project and all related data from database and disk:", classes="info-label")
                                 with Horizontal():
-                                    yield Button("[b red]⚠[/]Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
-                                    yield Button("[b red]⚠[/]Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
+                                    yield Button("[b red]⚠[/] Delete Session & Descendants", id="btn-delete-session-rec", variant="error", disabled=True)
+                                    yield Button("[b red]⚠[/] Delete Project & All Sessions", id="btn-delete-project", variant="error", disabled=True)
                                     yield Button("Move/Update Path", id="btn-move-project", disabled=True)
                                     yield Button("Export Session Bundle", id="btn-export-session", disabled=True)
                                 # Multi-select batch actions (press Space on a session in the
@@ -1273,7 +1304,7 @@ class OrsessionApp(App):
                                              "Press Space on a session in the sidebar to select.",
                                              id="lbl-batch-selection", classes="info-label")
                                 with Horizontal():
-                                    yield Button("[b red]⚠[/]Batch Delete Selected", id="btn-batch-delete",
+                                    yield Button("[b red]⚠[/] Batch Delete Selected", id="btn-batch-delete",
                                                  variant="error", disabled=True)
                                     yield Button("Batch Export Selected", id="btn-batch-export",
                                                  disabled=True)
@@ -1307,7 +1338,7 @@ class OrsessionApp(App):
                                     yield Label("Clean Older Than:", classes="info-label")
                                     yield Input("30d", id="input-log-prune-duration",
                                                 placeholder="example: 2h or 3mo")
-                                    yield Button("[b red]⚠[/]DELETE old log entries",
+                                    yield Button("[b red]⚠[/] DELETE old log entries",
                                                  id="btn-clear-history-log", variant="error")
                                 yield Static("h = hours, d = days, w = weeks, mo = months, y = years",
                                              id="log-prune-legend", classes="info-label")
@@ -1316,13 +1347,13 @@ class OrsessionApp(App):
         with Horizontal(id="footer-bar"):
             # B2-01: Space (Select) and ^q (Quit) are clickable buttons like the rest.
             # B2-02: no space between the glyph and the label.
-            yield Button("[b]␣[/b]Select", id="foot-select", classes="footer-btn")
-            yield Button("[b]^q[/b]Quit", id="foot-quit", classes="footer-btn")
+            yield Button("[b]␣[/b] Select", id="foot-select", classes="footer-btn")
+            yield Button("[b]^q[/b] Quit", id="foot-quit", classes="footer-btn")
             yield Button(self._sidebar_footer_label(), id="foot-sidebar", classes="footer-btn")
-            yield Button("[b]^u[/b]↻Update", id="foot-update", classes="footer-btn")
-            yield Button("[b]^d[/b]🩺Doctor", id="foot-doctor", classes="footer-btn")
-            yield Button("[b]^r[/b]▶Running", id="foot-running", classes="footer-btn")
-            yield Button("[b]^g[/b]⚙Config", id="foot-config", classes="footer-btn")
+            yield Button("[b]^u[/b] ↻Update", id="foot-update", classes="footer-btn")
+            yield Button("[b]^d[/b] 🩺Doctor", id="foot-doctor", classes="footer-btn")
+            yield Button("[b]^r[/b] ▶Running", id="foot-running", classes="footer-btn")
+            yield Button("[b]^g[/b] ⚙Config", id="foot-config", classes="footer-btn")
             yield Button("⌂Main", id="foot-main", classes="footer-btn")
 
     def on_mount(self) -> None:
@@ -1342,7 +1373,7 @@ class OrsessionApp(App):
 
         loop.set_exception_handler(custom_handler)
 
-        self.title = f"Ocman TUI Controller v{__version__}"
+        self.title = f"OCMan (OpenCode Manager) v{__version__}"
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.populate_compaction_models()
         self.load_audit_trail()
@@ -1465,7 +1496,8 @@ class OrsessionApp(App):
         The letter 'b' (the ^b hotkey target) is bold so the accelerator is discoverable.
         """
         box = "🗹" if visible else "☐"
-        return f"[b]^b[/b] {box} Side[b]b[/b]ar"
+        # B3-01 format: [key][space][glyph][no space][label].
+        return f"[b]^b[/b] {box}Side[b]b[/b]ar"
 
     def action_toggle_sidebar(self) -> None:
         # Toggle the whole sidebar PANE (search box + tree + search-results), not just the
