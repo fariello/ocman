@@ -4,10 +4,10 @@
 - Concern: UI/UX + one correctness regression (transcript pane collapsed to ~0 height)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{spend,models}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change. No DB schema change. No new dependency.
-- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-22; executing B3-01..B3-11, B3-09 dropped)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; a delta
   release-review must cover all the TUI work before rung C).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-22 ("Approved. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -48,6 +48,17 @@
   affordance. B3-09 becomes a no-op / removed from scope.
 - B3-10: RESOLVED = drop the Header `border-bottom: double` (that double line is the extra
   padding line); keep the Header otherwise. Verify no clock/title clipping.
+
+- 2026-07-22 (its_direct/pt3-claude-opus-4.8): EXECUTED B3-01..B3-11 (B3-09 dropped; commit
+  b2fbfa9). Full suite 498 passed, 2 skipped. Notes: B3-02 transcript regression fixed by
+  capping #details-top to 11 (transcript container now ~25 rows). B3-03 required BOTH a priority
+  Esc binding AND an on_key handler on the modals (a focused child Input swallowed the plain
+  binding); Esc now dismisses each dialog with its specific cancel value (None/False). B3-05
+  confirmed the glyph was already U+26A0 (only B3-04 spacing needed). B3-06/07 fixed by making
+  the SpendWidget/ModelsWidget Static + inner .panel-card `height: 1fr`. Real config untouched.
+  CAVEATS for hand-test: all visual items (footer format, header line removal, transcript space,
+  spend/models fill, 1-row search, ⚠ spacing) plus Esc-cancel on each dialog type. Plan stays in
+  pending/ until maintainer hand-test sign-off, then git mv -> executed/.
 
 ## Plan-review findings (2026-07-22)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
