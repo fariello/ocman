@@ -128,6 +128,12 @@ step-granular TodoWrite checklist per item.
   (B2-03a layout, B2-04 metadata, B2-06 transcript padding, B2-08 no ^s, B2-09 metrics,
   B2-10/12 fields, B2-GEN button color). Plan stays in pending/ until maintainer hand-test
   sign-off, then git mv -> executed/.
+- 2026-07-21 (its_direct/pt3-claude-opus-4.8): B2-GEN COMPLETION (commit 3b3507b). The initial
+  B2-GEN commit unified button COLOR but only labeled 1 of the destructive buttons with the
+  bold-red warn glyph; on maintainer challenge ("do you believe you're done?") this was verified
+  as an under-delivery and fixed: all 18 destructive buttons (10 app.py, 3 database.py, 5
+  storage.py incl. PROCEED + reclaim/VACUUM) now carry `[b red]⚠[/]`, with a regression-guard
+  test (test_tui_destructive_buttons_carry_warn_glyph). Suite 490 passed, 2 skipped.
 
 ## Plan-review findings (2026-07-21)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
