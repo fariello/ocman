@@ -236,18 +236,22 @@ async def test_tui_delete_skips_extracts_when_unchecked(tui_db, tmp_path, monkey
 
 @pytest.mark.anyio
 async def test_tui_clear_history(tui_db):
-    """Phase 1: the clear-history button wipes the ledger (runs + cumulative totals)."""
+    """B2-12: the Log-tab DELETE button prunes runs older than the 'Clean Older Than' duration
+    (keeping newer runs) and NEVER touches the cumulative historical totals."""
     from ocman_tui.app import ClearHistoryModal
-    # Seed a non-empty ledger.
+    from datetime import datetime, timedelta
+    old = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
+    new = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
     ocman._save_history({
         "cumulative": {"sessions_deleted": 3, "cost_deleted": 1.5},
-        "runs": [{"action": "delete"}],
+        "runs": [{"timestamp": old, "action": "old"}, {"timestamp": new, "action": "new"}],
     })
     app = OrsessionApp()
     async with app.run_test() as pilot:
+        await pilot.pause()
+        app.query_one("#input-log-prune-duration", Input).value = "30d"
         app.query_one("#btn-clear-history-log", Button).press()
         await await_screen(pilot, app, ClearHistoryModal)
-        # Then wait for the modal's widgets to actually mount before querying them.
         for _ in range(50):
             if app.screen.query("#input-clear-history-yes"):
                 break
@@ -259,9 +263,11 @@ async def test_tui_clear_history(tui_db):
         await pilot.pause()
 
     hist = ocman._load_history()
-    assert hist["runs"] == []
-    assert hist["cumulative"]["sessions_deleted"] == 0
-    assert hist["cumulative"]["cost_deleted"] == 0.0
+    # Old run dropped, new run kept.
+    assert [r["action"] for r in hist["runs"]] == ["new"]
+    # Cumulative totals kept in perpetuity (B2-12).
+    assert hist["cumulative"]["sessions_deleted"] == 3
+    assert hist["cumulative"]["cost_deleted"] == 1.5
 
 
 def test_safe_call_from_thread_swallows_stopped_app():
@@ -1521,3 +1527,86 @@ def test_tui_accessibility_css_present():
     assert "height: 1;" in css
     # PB-03/04a fill tables
     assert "#spend-table" in css and "#models-table" in css
+
+
+# ---------------------------------------------------------------------------
+# TUI polish batch 2 - part 2 (B2-09 metrics, B2-11 copy, B2-12 log prune, B2-GEN)
+# ---------------------------------------------------------------------------
+def test_prune_history_runs_older_than(tmp_path, monkeypatch):
+    """B2-12: age-prune drops old runs, keeps newer ones, and NEVER touches cumulative."""
+    import json
+    from datetime import datetime, timedelta
+    hist = tmp_path / "hist.json"
+    monkeypatch.setattr(ocman, "OPENCODE_HISTORY_PATH", hist)
+    old = (datetime.now() - timedelta(days=100)).strftime("%Y-%m-%d %H:%M:%S")
+    new = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    hist.write_text(json.dumps({
+        "cumulative": {"cost_deleted": 12.34, "messages_deleted": 5},
+        "runs": [{"timestamp": old, "reason": "old"}, {"timestamp": new, "reason": "new"}],
+    }))
+    removed = ocman.prune_history_runs_older_than(30)
+    data = json.loads(hist.read_text())
+    assert removed == 1
+    assert [r["reason"] for r in data["runs"]] == ["new"]
+    # cumulative kept in perpetuity
+    assert data["cumulative"]["cost_deleted"] == 12.34
+    assert data["cumulative"]["messages_deleted"] == 5
+
+
+def test_prune_history_keeps_unparseable_timestamps(tmp_path, monkeypatch):
+    """B2-12: a run whose timestamp cannot be parsed is kept (never dropped on ambiguity)."""
+    import json
+    hist = tmp_path / "hist.json"
+    monkeypatch.setattr(ocman, "OPENCODE_HISTORY_PATH", hist)
+    hist.write_text(json.dumps({"cumulative": {}, "runs": [{"reason": "no-ts"},
+                                                            {"timestamp": "garbage", "reason": "bad-ts"}]}))
+    removed = ocman.prune_history_runs_older_than(1)
+    data = json.loads(hist.read_text())
+    assert removed == 0 and len(data["runs"]) == 2
+
+
+@pytest.mark.anyio
+async def test_tui_database_expanded_metrics(tui_db):
+    """B2-09: SYSTEM METRICS shows the expanded, bounded metric set."""
+    from ocman_tui.widgets.database import DatabaseAdminWidget
+    from textual.widgets import Static
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        w = app.query_one(DatabaseAdminWidget)
+        for wid in ("#lbl-wal-size", "#lbl-page-info", "#lbl-freelist",
+                    "#lbl-total-messages", "#lbl-total-parts", "#lbl-largest-table"):
+            assert w.query_one(wid, Static) is not None
+        # page-info is populated (not empty) after mount refresh
+        assert str(w.query_one("#lbl-page-info", Static).render()).strip() != ""
+
+
+@pytest.mark.anyio
+async def test_tui_metadata_click_to_copy(tui_db):
+    """B2-11: the metadata block stores plain copy text and copies on click."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        app.update_metadata_view({"id": "ses_abc", "title": "T", "model": '{"id":"m"}',
+                                  "cost": 1.0, "created": 1000, "updated": 2000,
+                                  "project_dir": "/p", "directory": "/p"})
+        await pilot.pause()
+        assert "ses_abc" in app._metadata_copy_text
+        assert "(click to copy)" not in app._metadata_copy_text  # raw text excludes the hint
+
+        copied = {}
+        app.copy_to_clipboard = lambda text: copied.setdefault("text", text)
+
+        class _Evt:
+            widget = app.query_one("#lbl-metadata-grid")
+        app.on_click(_Evt())
+        assert "ses_abc" in copied.get("text", "")
+
+
+def test_tui_one_color_button_css():
+    """B2-GEN regression guard: buttons share one color (xterm 215 -> #ffd75f) with black text;
+    the footer buttons use the same theme."""
+    from pathlib import Path as _P
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    assert "#ffd75f" in css          # the single button color
+    assert ".footer-btn" in css and "#ffd75f" in css

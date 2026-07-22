@@ -1298,7 +1298,17 @@ class OrsessionApp(App):
                         with Vertical(classes="panel-card"):
                             yield Label("AUDIT TRAIL / ACTIVITY LOG", classes="panel-card-title")
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
-                            yield Button("Clear Historical Activity Log", id="btn-clear-history-log", variant="error")
+                            # B2-12: prune old log entries using the SAME "Clean Older Than"
+                            # duration approach as Database Operations. Historical cumulative
+                            # spend is kept; only old action-log entries are removed.
+                            with Horizontal(id="log-prune-row"):
+                                yield Label("Clean Older Than:", classes="info-label")
+                                yield Input("30d", id="input-log-prune-duration",
+                                            placeholder="example: 2h or 3mo")
+                                yield Button("[b red]⚠[/]DELETE old log entries",
+                                             id="btn-clear-history-log", variant="error")
+                            yield Label("h = hours, d = days, w = weeks, mo = months, y = years",
+                                        classes="info-label")
 
                     # Configuration Settings moved to the ^g Config overlay (ConfigOverlay).
         with Horizontal(id="footer-bar"):
@@ -1614,12 +1624,27 @@ class OrsessionApp(App):
                 pass
         return text
 
+    def on_click(self, event) -> None:
+        """B2-11: click-to-copy. Clicking the session-metadata block copies its plain text to
+        the clipboard (terminal OSC-52; works in most modern terminals). We store the raw text
+        on the widget so the copy is the unformatted value, not the markup."""
+        widget = getattr(event, "widget", None)
+        wid = getattr(widget, "id", None) if widget is not None else None
+        if wid in ("lbl-metadata-grid", "lbl-actions-metadata-grid"):
+            text = getattr(self, "_metadata_copy_text", "").strip()
+            if text:
+                with contextlib.suppress(Exception):
+                    self.copy_to_clipboard(text)
+                    self.notify("Copied session details to the clipboard.",
+                                severity="information")
+
     def update_metadata_view(self, s: dict) -> None:
         """Update the top metadata card with session info.
 
         B2-04/FU-2 field layout: Project (project root), Session ID, Model, Created, Updated
         (+ duration), Cost, and finally Directory (session dir) ONLY when it differs from the
         project root. Labels are left-aligned in a fixed column; no leading blank line.
+        Click the block to copy it (B2-11).
         """
         from ocman import _fmt_ts, _fmt_duration
         model_disp = self._model_display(s.get("model"))
@@ -1645,9 +1670,12 @@ class OrsessionApp(App):
         if session_dir and session_dir != project_dir:
             lines.append(f"Directory:  {session_dir}")
         metadata_str = "\n".join(lines)
-        self.query_one("#lbl-metadata-grid", Static).update(metadata_str)
+        # B2-11: keep the plain text for click-to-copy.
+        self._metadata_copy_text = metadata_str
+        display_str = metadata_str + "\n[dim](click to copy)[/dim]"
+        self.query_one("#lbl-metadata-grid", Static).update(display_str)
         with contextlib.suppress(Exception):
-            self.query_one("#lbl-actions-metadata-grid", Static).update(metadata_str)
+            self.query_one("#lbl-actions-metadata-grid", Static).update(display_str)
 
     def start_session_export(self) -> None:
         """Trigger background export so the TUI doesn't lock up on large DB exports."""
@@ -1858,19 +1886,33 @@ class OrsessionApp(App):
         elif event.button.id == "btn-batch-export":
             self.batch_export_selected()
 
-        # Clear the activity ledger (runs + all-time totals), with typed-yes confirm.
+        # B2-12: prune activity-LOG entries older than the given duration (runs[] only; the
+        # all-time cumulative spend/metadata is kept). Typed-yes confirm.
         elif event.button.id == "btn-clear-history-log":
+            from ocman import parse_duration_to_days, prune_history_runs_older_than
+            duration = self.query_one("#input-log-prune-duration", Input).value.strip()
+            if not duration:
+                self.app.notify("Enter a duration in 'Clean Older Than' (e.g. 2h or 3mo).",
+                                severity="error")
+                return
+            try:
+                days = parse_duration_to_days(duration)
+            except Exception as e:  # noqa: BLE001
+                self.app.notify(f"Invalid duration '{duration}': {e}", severity="error")
+                return
+
             def handle_clear(confirmed: bool) -> None:
                 if not confirmed:
                     return
                 try:
-                    clear_history_ledger()
-                    self.app.notify("Activity history cleared.", severity="information")
+                    removed = prune_history_runs_older_than(days)
+                    self.app.notify(
+                        f"Removed {removed} log entr{'y' if removed == 1 else 'ies'} older than "
+                        f"{duration}. Historical spend totals were kept.",
+                        severity="information")
                 except Exception as e:  # noqa: BLE001
-                    self.app.notify(f"Failed to clear history: {e}", severity="error")
+                    self.app.notify(f"Failed to prune log: {e}", severity="error")
                     return
-                with contextlib.suppress(Exception):
-                    self.query_one("#activity-audit-log", RichLog).clear()
                 self.action_refresh_data()
             self.app.push_screen(ClearHistoryModal(), handle_clear)
 

@@ -91,7 +91,7 @@ import zipfile
 import vistab
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from typing import Any, Iterable, Sequence
 
@@ -4666,6 +4666,9 @@ def _fmt_ts(epoch_ms) -> str:
         return "—"
     try:
         from datetime import datetime, timezone
+
+
+
         epoch_s = int(epoch_ms) / 1000.0
         dt = datetime.fromtimestamp(epoch_s, tz=timezone.utc)
         return dt.strftime("%Y-%m-%d %H:%M")
@@ -11785,6 +11788,41 @@ def clear_history_ledger() -> None:
         },
         "runs": [],
     })
+
+
+def prune_history_runs_older_than(days: float) -> int:
+    """Drop activity-log run records older than ``days`` days; keep newer runs.
+
+    The all-time ``cumulative`` totals are DELIBERATELY left untouched (historical spend and
+    deletion metadata are kept in perpetuity, so ``spend --historical`` is unchanged); only the
+    displayed ``runs[]`` action log is pruned. Run timestamps are the ``%Y-%m-%d %H:%M:%S``
+    local-time strings written by the cleanup recorder; a run whose timestamp cannot be parsed is
+    KEPT (never dropped on ambiguity). Returns the number of run records removed.
+    """
+    data = _load_history()
+    runs = data.get("runs", []) or []
+    if not runs:
+        return 0
+    cutoff = datetime.now() - timedelta(days=days)
+    kept = []
+    removed = 0
+    for run in runs:
+        ts = run.get("timestamp")
+        keep = True
+        if ts:
+            try:
+                when = datetime.strptime(str(ts), "%Y-%m-%d %H:%M:%S")
+                keep = when >= cutoff
+            except (ValueError, TypeError):
+                keep = True  # unparseable -> keep (never drop on ambiguity)
+        if keep:
+            kept.append(run)
+        else:
+            removed += 1
+    if removed:
+        data["runs"] = kept
+        _save_history(data)
+    return removed
 
 
 def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:

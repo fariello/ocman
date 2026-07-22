@@ -218,9 +218,15 @@ class DatabaseAdminWidget(Static):
                 yield VerticalScroll(
                     Horizontal(Label("Database Path:", classes="info-label"), Static("", id="lbl-db-path", classes="info-value")),
                     Horizontal(Label("DB File Size:", classes="info-label"), Static("", id="lbl-db-size", classes="info-value")),
+                    Horizontal(Label("WAL File Size:", classes="info-label"), Static("", id="lbl-wal-size", classes="info-value")),
                     Horizontal(Label("SQLite Version:", classes="info-label"), Static("", id="lbl-sqlite-ver", classes="info-value")),
+                    Horizontal(Label("Page Size / Count:", classes="info-label"), Static("", id="lbl-page-info", classes="info-value")),
+                    Horizontal(Label("Freelist Pages:", classes="info-label"), Static("", id="lbl-freelist", classes="info-value")),
                     Horizontal(Label("Total Projects:", classes="info-label"), Static("", id="lbl-total-projects", classes="info-value")),
                     Horizontal(Label("Total Sessions:", classes="info-label"), Static("", id="lbl-total-sessions", classes="info-value")),
+                    Horizontal(Label("Total Messages:", classes="info-label"), Static("", id="lbl-total-messages", classes="info-value")),
+                    Horizontal(Label("Total Parts:", classes="info-label"), Static("", id="lbl-total-parts", classes="info-value")),
+                    Horizontal(Label("Largest Table:", classes="info-label"), Static("", id="lbl-largest-table", classes="info-value")),
                     Horizontal(Label("Historical Cost Saved:", classes="info-label"), Static("", id="lbl-hist-cost", classes="info-value")),
                     Horizontal(Label("Historical Msg Deleted:", classes="info-label"), Static("", id="lbl-hist-msg", classes="info-value")),
                     id="metrics-fields"
@@ -306,39 +312,69 @@ class DatabaseAdminWidget(Static):
         # Database Path
         self.query_one("#lbl-db-path", Static).update(str(db_path))
 
-        # Size on disk
+        # Size on disk (DB + WAL)
         if db_path.exists():
             db_size = get_file_size_local(db_path)
             self.query_one("#lbl-db-size", Static).update(human_size_local(db_size))
         else:
             self.query_one("#lbl-db-size", Static).update("Not found")
+        wal_path = db_path.parent / f"{db_path.name}-wal"
+        self.query_one("#lbl-wal-size", Static).update(
+            human_size_local(get_file_size_local(wal_path)) if wal_path.exists() else "0 B")
 
-        # SQLite Version and queries
+        # SQLite Version and queries (B2-09: expanded, bounded PRAGMA + COUNT metrics).
         sqlite3 = _get_sqlite()
         if sqlite3 and db_path.exists():
             self.query_one("#lbl-sqlite-ver", Static).update(sqlite3.sqlite_version)
             conn = None
+            proj_cnt = sess_cnt = msg_cnt = part_cnt = 0
+            page_size = page_count = freelist = 0
+            largest = "-"
             try:
                 conn = sqlite3.connect(str(db_path))
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM project")
-                proj_cnt = cursor.fetchone()[0]
-                cursor.execute("SELECT COUNT(*) FROM session")
-                sess_cnt = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM project"); proj_cnt = cursor.fetchone()[0]
+                cursor.execute("SELECT COUNT(*) FROM session"); sess_cnt = cursor.fetchone()[0]
+                for tbl, dst in (("message", "msg"), ("part", "part")):
+                    try:
+                        cursor.execute(f"SELECT COUNT(*) FROM {tbl}")
+                        n = cursor.fetchone()[0]
+                    except Exception:
+                        n = 0
+                    if dst == "msg":
+                        msg_cnt = n
+                    else:
+                        part_cnt = n
+                # Fast PRAGMAs (no full scan).
+                cursor.execute("PRAGMA page_size"); page_size = cursor.fetchone()[0]
+                cursor.execute("PRAGMA page_count"); page_count = cursor.fetchone()[0]
+                cursor.execute("PRAGMA freelist_count"); freelist = cursor.fetchone()[0]
+                # Largest table by row count among the known tables.
+                counts = {"project": proj_cnt, "session": sess_cnt, "message": msg_cnt, "part": part_cnt}
+                if any(counts.values()):
+                    name, cnt = max(counts.items(), key=lambda kv: kv[1])
+                    largest = f"{name} ({cnt:,} rows)"
             except Exception:
-                proj_cnt, sess_cnt = 0, 0
+                pass
             finally:
                 if conn:
                     try:
                         conn.close()
                     except Exception:
                         pass
-            self.query_one("#lbl-total-projects", Static).update(str(proj_cnt))
-            self.query_one("#lbl-total-sessions", Static).update(str(sess_cnt))
+            self.query_one("#lbl-total-projects", Static).update(f"{proj_cnt:,}")
+            self.query_one("#lbl-total-sessions", Static).update(f"{sess_cnt:,}")
+            self.query_one("#lbl-total-messages", Static).update(f"{msg_cnt:,}")
+            self.query_one("#lbl-total-parts", Static).update(f"{part_cnt:,}")
+            self.query_one("#lbl-page-info", Static).update(
+                f"{human_size_local(page_size)} x {page_count:,} pages")
+            self.query_one("#lbl-freelist", Static).update(f"{freelist:,}")
+            self.query_one("#lbl-largest-table", Static).update(largest)
         else:
-            self.query_one("#lbl-sqlite-ver", Static).update("N/A")
-            self.query_one("#lbl-total-projects", Static).update("N/A")
-            self.query_one("#lbl-total-sessions", Static).update("N/A")
+            for wid in ("#lbl-sqlite-ver", "#lbl-total-projects", "#lbl-total-sessions",
+                        "#lbl-total-messages", "#lbl-total-parts", "#lbl-page-info",
+                        "#lbl-freelist", "#lbl-largest-table"):
+                self.query_one(wid, Static).update("N/A")
 
         # Historical saved metrics from sidecar
         cost_saved = cum.get("cost_deleted", 0.0)
