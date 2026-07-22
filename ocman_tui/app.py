@@ -1300,15 +1300,17 @@ class OrsessionApp(App):
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
                             # B2-12: prune old log entries using the SAME "Clean Older Than"
                             # duration approach as Database Operations. Historical cumulative
-                            # spend is kept; only old action-log entries are removed.
-                            with Horizontal(id="log-prune-row"):
-                                yield Label("Clean Older Than:", classes="info-label")
-                                yield Input("30d", id="input-log-prune-duration",
-                                            placeholder="example: 2h or 3mo")
-                                yield Button("[b red]⚠[/]DELETE old log entries",
-                                             id="btn-clear-history-log", variant="error")
-                            yield Label("h = hours, d = days, w = weeks, mo = months, y = years",
-                                        classes="info-label")
+                            # spend is kept; only old action-log entries are removed. The prune
+                            # controls are docked below the (1fr) log so they are always visible.
+                            with Vertical(id="log-prune-controls"):
+                                with Horizontal(id="log-prune-row"):
+                                    yield Label("Clean Older Than:", classes="info-label")
+                                    yield Input("30d", id="input-log-prune-duration",
+                                                placeholder="example: 2h or 3mo")
+                                    yield Button("[b red]⚠[/]DELETE old log entries",
+                                                 id="btn-clear-history-log", variant="error")
+                                yield Static("h = hours, d = days, w = weeks, mo = months, y = years",
+                                             id="log-prune-legend", classes="info-label")
 
                     # Configuration Settings moved to the ^g Config overlay (ConfigOverlay).
         with Horizontal(id="footer-bar"):

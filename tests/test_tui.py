@@ -1634,3 +1634,25 @@ async def test_tui_destructive_buttons_carry_warn_glyph(tui_db):
     destructive = re.findall(r'Button\((?:\n\s*)?"([^"]*)",\s*id="[^"]*",\s*variant="(?:error|warning)"', src)
     for lbl in destructive:
         assert "\u26a0" in lbl, f"destructive button label missing warn glyph: {lbl!r}"
+
+
+@pytest.mark.anyio
+async def test_tui_log_prune_controls_visible(tui_db):
+    """B2-12: the Log-tab 'Clean Older Than' field, DELETE button, and the h/d/w/mo/y legend
+    are all actually laid out on-screen (regression: the legend previously rendered 0x0 and the
+    DELETE button overflowed off the right edge)."""
+    from textual.widgets import Input, Button, Static
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-activity"
+        await pilot.pause()
+        inp = app.query_one("#input-log-prune-duration", Input)
+        btn = app.query_one("#btn-clear-history-log", Button)
+        legend = app.query_one("#log-prune-legend", Static)
+        # Field is a compact fixed width, button stays on-screen, legend is visible.
+        assert inp.region.height == 1 and inp.region.width > 0
+        assert btn.region.x + btn.region.width <= 120, "DELETE button overflows the screen"
+        assert legend.region.height > 0 and legend.region.width > 0, "legend not rendered"
+        assert legend.region.y < 40, "legend off-screen"
+        assert "h = hours" in str(legend.render())

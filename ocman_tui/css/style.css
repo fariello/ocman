@@ -262,6 +262,32 @@ DataTable:focus > .datatable--cursor {
     overflow-y: scroll;
 }
 
+/* B2-12: the Log-tab prune controls are docked below the (1fr) log with a fixed height so they
+   are always visible (not clipped), and the field is sized so the DELETE button stays on-screen. */
+#log-prune-controls {
+    dock: bottom;
+    height: 3;
+    width: 100%;
+}
+#log-prune-row {
+    height: 1;
+    width: 100%;
+}
+#log-prune-row .info-label {
+    width: auto;
+    padding: 0 1 0 0;
+}
+#input-log-prune-duration {
+    width: 12;
+}
+#log-prune-row Button {
+    width: auto;
+}
+#log-prune-legend {
+    height: 1;
+    width: 100%;
+}
+
 /* B2-06: no padding anywhere around the transcript - the scroll area sits flush against the
    card, the text sits flush against the scrollbar, and there is no top/bottom/left padding. */
 .transcript-area {
