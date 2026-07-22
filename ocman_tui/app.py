@@ -1161,7 +1161,6 @@ class OrsessionApp(App):
         Binding("ctrl+q", "quit", "Quit", show=False, priority=True),
         Binding("ctrl+b", "toggle_sidebar", "Sidebar", show=False, priority=True),
         Binding("ctrl+u", "refresh_data", "Update", show=False, priority=True),
-        Binding("ctrl+s", "focus_search", "Search", show=False, priority=True),
         Binding("ctrl+d", "show_doctor", "Doctor", show=False, priority=True),
         Binding("ctrl+r", "show_running", "Running", show=False, priority=True),
         Binding("ctrl+g", "show_config", "Config", show=False, priority=True),
@@ -1192,45 +1191,46 @@ class OrsessionApp(App):
         # Set once the app begins tearing down, so background worker threads that
         # outlive the app do not try to marshal callbacks into a stopped event loop.
         self._shutting_down = False
+        # B2-07: the active search/filter query (drives tree + transcript-line filtering).
+        self._active_query = ""
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal():
             with Vertical(id="sidebar-pane"):
-                yield Input(placeholder="Search sessions (content/title), Enter to run",
+                yield Input(placeholder="Filter tree + transcript (content/title), Enter to apply",
                             id="input-session-search")
                 yield SidebarWidget(id="sidebar")
-                yield DataTable(id="search-results")
             with Container(id="workspace"):
                 with TabbedContent():
                     # Tab 1: Details & Transcript
                     with TabPane("Details", id="tab-details"):
                         with Vertical():
-                            # Metadata grid
-                            with Vertical(classes="panel-card"):
-                                yield Label("SESSION METADATA", classes="panel-card-title")
-                                yield Static("Select a session in the sidebar to view details.", id="lbl-metadata-grid")
-                            
-                            with Horizontal():
-                                # Transcript Markdown View
-                                with Vertical(classes="panel-card", id="transcript-container"):
-                                    yield Label("TRANSCRIPT LOG", classes="panel-card-title")
-                                    yield VerticalScroll(Markdown("", id="transcript-md"), classes="transcript-area")
-                                
-                                # Formatting Controls
+                            # B2-03a: metadata (fills width) with the narrow FORMAT CONTROLS
+                            # pane to its RIGHT.
+                            with Horizontal(id="details-top"):
+                                with Vertical(classes="panel-card", id="metadata-panel"):
+                                    yield Label("SESSION METADATA", classes="panel-card-title")
+                                    yield Static("Select a session in the sidebar to view details.", id="lbl-metadata-grid")
                                 with Vertical(classes="panel-card", id="controls-panel"):
                                     yield Label("FORMAT CONTROLS", classes="panel-card-title")
                                     yield Checkbox("Include Tools", value=False, id="check-include-tools")
                                     yield Checkbox("All Roles", value=False, id="check-all-roles")
                                     yield Checkbox("Full lines", value=False, id="check-full-lines")
-                                    yield Label("Max Interactions:", classes="info-label")
+                                    # B2-03b: say what these limit.
+                                    yield Label("Max interactions shown:", classes="info-label")
                                     yield Input("100", id="input-max-interactions")
-                                    yield Label("Max Lines:", classes="info-label")
+                                    yield Label("Max lines (when not Full):", classes="info-label")
                                     yield Input("2500", id="input-max-lines")
                                     yield Button("Refresh View", id="btn-refresh-transcript", variant="primary")
+
+                            # Transcript fills the rest of the tab, full width.
+                            with Vertical(classes="panel-card", id="transcript-container"):
+                                yield Label("TRANSCRIPT LOG", classes="panel-card-title")
+                                yield VerticalScroll(Markdown("", id="transcript-md"), classes="transcript-area")
                     
                     # Tab 2: Actions & Recovery
-                    with TabPane("Actions & Recovery", id="tab-actions"):
+                    with TabPane("Actions", id="tab-actions"):
                         with Vertical():
                             # Metadata grid
                             with Vertical(classes="panel-card"):
@@ -1294,7 +1294,7 @@ class OrsessionApp(App):
                         yield ModelsWidget()
 
                     # Tab 5: Activity Log
-                    with TabPane("Activity Log", id="tab-activity"):
+                    with TabPane("Log", id="tab-activity"):
                         with Vertical(classes="panel-card"):
                             yield Label("AUDIT TRAIL / ACTIVITY LOG", classes="panel-card-title")
                             yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
@@ -1302,15 +1302,16 @@ class OrsessionApp(App):
 
                     # Configuration Settings moved to the ^g Config overlay (ConfigOverlay).
         with Horizontal(id="footer-bar"):
-            yield Static("[b]␣[/b] Select", classes="footer-key")
-            yield Static("[b]^q[/b] Quit", classes="footer-key")
+            # B2-01: Space (Select) and ^q (Quit) are clickable buttons like the rest.
+            # B2-02: no space between the glyph and the label.
+            yield Button("[b]␣[/b]Select", id="foot-select", classes="footer-btn")
+            yield Button("[b]^q[/b]Quit", id="foot-quit", classes="footer-btn")
             yield Button(self._sidebar_footer_label(), id="foot-sidebar", classes="footer-btn")
-            yield Button("[b]^u[/b] ↻ Update", id="foot-update", classes="footer-btn")
-            yield Button("[b]^s[/b] 🔎 Search", id="foot-search", classes="footer-btn")
-            yield Button("[b]^d[/b] 🩺 Doctor", id="foot-doctor", classes="footer-btn")
-            yield Button("[b]^r[/b] ▶ Running", id="foot-running", classes="footer-btn")
-            yield Button("[b]^g[/b] ⚙ Config", id="foot-config", classes="footer-btn")
-            yield Button("⌂ Main", id="foot-main", classes="footer-btn")
+            yield Button("[b]^u[/b]↻Update", id="foot-update", classes="footer-btn")
+            yield Button("[b]^d[/b]🩺Doctor", id="foot-doctor", classes="footer-btn")
+            yield Button("[b]^r[/b]▶Running", id="foot-running", classes="footer-btn")
+            yield Button("[b]^g[/b]⚙Config", id="foot-config", classes="footer-btn")
+            yield Button("⌂Main", id="foot-main", classes="footer-btn")
 
     def on_mount(self) -> None:
         import asyncio
@@ -1340,78 +1341,23 @@ class OrsessionApp(App):
         # deterministic refresh here from the app (mirrors action_refresh_data).
         with contextlib.suppress(Exception):
             self.query_one(DatabaseAdminWidget).refresh_metrics()
-        with contextlib.suppress(Exception):
-            results = self.query_one("#search-results", DataTable)
-            results.add_column("Match", width=8)
-            results.add_column("Title", width=34)
-            results.add_column("Session", width=12)
-            results.cursor_type = "row"
-            results.display = False  # hidden until a search runs
-
     def run_session_search(self, query: str) -> None:
-        """Run db_search_sessions in a worker and show hits in the results table."""
-        query = query.strip()
-        if not query:
-            with contextlib.suppress(Exception):
-                self.query_one("#search-results", DataTable).display = False
-            return
-        self.run_worker(lambda: self._do_search_worker(query), thread=True)
+        """B2-07: apply the search query as a TREE + TRANSCRIPT filter (Enter only).
 
-    def _do_search_worker(self, query: str) -> None:
-        from .core import db_search_sessions
-        try:
-            results = db_search_sessions(query)
-        except Exception as e:  # noqa: BLE001
-            self._safe_call_from_thread(self.app.notify,
-                                        f"Search failed: {e}", severity="error")
-            return
-
-        def update_ui() -> None:
-            table = self.query_one("#search-results", DataTable)
-            table.clear()
-            table.display = True
-            self._search_hits = {}
-            if not results:
-                self.app.notify(f"No sessions matched '{query}'.", severity="information")
-                return
-            for r in results:
-                sid = r["id"]
-                key = table.add_row(r.get("match_where", ""),
-                                    (r.get("title") or "(untitled)")[:34],
-                                    sid[:8])
-                self._search_hits[key] = sid
-            self.app.notify(f"{len(results)} session(s) matched '{query}'.",
-                            severity="information")
-        self._safe_call_from_thread(update_ui)
-
-    def on_data_table_row_selected(self, event) -> None:
-        """Selecting a search hit loads that session as the current selection."""
-        table = getattr(event, "data_table", None)
-        if table is None or table.id != "search-results":
-            return
-        sid = getattr(self, "_search_hits", {}).get(event.row_key)
-        if not sid:
-            return
-        try:
-            sqlite3 = _get_sqlite()
-            conn = sqlite3.connect(str(get_db_path()))
-            cur = conn.cursor()
-            cur.execute("SELECT title, directory FROM session WHERE id = ?", (sid,))
-            row = cur.fetchone()
-            conn.close()
-        except Exception:
-            row = None
-        self.selected_session_id = sid
-        self.selected_session_title = (row[0] if row else "") or "(untitled)"
-        self.selected_session_dir = (row[1] if row else "") or ""
-        self.selected_project_id = None
-        self.selected_project_name = None
+        Empty query clears the filter (full tree, full transcript). A query re-filters the
+        sidebar tree to matching projects/sessions and re-renders the current transcript with
+        only matching lines.
+        """
+        self._active_query = (query or "").strip()
         with contextlib.suppress(Exception):
-            self.query_one("#btn-delete-session-rec", Button).disabled = False
-            self.query_one("#btn-export-session", Button).disabled = False
-            self.query_one("#btn-move-project", Button).disabled = False
-        self.start_session_export()
-        self.app.notify(f"Selected session {sid[:8]} from search.", severity="information")
+            self.query_one("#sidebar", SidebarWidget).load_data(self._active_query or None)
+        # Re-render the transcript so its line filter reflects the new query.
+        with contextlib.suppress(Exception):
+            if self.current_turns:
+                self.render_current_transcript()
+        if self._active_query:
+            self.app.notify(f"Filtering by {self._active_query!r} (clear the box + Enter to reset).",
+                            severity="information")
 
     def populate_compaction_models(self) -> None:
         """Populate the LLM select dropdown with OpenAI-compatible models."""
@@ -1522,15 +1468,6 @@ class OrsessionApp(App):
         """True if a footer-command overlay is currently on top of the screen stack."""
         return isinstance(self.screen, _FooterOverlay)
 
-    def action_focus_search(self) -> None:
-        """Ensure the sidebar pane is visible and focus the session-search field."""
-        with contextlib.suppress(Exception):
-            pane = self.query_one("#sidebar-pane", Vertical)
-            if not pane.display:
-                self.action_toggle_sidebar()
-        with contextlib.suppress(Exception):
-            self.query_one("#input-session-search", Input).focus()
-
     def action_show_doctor(self) -> None:
         """Open the Doctor (Storage checkup) overlay."""
         if not self._overlay_active():
@@ -1561,7 +1498,8 @@ class OrsessionApp(App):
                 self.pop_screen()
 
     def action_refresh_data(self) -> None:
-        self.query_one("#sidebar", SidebarWidget).load_data()
+        # Preserve any active search filter across a refresh (B2-07).
+        self.query_one("#sidebar", SidebarWidget).load_data(getattr(self, "_active_query", "") or None)
         self.load_audit_trail()
         self.selected_session_ids.clear()
         self._refresh_batch_ui()
@@ -1677,14 +1615,36 @@ class OrsessionApp(App):
         return text
 
     def update_metadata_view(self, s: dict) -> None:
-        """Update the top metadata card with session info."""
+        """Update the top metadata card with session info.
+
+        B2-04/FU-2 field layout: Project (project root), Session ID, Model, Created, Updated
+        (+ duration), Cost, and finally Directory (session dir) ONLY when it differs from the
+        project root. Labels are left-aligned in a fixed column; no leading blank line.
+        """
+        from ocman import _fmt_ts, _fmt_duration
         model_disp = self._model_display(s.get("model"))
-        metadata_str = (
-            f"Title:   [bold]{s.get('title', '(untitled)')}[/]\n"
-            f"ID:      {s.get('id', 'N/A')}  |  Model: {model_disp}  |  Cost: ${s.get('cost', 0.0):.4f}\n"
-            f"Created: {s.get('created', 'N/A')}  |  Updated: {s.get('updated', 'N/A')}\n"
-            f"Dir:     {s.get('directory', 'N/A')}"
-        )
+        created_raw = s.get("created")
+        updated_raw = s.get("updated")
+        created_str = _fmt_ts(created_raw) if created_raw else "N/A"
+        updated_str = _fmt_ts(updated_raw) if updated_raw else "N/A"
+        duration = _fmt_duration(created_raw, updated_raw)
+        project_dir = (s.get("project_dir") or "").strip()
+        session_dir = (s.get("directory") or "").strip()
+        # Fall back to session dir for the Project line if the project root is unknown.
+        project_display = project_dir or session_dir or "N/A"
+
+        lines = [
+            f"Project:    {project_display}",
+            f"Session ID: {s.get('id', 'N/A')}",
+            f"Model:      {model_disp}",
+            f"Created:    {created_str}",
+            f"Updated:    {updated_str} ({duration})",
+            f"Cost:       ${s.get('cost', 0.0):.4f}",
+        ]
+        # Directory line ONLY if the session dir differs from the project root (FU-2).
+        if session_dir and session_dir != project_dir:
+            lines.append(f"Directory:  {session_dir}")
+        metadata_str = "\n".join(lines)
         self.query_one("#lbl-metadata-grid", Static).update(metadata_str)
         with contextlib.suppress(Exception):
             self.query_one("#lbl-actions-metadata-grid", Static).update(metadata_str)
@@ -1790,6 +1750,17 @@ class OrsessionApp(App):
                     "to show truncated lines.",
                     severity="warning",
                 )
+        # B2-07c: when a search query is active, keep only matching lines (case-insensitive
+        # substring), driven by the SAME query as the tree filter.
+        active_query = getattr(self, "_active_query", "").strip()
+        if active_query:
+            ql = active_query.lower()
+            kept = [ln for ln in transcript_markdown.splitlines() if ql in ln.lower()]
+            if kept:
+                transcript_markdown = (f"_Showing {len(kept)} line(s) matching "
+                                       f"`{active_query}`._\n\n" + "\n".join(kept))
+            else:
+                transcript_markdown = f"_No transcript lines match `{active_query}`._"
         self.query_one("#transcript-md", Markdown).update(transcript_markdown)
 
     def update_estimated_cost(self, turns: list) -> None:
@@ -1799,12 +1770,22 @@ class OrsessionApp(App):
             self.query_one("#lbl-est-cost", Label).update("Est Cost: Select a model to estimate")
             return
 
+        # B2-15: distinguish config-load failure from model-not-resolvable so the message names
+        # the real cause instead of a misleading generic "Config load error".
         try:
             config = load_opencode_config()
             models = extract_models_from_config(config)
+        except Exception as e:
+            self.query_one("#lbl-est-cost", Label).update(f"Est Cost: could not load model config ({e})")
+            return
+        try:
             model_info = resolve_model(models, selected_model_spec)
         except Exception:
-            self.query_one("#lbl-est-cost", Label).update("Est Cost: Config load error")
+            model_info = None
+        if model_info is None:
+            self.query_one("#lbl-est-cost", Label).update(
+                f"Est Cost: model not found for '{selected_model_spec}' "
+                "(is it configured with an API key and base URL?)")
             return
 
         transcript_markdown = render_transcript(turns, self.selected_session_title)
@@ -1824,14 +1805,17 @@ class OrsessionApp(App):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         # Footer bar (clickable equivalents of the ^-key bindings)
-        if event.button.id == "foot-sidebar":
+        if event.button.id == "foot-select":
+            self.action_toggle_select()
+            return
+        elif event.button.id == "foot-quit":
+            self.action_quit()
+            return
+        elif event.button.id == "foot-sidebar":
             self.action_toggle_sidebar()
             return
         elif event.button.id == "foot-update":
             self.action_refresh_data()
-            return
-        elif event.button.id == "foot-search":
-            self.action_focus_search()
             return
         elif event.button.id == "foot-doctor":
             self.action_show_doctor()

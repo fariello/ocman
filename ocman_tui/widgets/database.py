@@ -231,31 +231,32 @@ class DatabaseAdminWidget(Static):
             with Vertical(classes="panel-card"):
                 yield Label("DATABASE OPERATIONS", classes="panel-card-title")
                 yield VerticalScroll(
+                    # B2-10a: single "Clean Older Than" duration field (example inline).
                     Horizontal(
-                        Label("Retention Days:", classes="info-label"),
-                        Input("5", id="input-retention-days", placeholder="e.g. 5"),
+                        Label("Clean Older Than:", classes="info-label"),
+                        Input("5d", id="input-retention-duration",
+                              placeholder="example: 2h or 3mo"),
                     ),
+                    # B2-10b: units legend.
+                    Label("h = hours, d = days, w = weeks, mo = months, y = years",
+                          classes="info-label"),
+                    # B2-10c: labeled operation inputs.
                     Horizontal(
-                        Label("Or duration:", classes="info-label"),
-                        Input("", id="input-retention-duration",
-                              placeholder="e.g. 2h, 6w, 6mo, 1y (overrides days)"),
-                    ),
-                    Horizontal(
-                        Label("Project scope (optional):", classes="info-label"),
+                        Label("Project scope (optional; blank = all projects):", classes="info-label"),
                         Input("", id="input-prune-project",
-                              placeholder="project name/number/id/path; blank = all"),
+                              placeholder="project name/number/id/path"),
                     ),
                     Horizontal(
-                        Checkbox("Dry Run (Preview changes)", value=True, id="check-dry-run"),
+                        Checkbox("Dry Run (Preview changes, delete nothing)", value=True, id="check-dry-run"),
                     ),
                     Horizontal(
-                        Checkbox("Force (Bypass active process checks)", value=False, id="check-force"),
+                        Checkbox("Force (Bypass active-process safety checks)", value=False, id="check-force"),
                     ),
                     Horizontal(
-                        Checkbox("Sweep Orphans", value=True, id="check-sweep-orphans"),
+                        Checkbox("Sweep orphaned rows/files too", value=True, id="check-sweep-orphans"),
                     ),
                     Horizontal(
-                        Checkbox("Write recovery extracts first", value=True, id="check-prune-extracts"),
+                        Checkbox("Write recovery extracts before deleting", value=True, id="check-prune-extracts"),
                     ),
                     id="ops-fields"
                 )
@@ -379,22 +380,18 @@ class DatabaseAdminWidget(Static):
         log_widget = self.query_one("#live-log-output", RichLog)
         log_widget.clear()
 
-        # Resolve the retention window: a duration string (2h/6w/6mo/1y/"30 days")
-        # overrides the integer-days field when present.
+        # B2-10a: resolve the retention window from the single "Clean Older Than" duration field
+        # (2h/3d/6w/6mo/1y), via the shared parser.
         duration = self.query_one("#input-retention-duration", Input).value.strip()
-        if duration:
-            try:
-                days = core.parse_duration_to_days(duration)
-            except Exception as e:  # noqa: BLE001
-                self.app.notify(f"Invalid duration '{duration}': {e}", severity="error")
-                return
-        else:
-            try:
-                days = int(self.query_one("#input-retention-days", Input).value)
-            except ValueError:
-                self.app.notify("Retention Days must be an integer (or set a duration).",
-                                severity="error")
-                return
+        if not duration:
+            self.app.notify("Enter a duration in 'Clean Older Than' (e.g. 2h or 3mo).",
+                            severity="error")
+            return
+        try:
+            days = core.parse_duration_to_days(duration)
+        except Exception as e:  # noqa: BLE001
+            self.app.notify(f"Invalid duration '{duration}': {e}", severity="error")
+            return
 
         dry_run = self.query_one("#check-dry-run", Checkbox).value
         force = self.query_one("#check-force", Checkbox).value

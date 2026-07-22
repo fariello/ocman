@@ -549,8 +549,8 @@ async def test_tui_app_pruning(tui_db):
         db_admin = app.query_one(DatabaseAdminWidget)
         assert db_admin is not None
         
-        # Set retention days to 5 to trigger cleanup of old seed data
-        db_admin.query_one("#input-retention-days", Input).value = "5"
+        # Set "Clean Older Than" to 5 days to trigger cleanup of old seed data (B2-10a)
+        db_admin.query_one("#input-retention-duration", Input).value = "5d"
         
         # Uncheck dry run so it performs actual deletions
         db_admin.query_one("#check-dry-run", Checkbox).value = False
@@ -1196,29 +1196,40 @@ async def test_tui_backup_clean(tui_db, tmp_path, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_tui_search_selects_session(tui_db):
-    """Phase 5: content search finds a seeded match; selecting the row sets the current
-    session."""
+async def test_tui_search_filters_tree(tui_db):
+    """B2-07: a content search filters the sidebar TREE to matching sessions (no separate
+    results box), and the transcript-line filter is driven by the same query."""
+    from ocman_tui.widgets.sidebar import SidebarWidget
+    from textual.css.query import NoMatches
     _seed_tui_conversation(tui_db)  # sess1 has 'login button' content
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
+        # No separate results table exists anymore.
+        try:
+            app.query_one("#search-results")
+            assert False, "#search-results should have been removed"
+        except NoMatches:
+            pass
+        # Apply the filter (Enter path).
         app.run_session_search("login button")
-        results = app.query_one("#search-results", DataTable)
-        for _ in range(40):
-            if results.row_count > 0:
-                break
-            await pilot.pause(0.1)
-        assert results.row_count >= 1
-        # Simulate selecting the first hit.
-        first_key = list(app._search_hits.keys())[0]
-
-        class _Evt:
-            data_table = results
-            row_key = first_key
-        app.on_data_table_row_selected(_Evt())
         await pilot.pause()
-    assert app.selected_session_id == "sess1"
+        assert app._active_query == "login button"
+        sidebar = app.query_one("#sidebar", SidebarWidget)
+        # The tree now contains the matching session node.
+        session_ids = []
+        def _walk(node):
+            data = getattr(node, "data", None)
+            if data and data.get("type") == "session":
+                session_ids.append(data["id"])
+            for c in node.children:
+                _walk(c)
+        _walk(sidebar.root)
+        assert "sess1" in session_ids, session_ids
+        # Clearing the query restores the full tree.
+        app.run_session_search("")
+        await pilot.pause()
+        assert app._active_query == ""
 
 
 @pytest.mark.anyio
@@ -1331,9 +1342,16 @@ async def test_tui_footer_bar_buttons_present(tui_db):
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        for bid in ("foot-sidebar", "foot-update", "foot-search",
+        for bid in ("foot-select", "foot-quit", "foot-sidebar", "foot-update",
                     "foot-doctor", "foot-running", "foot-config", "foot-main"):
             assert app.query_one("#" + bid, Button) is not None
+        # B2-08: the Search footer button is gone.
+        from textual.css.query import NoMatches
+        try:
+            app.query_one("#foot-search", Button)
+            assert False, "foot-search should have been removed"
+        except NoMatches:
+            pass
 
 
 @pytest.mark.anyio
@@ -1361,19 +1379,14 @@ async def test_tui_sidebar_pane_toggle_hides_search(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_focus_search_unhides_pane(tui_db):
-    """^s / focus-search un-hides the sidebar pane and focuses the search input."""
-    from textual.containers import Vertical
+async def test_tui_no_search_footer_or_binding(tui_db):
+    """B2-08: the ^s Search footer button, ctrl+s binding, and action_focus_search are gone
+    (the search box is always visible in the sidebar)."""
     app = OrsessionApp()
     async with app.run_test() as pilot:
         await pilot.pause()
-        app.action_toggle_sidebar()  # hide
-        await pilot.pause()
-        assert app.query_one("#sidebar-pane", Vertical).display is False
-        app.action_focus_search()
-        await pilot.pause()
-        assert app.query_one("#sidebar-pane", Vertical).display is True
-        assert app.focused is app.query_one("#input-session-search", Input)
+        assert not any(b.key == "ctrl+s" for b in app.BINDINGS)
+        assert not hasattr(app, "action_focus_search")
 
 
 @pytest.mark.anyio

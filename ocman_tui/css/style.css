@@ -167,11 +167,18 @@ Checkbox > .checkbox--box.--checked {
 }
 
 /* Buttons */
-/* PB-10: compact buttons - no vertical padding/margin, 1 col horizontal. A `tall` border
-   forces height 3; drop it for a 1-row button with a solid background. */
-Button {
-    background: #45475a;
-    color: #f5f5f5;
+/* B2-GEN: ONE button color for everything (consistency). xterm 215-like yellow (#ffd75f) with
+   black text; orange fallback if 256-color is unavailable. Danger is conveyed ONLY by the
+   button LABEL (a bold-red warn glyph), never by button color, so there is a single visual
+   language for "this is a button". PB-10: compact - height 1, no vertical padding/margin.
+   The -primary/-success/-error variant classes are collapsed to the same look. */
+Button,
+Button.-primary,
+Button.-success,
+Button.-error,
+Button.-warning {
+    background: #ffd75f;
+    color: #000000;
     border: none;
     height: 1;
     text-style: bold;
@@ -179,42 +186,13 @@ Button {
     padding: 0 1;
 }
 
-Button:hover {
-    background: #585b70;
-    color: #f5c2e7;
-}
-
-Button.-primary {
-    background: #89b4fa;
-    color: #11111b;
-    border: none;
-}
-
-Button.-primary:hover {
-    background: #b4befe;
-    color: #11111b;
-}
-
-Button.-success {
-    background: #a6e3a1;
-    color: #11111b;
-    border: none;
-}
-
-Button.-success:hover {
-    background: #94e2d5;
-    color: #11111b;
-}
-
-Button.-error {
-    background: #f38ba8;
-    color: #11111b;
-    border: none;
-}
-
-Button.-error:hover {
-    background: #f9e2af;
-    color: #11111b;
+Button:hover,
+Button.-primary:hover,
+Button.-success:hover,
+Button.-error:hover,
+Button.-warning:hover {
+    background: #ffaf5f;
+    color: #000000;
 }
 
 /* Grid layout elements */
@@ -236,7 +214,23 @@ Button.-error:hover {
 .panel-card-title {
     color: #cba6f7;
     text-style: bold;
-    margin-bottom: 1;
+    margin-bottom: 0;
+}
+
+/* B2-03a: Details top row - metadata fills width, FORMAT CONTROLS is a narrow right pane. */
+#details-top {
+    height: auto;
+}
+#metadata-panel {
+    width: 1fr;
+}
+#controls-panel {
+    width: 30;
+}
+/* B2-06: transcript card sits flush (no inner padding) so the scroll area fills it. */
+#transcript-container {
+    padding: 0;
+    height: 1fr;
 }
 
 /* DataTable Custom Styles */
@@ -268,13 +262,22 @@ DataTable:focus > .datatable--cursor {
     overflow-y: scroll;
 }
 
+/* B2-06: no padding anywhere around the transcript - the scroll area sits flush against the
+   card, the text sits flush against the scrollbar, and there is no top/bottom/left padding. */
 .transcript-area {
     background: #1e1e2e;
     color: #cdd6f4;
-    border: round #313244;
-    padding: 1 2;
+    border: none;
+    padding: 0;
+    margin: 0;
     height: 1fr;
     overflow-y: scroll;
+    scrollbar-gutter: stable;
+}
+.transcript-area > Markdown,
+#transcript-md {
+    padding: 0;
+    margin: 0;
 }
 
 .info-label {
@@ -340,7 +343,8 @@ ModalScreen {
     content-align: center middle;
 }
 
-/* Clickable command buttons: distinct background so they read as buttons. */
+/* Clickable command buttons: same one-color theme as every other button (B2-GEN / FU-3),
+   just the footer's tighter density. */
 .footer-btn {
     height: 1;
     min-width: 0;
@@ -348,19 +352,16 @@ ModalScreen {
     padding: 0 1;
     margin: 0 1 0 0;
     border: none;
-    background: #313244;
-    color: #cdd6f4;
-    text-style: none;
+    background: #ffd75f;
+    color: #000000;
+    text-style: bold;
 }
 
-.footer-btn:hover {
-    background: #45475a;
-    color: #89b4fa;
-}
-
+.footer-btn:hover,
 .footer-btn:focus {
-    background: #45475a;
-    text-style: none;
+    background: #ffaf5f;
+    color: #000000;
+    text-style: bold;
 }
 
 /* Textual Buttons reserve height 3 by default; the footer needs 1-row buttons. */
