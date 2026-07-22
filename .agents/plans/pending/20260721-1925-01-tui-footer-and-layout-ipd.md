@@ -5,10 +5,10 @@
 - Scope: `ocman_tui/app.py` (bindings, compose footer, actions, modal screens, tab removal),
   `ocman_tui/css/style.css` (sidebar-pane width, footer bar styling), `tests/test_tui.py`.
   No `ocman/cli.py` change. No DB schema change. No new dependency.
-- Status: reviewed (plan-review applied; awaiting maintainer approval to execute TF-07..TF-14)
+- Status: approved (maintainer GO 2026-07-21; executing TF-07..TF-15)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused pending this
   UI work; this rides along and re-triggers a release-review delta pass before promotion).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-21 ("Approved. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -21,6 +21,22 @@
   AGENTS.md the correct closure of a process gap is a new plan, not a silent continuation.
 
 ## Workflow history
+- 2026-07-21 (its_direct/pt3-claude-opus-4.8): EXECUTED TF-01..TF-15 (commits 6866b95 footer/
+  width/pane-toggle; a0ea3bf overlays/tab-removal/tests). Full suite 479 passed, 2 skipped.
+  During execution three things surfaced beyond the plan and were fixed: (a) footer command keys
+  were swallowed by a focused Input (e.g. Input's own ^d), so the app command bindings were made
+  priority=True; (b) ^m must run the overlay's save-on-dismiss, so App.action_show_main delegates
+  to the overlay's action_dismiss_overlay; (c) removing tabs shifted mount ordering so
+  DatabaseAdminWidget metrics were not populated on mount -> app on_mount now drives an explicit
+  refresh_metrics(). CAVEAT for hand-test: in some terminals ^m and Enter share a byte (CR); watch
+  whether ^m (priority) ever intercepts Enter. NOTE: during the first smoke run (before config
+  isolation) the TUI wrote default_retention_days=7 to the REAL ~/.config/opencode/ocman.toml;
+  reset to 5 and flagged to the maintainer. Plan stays in pending/ until maintainer hand-test
+  sign-off (Acceptance gate), then git mv -> executed/.
+- 2026-07-21 (its_direct/pt3-claude-opus-4.8): maintainer hand-testing found TF-15 (toggle
+  hides only the tree, not the search box/results). Added as a requirement + fixed in the DONE
+  edits (toggle `#sidebar-pane`). Small low-risk correction to already-in-tree TF-01/TF-04 work,
+  so tracked in THIS IPD, not a new one.
 - 2026-07-21 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
   PR-001..PR-006. Verified DONE claims (TF-01..06) and PENDING feasibility (config query_one
   whole-DOM save/load, storage/running self-load, TabbedContent.active) against code. Fixes
@@ -116,14 +132,15 @@ Design (settled with maintainer):
 | TF-04 | Live sidebar glyph (🗹/☐) + bold `b`, updated on every toggle | DONE |
 | TF-05 | `^s`/Search focuses the search field (un-hiding the sidebar if hidden) | DONE |
 | TF-06 | Footer buttons clickable and equivalent to their key bindings | DONE (tab-switch form) |
-| TF-07 | Doctor/Running/Config open as overlay ModalScreens (not tabs) | PENDING |
-| TF-08 | `^m` Main button + `Esc` dismiss overlay; overlays add `Binding("escape"/"ctrl+m","dismiss")` (not automatic) | PENDING |
-| TF-09 | Remove the Storage/Running/Config TAB PANES (superseded) | PENDING |
-| TF-10 | Config overlay: load-on-mount + auto-save-on-change + Save/Reset AND save_tui_config on dismiss (replaces the lost tab-switch save) | PENDING |
-| TF-11 | Storage/Running overlays self-load via fresh widget on_mount (verified: storage.py:113/129 worker, running.py:36/46 refresh) | PENDING |
-| TF-12 | New tests: footer buttons present, glyph toggles, each overlay opens/closes via key+button, focus-search, config round-trips from overlay incl. save-on-dismiss, `^g` opens Config and `^q` quits | PENDING |
-| TF-13 | Transition ordering: rewire show_doctor/running/config to push_screen IN THE SAME edit that removes the tabs (never query a removed pane) | PENDING |
-| TF-14 | Migrate existing tab-based tests: test_tui_config_tab (test_tui.py:585-624) + storage/running tests (test_tui.py:695-908) set TabbedContent.active to the removed tabs; rewrite to the overlay flow so they do not break | PENDING |
+| TF-07 | Doctor/Running/Config open as overlay ModalScreens (not tabs) | DONE |
+| TF-08 | `^m` Main button + `Esc` dismiss overlay; overlays add `Binding("escape"/"ctrl+m","dismiss")` (not automatic) | DONE |
+| TF-09 | Remove the Storage/Running/Config TAB PANES (superseded) | DONE |
+| TF-10 | Config overlay: load-on-mount + auto-save-on-change + Save/Reset AND save_tui_config on dismiss (replaces the lost tab-switch save) | DONE |
+| TF-11 | Storage/Running overlays self-load via fresh widget on_mount (verified: storage.py:113/129 worker, running.py:36/46 refresh) | DONE |
+| TF-12 | New tests: footer buttons present, glyph toggles, each overlay opens/closes via key+button, focus-search, config round-trips from overlay incl. save-on-dismiss, `^g` opens Config and `^q` quits | DONE |
+| TF-13 | Transition ordering: rewire show_doctor/running/config to push_screen IN THE SAME edit that removes the tabs (never query a removed pane) | DONE |
+| TF-14 | Migrate existing tab-based tests: test_tui_config_tab (test_tui.py:585-624) + storage/running tests (test_tui.py:695-908) set TabbedContent.active to the removed tabs; rewrite to the overlay flow so they do not break | DONE |
+| TF-15 | BUG in TF-01/TF-04: toggle_sidebar hides only `#sidebar` (the tree), leaving the search Input + `#search-results` visible. Toggle the whole `#sidebar-pane` instead so search + tree + results all hide/show together. Update `action_focus_search` and the footer glyph to read pane visibility. Add a regression test. | DONE |
 
 ## Non-goals
 
