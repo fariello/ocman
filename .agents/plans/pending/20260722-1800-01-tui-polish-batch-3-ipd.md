@@ -26,23 +26,23 @@
 | B3-06 | Spend bottom pane does not fill the space | The `#spend-table` has `height: 1fr` but its parent `SpendWidget` (a `Static`) / container may not expand. Ensure SpendWidget + its DataTable container are `height: 1fr` so the table fills below the top controls. | spend.py:18 SpendWidget(Static); css #spend-table:400 |
 | B3-07 | Models pane does not fill the space | Same as B3-06 for ModelsWidget / `#models-table`. | models.py:14 ModelsWidget(Static); css #models-table:403 |
 | B3-08 | Search input must be 1 row, not 3 | `#input-session-search { height: 3 }` -> `height: 1`. | css style.css:33 height: 3 |
-| B3-09 | Label the command-palette widget ("Commands") | The Header shows a command-palette icon with no label. Add a labeled affordance: either a footer/header "Commands" button, or set the Header icon's tooltip/label. Textual `Header` has a fixed command-palette dot; a clean approach is a small header title tweak OR a footer "Commands" button that calls `action_command_palette`. DECIDE in review (Header customization is limited). | app.py:1198 Header(show_clock=True) |
+| B3-09 | Label the command-palette widget ("Commands") | DROPPED (maintainer 2026-07-22): Textual's built-in Header palette dot has no caption slot; the maintainer chose not to add a separate labeled affordance. No change. | app.py:1198 Header(show_clock=True) |
 | B3-10 | Remove the extra padding line between the top Header row and content | The Header is height 3 with a `border-bottom: double` adding a visible gap line. Reduce Header height/border so there is no blank padding line under it. | css Header block:8 (border-bottom double #313244) |
 | B3-11 | Set the app title to "OCMan (OpenCode Manager) v1.3.0" | `self.title = f"OCMan (OpenCode Manager) v{__version__}"`. | app.py:1345 currently "Ocman TUI Controller v..." |
 
-## Design decisions to settle in plan-review (OPEN)
-- B3-02 cap value: what is the right `#details-top` height so metadata + the 8 FORMAT CONTROLS
-  fit without eating the transcript? The controls need ~9 rows; propose `#details-top { height: 11 }`
-  (or auto + max-height 11). Confirm the metadata (7-8 lines) also fits in 11.
-- B3-09: how to label the command palette. Textual's built-in Header renders a fixed palette
-  dot with no caption. Options: (a) add a footer "Commands" button that triggers
-  `action_command_palette`; (b) a custom header. RECOMMEND (a) - a `⌘ Commands` footer button
-  (consistent with the new footer command bar), leaving the built-in palette dot as-is.
-- B3-10: exact Header height/border. RECOMMEND drop `border-bottom` (the "double" line is the
-  extra padding line the maintainer sees) and keep height 1 or 3; confirm no clock/title clipping.
+## Design decisions (RESOLVED with maintainer 2026-07-22)
+- B3-02: RESOLVED = cap `#details-top` at height 11 (fits metadata's 7-8 lines + the 8 FORMAT
+  CONTROLS rows); the transcript takes the remaining `1fr`. Verify the transcript region height
+  is substantial at 120x40.
+- B3-09: RESOLVED = drop it (do NOT add a Commands label/button). The maintainer accepted that
+  Textual's built-in Header palette dot has no caption slot and chose not to add a separate
+  affordance. B3-09 becomes a no-op / removed from scope.
+- B3-10: RESOLVED = drop the Header `border-bottom: double` (that double line is the extra
+  padding line); keep the Header otherwise. Verify no clock/title clipping.
 
 ## Non-goals
 - No CLI/DB/dependency change. Not restyling beyond the listed items.
+- B3-09 (command-palette label) is out of scope per the maintainer decision above.
 
 ## Validation plan
 - `PYTHONPATH=. pytest -q` full suite green; paste ACTUAL output. TUI tests isolate OCMAN_CONFIG_PATH.
@@ -57,7 +57,7 @@
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Create a step-granular TodoWrite checklist (one item per B3-*) BEFORE coding.
-- Open questions: B3-02 cap, B3-09 approach, B3-10 header (resolve in plan-review).
+- Open questions: none (B3-02 cap=11, B3-09 dropped, B3-10 drop Header border-bottom - all resolved).
 - Scope fence: `ocman_tui/**`, `tests/test_tui.py`. Nothing else.
 - Honesty rule: paste the ACTUAL pytest output.
 - Config safety: TUI tests set an isolated OCMAN_CONFIG_PATH; never touch the real config.
@@ -66,4 +66,4 @@ Create a step-granular TodoWrite checklist (one item per B3-*) BEFORE coding.
 - Release: 1.3.0 rung-C needs a delta release-review covering this batch.
 
 ## Deferred / open
-- The 3 OPEN decisions above are resolved in plan-review before execution.
+- None. All 3 prior open decisions resolved (B3-02 cap=11, B3-09 dropped, B3-10 drop Header border).
