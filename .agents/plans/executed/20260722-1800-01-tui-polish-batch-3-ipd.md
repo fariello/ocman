@@ -4,7 +4,7 @@
 - Concern: UI/UX + one correctness regression (transcript pane collapsed to ~0 height)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{spend,models}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change. No DB schema change. No new dependency.
-- Status: approved (maintainer GO 2026-07-22; executing B3-01..B3-11, B3-09 dropped)
+- Status: executed (maintainer authorized move to executed/ 2026-07-22; hand-tested across subsequent batches)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; a delta
   release-review must cover all the TUI work before rung C).
 - Approval: maintainer approved 2026-07-22 ("Approved. Go.")

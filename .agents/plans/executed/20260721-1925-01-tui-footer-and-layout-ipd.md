@@ -5,7 +5,7 @@
 - Scope: `ocman_tui/app.py` (bindings, compose footer, actions, modal screens, tab removal),
   `ocman_tui/css/style.css` (sidebar-pane width, footer bar styling), `tests/test_tui.py`.
   No `ocman/cli.py` change. No DB schema change. No new dependency.
-- Status: approved (maintainer GO 2026-07-21; executing TF-07..TF-15)
+- Status: executed (maintainer authorized move to executed/ 2026-07-22; hand-tested across subsequent batches)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused pending this
   UI work; this rides along and re-triggers a release-review delta pass before promotion).
 - Approval: maintainer approved 2026-07-21 ("Approved. Go.")

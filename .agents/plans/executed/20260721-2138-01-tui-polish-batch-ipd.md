@@ -5,7 +5,7 @@
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{spend,models,database}.py`
   (layout heights), `tests/test_tui.py`. No `ocman/cli.py` change. No DB schema change. No new
   dependency.
-- Status: approved (maintainer GO 2026-07-21; executing PB-01..PB-10)
+- Status: executed (maintainer authorized move to executed/ 2026-07-22; hand-tested across subsequent batches)
 - Target version: rides the in-flight 1.3.0 line (final 1.3.0 promotion is paused; a delta
   release-review must cover this + the footer/overlay work before rung C resumes).
 - Approval: maintainer approved 2026-07-21 ("Approve. Go.")

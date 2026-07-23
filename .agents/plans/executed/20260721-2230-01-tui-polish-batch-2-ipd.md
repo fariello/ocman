@@ -6,7 +6,7 @@
   possibly `ocman_tui/core.py` (read-only helpers), `tests/test_tui.py`. Item 12 (log prune by
   age) may need a small `ocman/cli.py` helper (`prune_history_older_than`) IF one does not exist;
   prefer reusing existing history helpers. No DB schema change. No new dependency.
-- Status: approved (maintainer GO 2026-07-21; executing B2-01..B2-15 + B2-GEN)
+- Status: executed (maintainer authorized move to executed/ 2026-07-22; hand-tested across subsequent batches)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; a delta
   release-review must cover all the TUI work before rung C).
 - Approval: maintainer approved 2026-07-21 ("Approved. Go.")

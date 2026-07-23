@@ -5,7 +5,7 @@
   per-line truncation never applied)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{storage,running,models,spend}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change (reuse `collapse_to_preview`). No DB/dependency change.
-- Status: approved (maintainer GO 2026-07-22; executing B4-01..B4-06)
+- Status: executed (maintainer authorized move to executed/ 2026-07-22; hand-tested across subsequent batches)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; delta
   release-review must cover all TUI work before rung C).
 - Approval: maintainer approved 2026-07-22 ("approved. Go!")
