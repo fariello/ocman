@@ -5,9 +5,9 @@
   maintainer finds not working: model copy, format-control labels, running refresh placement)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{storage,running,models}.py`,
   `tests/test_tui.py`, and `TODO.md` (item 3 deferral). No `ocman/cli.py` change. No DB/dep change.
-- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-22; executing B5-01..B5-08)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-22 ("approved. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -69,6 +69,18 @@
   when the row count exceeds that height. Items 1 and 6a are genuine fill/layout bugs to fix.
 - B5-06b: RESOLVED = add a "Last copied:" selectable Static line under the models table as the
   clipboard fallback (plus keep the copy attempt + toast).
+
+- 2026-07-22 (its_direct/pt3-claude-opus-4.8): EXECUTED B5-01..B5-08 (commit bbba3a7). Full
+  suite 509 passed, 2 skipped. Notes: B5-01/03/06a add table.refresh(layout=True) after the load
+  worker so 1fr tables fill; B5-02 status via Rich Text cell (green/yellow/red); B5-04 running
+  status set to width:1fr so Refresh stays on-screen; B5-05a Expanded toggle moved beside the
+  TRANSCRIPT LOG title with auto-re-render on toggle; B5-05b inputs use border_title; B5-06b
+  "Last copied" selectable fallback added (clipboard still OSC-52-dependent); B5-07 replaced the
+  RichLog with per-run Collapsibles (▶/▼) via async remount, grand totals in a Static below;
+  B5-08 Tab.-active blue background. Real config untouched. B5-03-TODO not needed (fill fix
+  applied). CAVEATS for hand-test: table fill in the real terminal, doctor colors, collapsible
+  expand/collapse, model copy landing in the clipboard vs the fallback line. Plan stays in
+  pending/ until maintainer hand-test sign-off, then git mv -> executed/.
 
 ## Plan-review findings (2026-07-22)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
