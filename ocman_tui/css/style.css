@@ -74,6 +74,13 @@ Tab:hover {
     background: #181825;
 }
 
+/* B5-08: the active tab has a blue background so the current tab is obvious. */
+Tab.-active {
+    background: #89b4fa;
+    color: #11111b;
+    text-style: bold;
+}
+
 Tab.--active {
     color: #cba6f7;
     background: #1e1e2e;
@@ -442,3 +449,14 @@ StorageWidget > Vertical { height: 1fr; }
 RunningWidget { height: 1fr; }
 RunningWidget > Vertical { height: 1fr; }
 #running-table { height: 1fr; }
+
+/* B5-06b: the models "Last copied" fallback is a single selectable row. */
+#lbl-last-copied { height: 1; }
+/* B5-06a: the models table fills the tab (widget already 1fr via SpendWidget,ModelsWidget). */
+ModelsWidget > .panel-card { height: 1fr; }
+
+/* B5-05a: the transcript title row (title + Expanded toggle) is one row. */
+#transcript-title-row { height: 1; }
+
+/* B5-04: bound the running status so the Refresh button stays on-screen next to it. */
+#lbl-running-status { width: 1fr; }

@@ -110,6 +110,10 @@ class RunningWidget(Static):
                 banner.update("\n".join(lines))
             else:
                 banner.update("")
+            # B5-03: recompute layout now that rows exist so the 1fr table fills its region.
+            with contextlib.suppress(Exception):
+                table.refresh(layout=True)
+                self.refresh(layout=True)
 
         self.app._safe_call_from_thread(update_ui)
 

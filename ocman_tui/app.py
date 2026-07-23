@@ -16,7 +16,7 @@ from typing import List, Dict, Any, Optional
 from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.widgets import (
-    Header, Footer, Static, Button, Checkbox, Input, Label, Select, TabbedContent, TabPane, Markdown, RichLog, Tree, DataTable
+    Header, Footer, Static, Button, Checkbox, Input, Label, Select, TabbedContent, TabPane, Markdown, RichLog, Tree, DataTable, Collapsible
 )
 from textual.screen import ModalScreen
 from textual.binding import Binding
@@ -1239,20 +1239,22 @@ class OrsessionApp(App):
                                     yield Label("FORMAT CONTROLS", classes="panel-card-title")
                                     yield Checkbox("Include Tools", value=False, id="check-include-tools")
                                     yield Checkbox("All Roles", value=False, id="check-all-roles")
-                                    # B4-06b: "Expanded" shows full turn text; unticked shows a
-                                    # one-line CLI-style preview per turn.
-                                    yield Checkbox("Expanded", value=False, id="check-full-lines")
-                                    # B4-06c: labels are also set as border titles so each field
-                                    # is self-describing.
-                                    yield Label("Max interactions shown:", classes="info-label")
-                                    yield Input("100", id="input-max-interactions")
-                                    yield Label("Max lines (when Expanded):", classes="info-label")
-                                    yield Input("2500", id="input-max-lines")
+                                    # B5-05b: each field carries a border_title so it is
+                                    # self-describing even without a separate Label above it.
+                                    max_int = Input("100", id="input-max-interactions")
+                                    max_int.border_title = "Max interactions shown"
+                                    yield max_int
+                                    max_ln = Input("2500", id="input-max-lines")
+                                    max_ln.border_title = "Max lines (when Expanded)"
+                                    yield max_ln
                                     yield Button("Refresh View", id="btn-refresh-transcript", variant="primary")
 
-                            # Transcript fills the rest of the tab, full width.
+                            # Transcript fills the rest of the tab, full width. B5-05a: the
+                            # "Expanded" toggle sits immediately right of the TRANSCRIPT LOG title.
                             with Vertical(classes="panel-card", id="transcript-container"):
-                                yield Label("TRANSCRIPT LOG", classes="panel-card-title")
+                                with Horizontal(id="transcript-title-row"):
+                                    yield Label("TRANSCRIPT LOG", classes="panel-card-title")
+                                    yield Checkbox("Expanded (full text)", value=False, id="check-full-lines")
                                 yield VerticalScroll(Markdown("", id="transcript-md"), classes="transcript-area")
                     
                     # Tab 2: Actions & Recovery
@@ -1323,7 +1325,10 @@ class OrsessionApp(App):
                     with TabPane("Log", id="tab-activity"):
                         with Vertical(classes="panel-card"):
                             yield Label("AUDIT TRAIL / ACTIVITY LOG", classes="panel-card-title")
-                            yield RichLog(id="activity-audit-log", max_lines=1000, classes="log-area")
+                            # B5-07: collapsible per-run entries (one Collapsible per run) live in
+                            # this scroll; grand totals below. load_audit_trail mounts them.
+                            yield VerticalScroll(id="activity-log-scroll", classes="log-area")
+                            yield Static("", id="activity-grand-totals", classes="info-value")
                             # B2-12: prune old log entries using the SAME "Clean Older Than"
                             # duration approach as Database Operations. Historical cumulative
                             # spend is kept; only old action-log entries are removed. The prune
@@ -1410,80 +1415,70 @@ class OrsessionApp(App):
         options = [(m.name, f"{m.provider_id}/{m.model_id}") for m in compatible]
         select_widget.set_options(options)
 
-    def load_audit_trail(self) -> None:
-        """Read runs from ocman_history.json and print to Tab 5's RichLog."""
-        audit_log = self.query_one("#activity-audit-log", RichLog)
-        audit_log.clear()
+    @staticmethod
+    def _run_detail_text(run: dict) -> str:
+        """Build the per-run detail body shown inside a Collapsible (B5-07)."""
+        from ocman import _fmt_ts, human_size_local
+        sess_cnt = run.get("sessions_count", 0)
+        sub_cnt = run.get("subagents_count", 0)
+        msg_cnt = run.get("messages_count", 0)
+        cost = run.get("cost", 0.0)
+        space_saved = run.get("space_saved", 0)
+        deleted_sessions = run.get("sessions", [])
+        lines = []
+        if deleted_sessions:
+            lines.append("Deleted Sessions:")
+            for s in deleted_sessions:
+                title = s.get("title", "(untitled)")
+                sid = s.get("id", "unknown")
+                created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
+                updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
+                lines.append(f"  - {title} (ID: {sid[:8]}...)")
+                lines.append(f"    Start: {created_str} | End: {updated_str}")
+        else:
+            lines.append(f"Deleted Sessions Count: {sess_cnt}")
+        lines.append("Totals Reclaimed:")
+        lines.append(f"  - Subagent Sessions: {sub_cnt}")
+        lines.append(f"  - Messages Deleted:  {msg_cnt}")
+        lines.append(f"  - Accumulated Cost:  ${cost:.4f}")
+        lines.append(f"  - Disk Space Saved:  {human_size_local(space_saved)}")
+        return "\n".join(lines)
 
+    def load_audit_trail(self) -> None:
+        """B5-07: render each run as a collapsible entry (▶ collapsed / ▼ expanded on click)."""
+        from ocman import human_size_local
         history = _load_history()
         runs = history.get("runs", [])
 
-        if not runs:
-            audit_log.write("No historical actions recorded in the sidecar ledger.")
-        else:
-            # Print runs reversed (newest first)
-            for run in reversed(runs):
-                timestamp = run.get("timestamp", "unknown time")
-                reason = run.get("reason", "unknown").upper()
-                sess_cnt = run.get("sessions_count", 0)
-                sub_cnt = run.get("subagents_count", 0)
-                msg_cnt = run.get("messages_count", 0)
-                cost = run.get("cost", 0.0)
-                space_saved = run.get("space_saved", 0)
-                deleted_sessions = run.get("sessions", [])
+        # Rebuild the collapsible list: remove old entries, mount fresh ones (newest first).
+        with contextlib.suppress(Exception):
+            scroll = self.query_one("#activity-log-scroll", VerticalScroll)
+            scroll.remove_children()
+            if not runs:
+                scroll.mount(Static("No activity recorded yet.", classes="info-value"))
+            else:
+                for run in reversed(runs):
+                    timestamp = run.get("timestamp", "unknown time")
+                    reason = run.get("reason", "unknown").upper()
+                    scroll.mount(Collapsible(
+                        Static(self._run_detail_text(run), classes="info-value"),
+                        title=f"{timestamp} {reason} RUN:",
+                        collapsed=True,
+                    ))
 
-                run_str = f"[{timestamp}] {reason} RUN:\n"
-                
-                # Details of all deleted sessions
-                if deleted_sessions:
-                    run_str += "  Deleted Sessions:\n"
-                    for s in deleted_sessions:
-                        title = s.get("title", "(untitled)")
-                        sid = s.get("id", "unknown")
-                        from ocman import _fmt_ts
-                        created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
-                        updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
-                        run_str += f"    - {title} (ID: {sid[:8]}...)\n"
-                        run_str += f"      Start: {created_str} | End: {updated_str}\n"
-                else:
-                    run_str += f"  - Deleted Sessions Count: {sess_cnt}\n"
-
-                # Totals Section
-                run_str += "  Totals Reclaimed:\n"
-                run_str += f"    - Database Rows Deleted: Rows removed successfully\n"
-                run_str += f"    - Subagent Sessions:     {sub_cnt}\n"
-                run_str += f"    - Messages Deleted:      {msg_cnt}\n"
-                run_str += f"    - Accumulated Cost:      ${cost:.4f}\n"
-                
-                from ocman import human_size_local
-                run_str += f"    - Disk Space Saved:      {human_size_local(space_saved)}\n"
-                run_str += "--------------------------------------------------------\n"
-                
-                audit_log.write(run_str)
-
-        # Always write grand totals at the end of the activity log (after printing all runs)
+        # Grand totals (all-time cumulative) below the list.
         c = history.get("cumulative", {})
-        projects_deleted = c.get("projects_deleted", 0)
-        sessions_deleted = c.get("sessions_deleted", 0)
-        subagents_deleted = c.get("subagents_deleted", 0)
-        messages_deleted = c.get("messages_deleted", 0)
-        cost_deleted = c.get("cost_deleted", 0.0)
-        space_saved_deleted = c.get("space_saved_deleted", 0)
-
-        from ocman import human_size_local
         grand_totals_str = (
-            "\n"
-            "========================================================\n"
-            "GRAND TOTALS (ALL-TIME HISTORICAL RECOVERY):\n"
-            f"  - Projects Deleted:        {projects_deleted}\n"
-            f"  - Sessions Deleted:        {sessions_deleted}\n"
-            f"  - Subagent Sessions:       {subagents_deleted}\n"
-            f"  - Messages Deleted:        {messages_deleted}\n"
-            f"  - Total Cost Reclaimed:    ${cost_deleted:.4f}\n"
-            f"  - Total Disk Space Saved:  {human_size_local(space_saved_deleted)}\n"
-            "========================================================\n"
+            "GRAND TOTALS (ALL-TIME HISTORICAL RECOVERY):  "
+            f"Projects {c.get('projects_deleted', 0)} | "
+            f"Sessions {c.get('sessions_deleted', 0)} | "
+            f"Subagents {c.get('subagents_deleted', 0)} | "
+            f"Messages {c.get('messages_deleted', 0)} | "
+            f"Cost ${c.get('cost_deleted', 0.0):.4f} | "
+            f"Space {human_size_local(c.get('space_saved_deleted', 0))}"
         )
-        audit_log.write(grand_totals_str)
+        with contextlib.suppress(Exception):
+            self.query_one("#activity-grand-totals", Static).update(grand_totals_str)
 
     def _sidebar_footer_label(self, visible: bool = True) -> str:
         """Footer label for the sidebar toggle: a checked box when the sidebar is visible.
@@ -2610,9 +2605,13 @@ class OrsessionApp(App):
             self.save_tui_config(notify=True)
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        """Auto-save configuration settings when user toggles any configuration checkbox."""
+        """Auto-save config on cfg-* toggles; re-render the transcript when 'Expanded' toggles."""
         if event.checkbox.id and event.checkbox.id.startswith("cfg-") and getattr(self, "config_loaded", False):
             self.save_tui_config(notify=False)
+        # B5-05a: toggling Expanded immediately re-renders the transcript (no Refresh needed).
+        elif event.checkbox.id == "check-full-lines" and getattr(self, "current_turns", None):
+            with contextlib.suppress(Exception):
+                self.render_current_transcript()
 
     def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated) -> None:
         """No-op: configuration is no longer a tab. The ^g Config overlay saves on change

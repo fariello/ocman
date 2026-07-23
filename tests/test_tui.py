@@ -1851,3 +1851,103 @@ async def test_tui_search_matches_render_separate_lines(tui_db):
         assert len(fence) >= 3, src
         body_lines = [ln for ln in fence[1].splitlines() if ln.strip()]
         assert len(body_lines) == n, f"header says {n} but body has {len(body_lines)}: {body_lines}"
+
+
+# ---------------------------------------------------------------------------
+# TUI polish batch 5 (IPD 20260722-2146-01, B5-01..B5-08)
+# ---------------------------------------------------------------------------
+def test_tui_active_tab_css_blue():
+    """B5-08: the active tab has a blue background rule."""
+    from pathlib import Path as _P
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    import re
+    m = re.search(r"Tab\.-active\s*\{[^}]*background:\s*(#[0-9a-fA-F]{6})", css)
+    assert m, "no Tab.-active background rule"
+    assert m.group(1).lower() == "#89b4fa"
+
+
+def test_tui_doctor_status_cell_colored():
+    """B5-02: doctor status cell is a colored Rich Text (green/yellow/red), not plain markup."""
+    from ocman_tui.widgets.storage import _status_cell
+    from rich.text import Text
+    ok = _status_cell("ok"); err = _status_cell("error"); warn = _status_cell("warn")
+    assert isinstance(ok, Text) and ok.style == "#a6e3a1"
+    assert err.style == "#f38ba8"
+    assert warn.style == "#f9e2af"
+    assert str(ok) == "OK"
+
+
+@pytest.mark.anyio
+async def test_tui_expanded_toggle_next_to_transcript_title(tui_db):
+    """B5-05a: the Expanded toggle is a sibling of the TRANSCRIPT LOG title (same row)."""
+    from textual.containers import Horizontal
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        row = app.query_one("#transcript-title-row", Horizontal)
+        ids = {getattr(w, "id", None) for w in row.walk_children()}
+        assert "check-full-lines" in ids
+
+
+@pytest.mark.anyio
+async def test_tui_format_controls_border_titles(tui_db):
+    """B5-05b: FORMAT CONTROLS inputs carry a border_title so they are self-describing."""
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.query_one("#input-max-interactions", Input).border_title
+        assert app.query_one("#input-max-lines", Input).border_title
+
+
+@pytest.mark.anyio
+async def test_tui_running_refresh_on_screen(tui_db):
+    """B5-04: the Running Refresh button renders fully on-screen next to the count."""
+    from textual.widgets import Button
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_running(); await pilot.pause()
+        b = app.screen.query_one("#btn-refresh-running", Button)
+        assert b.region.x + b.region.width <= 120, f"Refresh off-screen: {b.region}"
+        assert b.region.width > 0
+
+
+@pytest.mark.anyio
+async def test_tui_models_last_copied_fallback(tui_db):
+    """B5-06b: selecting a model row updates the selectable 'Last copied' fallback line."""
+    from ocman_tui.widgets.models import ModelsWidget
+    from textual.widgets import DataTable, Static
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-models"; await pilot.pause()
+        t = app.query_one("#models-table", DataTable)
+        if t.row_count:
+            app.copy_to_clipboard = lambda s: None
+            t.post_message(DataTable.RowSelected(t, 0, list(t.rows)[0]))
+            await pilot.pause()
+            last = str(app.query_one("#lbl-last-copied", Static).render())
+            assert last.startswith("Last copied: "), last
+
+
+@pytest.mark.anyio
+async def test_tui_log_collapsible_per_run(tui_db, monkeypatch, tmp_path):
+    """B5-07: each history run renders as a collapsed Collapsible titled '<ts> <REASON> RUN:'."""
+    import json
+    from textual.widgets import Collapsible
+    hist = tmp_path / "hist.json"
+    monkeypatch.setattr(ocman, "OPENCODE_HISTORY_PATH", hist)
+    hist.write_text(json.dumps({
+        "cumulative": {"cost_deleted": 1.0},
+        "runs": [{"timestamp": "2026-07-10 20:37:31", "reason": "delete",
+                  "messages_count": 5, "cost": 0.5, "space_saved": 1000}],
+    }))
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.load_audit_trail()
+        await pilot.pause()
+        cols = list(app.query(Collapsible))
+        assert cols, "no collapsible run entries"
+        assert "2026-07-10 20:37:31 DELETE RUN:" in str(cols[0].title)
+        assert cols[0].collapsed is True

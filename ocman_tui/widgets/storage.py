@@ -35,7 +35,25 @@ from ..core import (
 from .database import TextualLogRedirector
 
 
-# Doctor status label (uppercased, no ANSI; Textual styles cells itself).
+# Doctor status label as a colored Rich Text cell (B5-02): green OK / yellow WARN /
+# red ERROR, matching the CLI. A DataTable cell needs a renderable (Text), NOT [markup].
+_STATUS_STYLE = {
+    "ok": "#a6e3a1",
+    "error": "#f38ba8",
+    "vulnerable": "#f38ba8",
+    "warn": "#f9e2af",
+    "warning": "#f9e2af",
+    "exposed": "#f9e2af",
+}
+
+
+def _status_cell(status: str) -> "Text":
+    from rich.text import Text
+    raw = str(status or "unknown")
+    style = _STATUS_STYLE.get(raw.lower(), "#cdd6f4")
+    return Text(raw.upper(), style=style)
+
+
 def _status_label(status: str) -> str:
     return str(status or "unknown").upper()
 
@@ -175,7 +193,7 @@ class StorageWidget(Static):
                 count = f"{rec['count']:,}" if rec.get("count") else "-"
                 table.add_row(
                     rec.get("title", ""),
-                    _status_label(rec.get("status")),
+                    _status_cell(rec.get("status")),
                     size,
                     count,
                     rec.get("fix_cmd") or "-",
@@ -188,6 +206,11 @@ class StorageWidget(Static):
                 f"Opt-in (temp/parts): {human_size_local(optin_b)}   |   "
                 f"Reported only: {human_size_local(report_b)}"
             )
+            # B5-01: recompute layout now that rows exist so the 1fr table fills its region
+            # (fixes the "half-empty pane but must scroll" seen when layout ran before load).
+            with contextlib.suppress(Exception):
+                table.refresh(layout=True)
+                self.refresh(layout=True)
 
         self.app._safe_call_from_thread(update_ui)
 

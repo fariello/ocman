@@ -23,6 +23,9 @@ class ModelsWidget(Static):
                 classes="search-bar-row"
             ),
             DataTable(id="models-table"),
+            # B5-06b: a selectable fallback line showing the last-copied spec, for terminals
+            # where the OSC-52 clipboard escape is ignored.
+            Static("Click a row to copy its Provider/ID.", id="lbl-last-copied", classes="info-value"),
             classes="panel-card"
         )
 
@@ -73,6 +76,10 @@ class ModelsWidget(Static):
                 cost_in_str,
                 cost_out_str
             )
+        # B5-06a: recompute layout so the 1fr table fills the tab after rows load.
+        with contextlib.suppress(Exception):
+            table.refresh(layout=True)
+            self.refresh(layout=True)
 
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "input-model-search":
@@ -89,6 +96,10 @@ class ModelsWidget(Static):
             return
         if not spec:
             return
+        # B5-06b: always show the value (selectable) so it is reachable even if the clipboard
+        # escape is ignored; still attempt the clipboard copy + toast.
+        with contextlib.suppress(Exception):
+            self.query_one("#lbl-last-copied", Static).update(f"Last copied: {spec}")
         with contextlib.suppress(Exception):
             self.app.copy_to_clipboard(spec)
             self.app.notify(f"Copied model spec to clipboard: {spec}", severity="information")
