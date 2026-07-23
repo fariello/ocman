@@ -1058,13 +1058,11 @@ class PostExecutionSummaryModal(ModalScreen[None]):
 # re-parented (the storage-worker lifecycle stays as-is).
 # ---------------------------------------------------------------------------
 class _FooterOverlay(ModalScreen[None]):
-    """Base for the footer-command overlays: a large centered panel that dismisses
-    on Escape or Ctrl+M (Main)."""
+    """Base for the footer-command overlays: a large centered panel. Dismisses on Escape or
+    by clicking OUTSIDE the panel (on the modal backdrop). No 'Main' button (B4-03)."""
 
     BINDINGS = [
-        # Esc dismisses the overlay. No ctrl+m: in many terminals ctrl+m IS Enter (CR),
-        # so binding it risked hijacking Enter. The footer "Esc Main" button is the click path.
-        Binding("escape", "dismiss_overlay", "Main", show=False),
+        Binding("escape", "dismiss_overlay", "Return", show=False),
     ]
 
     CSS = """
@@ -1083,10 +1081,11 @@ class _FooterOverlay(ModalScreen[None]):
         text-style: bold;
         margin-bottom: 1;
     }
-    #overlay-close-row {
-        height: auto;
-        align: center middle;
-        margin-top: 1;
+    /* B4-01a/02d/04a: the widget hosted in the overlay fills the panel below the title. */
+    .overlay-panel > StorageWidget,
+    .overlay-panel > RunningWidget,
+    .overlay-panel > ModelsWidget {
+        height: 1fr;
     }
     """
 
@@ -1095,40 +1094,39 @@ class _FooterOverlay(ModalScreen[None]):
     def action_dismiss_overlay(self) -> None:
         self.dismiss()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-overlay-close":
+    def on_click(self, event) -> None:
+        # B4-01e/B4-02e: a click on the modal backdrop (the screen itself, i.e. OUTSIDE the
+        # .overlay-panel) returns to the main workspace, like Esc. A click inside the panel
+        # has a different widget as the event target and is left alone.
+        if getattr(event, "widget", None) is self:
             self.dismiss()
 
 
 class DoctorOverlay(_FooterOverlay):
     """`^d` Doctor: the read-only storage checkup (a fresh StorageWidget)."""
-    title_text = "🩺 STORAGE / DOCTOR CHECKUP  (Esc or ^m to return)"
+    title_text = "🩺 OCMAN DOCTOR (Esc to return)"
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="overlay-panel"):
             yield Label(self.title_text, classes="overlay-title")
             yield StorageWidget()
-            with Horizontal(id="overlay-close-row"):
-                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
 
 class RunningOverlay(_FooterOverlay):
     """`^r` Running: observe-only running OpenCode instances (a fresh RunningWidget)."""
-    title_text = "▶ RUNNING OPENCODE INSTANCES  (Esc or ^m to return)"
+    title_text = "▶ RUNNING OPENCODE INSTANCES (Esc to return)"
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="overlay-panel"):
             yield Label(self.title_text, classes="overlay-title")
             yield RunningWidget()
-            with Horizontal(id="overlay-close-row"):
-                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
 
 class ConfigOverlay(_FooterOverlay):
     """`^g` Config: the configuration form. Loads on mount; auto-saves on change
     (the app-level cfg-* handlers) and, critically, saves on dismiss (replacing the
     old auto-save-on-tab-switch that no longer fires now that Config is not a tab)."""
-    title_text = "⚙ CONFIGURATION SETTINGS  (Esc or ^m to return)"
+    title_text = "⚙ CONFIGURATION SETTINGS (Esc to return)"
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="overlay-panel"):
@@ -1152,8 +1150,6 @@ class ConfigOverlay(_FooterOverlay):
             with Horizontal(id="config-buttons-container"):
                 yield Button("Save Configuration", id="btn-save-config", variant="primary")
                 yield Button("[b red]⚠[/] Reset to Defaults", id="btn-reset-config", variant="error")
-            with Horizontal(id="overlay-close-row"):
-                yield Button("Esc Main", id="btn-overlay-close", variant="primary")
 
     def on_mount(self) -> None:
         # Load current config into THIS overlay's fields.
@@ -1167,11 +1163,7 @@ class ConfigOverlay(_FooterOverlay):
         self.dismiss()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "btn-overlay-close":
-            with contextlib.suppress(Exception):
-                self.app.save_tui_config(notify=False, root=self)
-            self.dismiss()
-        elif event.button.id == "btn-save-config":
+        if event.button.id == "btn-save-config":
             with contextlib.suppress(Exception):
                 self.app.save_tui_config(notify=True, root=self)
         elif event.button.id == "btn-reset-config":
@@ -1247,11 +1239,14 @@ class OrsessionApp(App):
                                     yield Label("FORMAT CONTROLS", classes="panel-card-title")
                                     yield Checkbox("Include Tools", value=False, id="check-include-tools")
                                     yield Checkbox("All Roles", value=False, id="check-all-roles")
-                                    yield Checkbox("Full lines", value=False, id="check-full-lines")
-                                    # B2-03b: say what these limit.
+                                    # B4-06b: "Expanded" shows full turn text; unticked shows a
+                                    # one-line CLI-style preview per turn.
+                                    yield Checkbox("Expanded", value=False, id="check-full-lines")
+                                    # B4-06c: labels are also set as border titles so each field
+                                    # is self-describing.
                                     yield Label("Max interactions shown:", classes="info-label")
                                     yield Input("100", id="input-max-interactions")
-                                    yield Label("Max lines (when not Full):", classes="info-label")
+                                    yield Label("Max lines (when Expanded):", classes="info-label")
                                     yield Input("2500", id="input-max-lines")
                                     yield Button("Refresh View", id="btn-refresh-transcript", variant="primary")
 
@@ -1354,7 +1349,7 @@ class OrsessionApp(App):
             yield Button("[b]^d[/b] 🩺Doctor", id="foot-doctor", classes="footer-btn")
             yield Button("[b]^r[/b] ▶Running", id="foot-running", classes="footer-btn")
             yield Button("[b]^g[/b] ⚙Config", id="foot-config", classes="footer-btn")
-            yield Button("⌂Main", id="foot-main", classes="footer-btn")
+
 
     def on_mount(self) -> None:
         import asyncio
@@ -1526,20 +1521,6 @@ class OrsessionApp(App):
         """Open the Configuration overlay."""
         if not self._overlay_active():
             self.push_screen(ConfigOverlay())
-
-    def action_show_main(self) -> None:
-        """Return to the main workspace by dismissing any open footer overlay.
-
-        Delegate to the overlay's own dismiss so per-overlay teardown runs (e.g. the Config
-        overlay saves on dismiss). Falls back to pop_screen if the screen lacks the hook.
-        """
-        if self._overlay_active():
-            screen = self.screen
-            dismisser = getattr(screen, "action_dismiss_overlay", None)
-            if callable(dismisser):
-                dismisser()
-            else:
-                self.pop_screen()
 
     def action_refresh_data(self) -> None:
         # Preserve any active search filter across a refresh (B2-07).
@@ -1793,34 +1774,47 @@ class OrsessionApp(App):
         if max_interactions > 0:
             turns = truncate_turns_by_interactions(turns, max_interactions)
 
-        # PB-06: by default show CLI-style TRUNCATED lines (per the "Max Lines" budget); only
-        # when "Full lines" is toggled do we render every line, and then warn if the rendered
-        # transcript is very large.
-        if not full_lines and max_lines > 0:
-            turns = truncate_turns_by_lines(turns, max_lines)
-
         # Estimate compaction cost info based on chosen model
         self.update_estimated_cost(turns)
 
-        # Render Markdown
-        transcript_markdown = render_transcript(turns, self.selected_session_title)
+        active_query = getattr(self, "_active_query", "").strip()
+
         if full_lines:
+            # B4-06b Expanded: full turn text via the standard renderer.
+            transcript_markdown = render_transcript(turns, self.selected_session_title)
             line_count = transcript_markdown.count("\n") + 1
             if line_count > 2500:
                 self.app.notify(
-                    f"Full transcript is {line_count:,} lines (over 2,500). Untick 'Full lines' "
-                    "to show truncated lines.",
+                    f"Full transcript is {line_count:,} lines (over 2,500). Untick 'Expanded' "
+                    "to show one-line previews.",
                     severity="warning",
                 )
-        # B2-07c: when a search query is active, keep only matching lines (case-insensitive
-        # substring), driven by the SAME query as the tree filter.
-        active_query = getattr(self, "_active_query", "").strip()
+        else:
+            # B4-06b NOT expanded: one CLI-style collapsed preview line per turn (role + first
+            # ~100 chars, line breaks collapsed), matching the command-line preview.
+            try:
+                from ocman import collapse_to_preview
+            except Exception:
+                collapse_to_preview = lambda t, max_chars=100: " ".join(str(t).split())[:max_chars]
+            role_short = {"user": "U", "assistant": "A", "system": "S", "tool": "T"}
+            preview_lines = []
+            for t in turns:
+                r = role_short.get(getattr(t, "role", ""), (getattr(t, "role", "?") or "?")[:1].upper())
+                preview_lines.append(f"{r}: {collapse_to_preview(getattr(t, 'text', '') or '', 100)}")
+            body = "\n".join(preview_lines) if preview_lines else "(no interactions)"
+            transcript_markdown = f"# {self.selected_session_title}\n\n```\n{body}\n```"
+
+        # B2-07c/B4-06a: when a search query is active, keep only matching lines and render them
+        # in a fenced code block so every matched line stays on its OWN line (Markdown would
+        # otherwise collapse single newlines into one paragraph) and `#`/`*` are not reinterpreted.
         if active_query:
             ql = active_query.lower()
-            kept = [ln for ln in transcript_markdown.splitlines() if ql in ln.lower()]
+            kept = [ln for ln in transcript_markdown.splitlines()
+                    if ql in ln.lower() and ln.strip() not in ("```", "")]
             if kept:
-                transcript_markdown = (f"_Showing {len(kept)} line(s) matching "
-                                       f"`{active_query}`._\n\n" + "\n".join(kept))
+                transcript_markdown = (
+                    f"_Showing {len(kept)} line(s) matching `{active_query}`:_\n\n"
+                    "```\n" + "\n".join(kept) + "\n```")
             else:
                 transcript_markdown = f"_No transcript lines match `{active_query}`._"
         self.query_one("#transcript-md", Markdown).update(transcript_markdown)
@@ -1888,9 +1882,7 @@ class OrsessionApp(App):
         elif event.button.id == "foot-config":
             self.action_show_config()
             return
-        elif event.button.id == "foot-main":
-            self.action_show_main()
-            return
+
 
         # Transcript reload controls
         if event.button.id == "btn-refresh-transcript":

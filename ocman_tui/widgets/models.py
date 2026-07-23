@@ -3,6 +3,7 @@ Models Library widget with real-time searching and pricing DataTable.
 """
 
 from __future__ import annotations
+import contextlib
 from typing import List
 
 from textual.app import ComposeResult
@@ -76,3 +77,18 @@ class ModelsWidget(Static):
     def on_input_changed(self, event: Input.Changed) -> None:
         if event.input.id == "input-model-search":
             self.load_models(event.value)
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
+        """B4-04b: clicking a model row copies its Provider/ID to the clipboard."""
+        if getattr(event, "data_table", None) is None or event.data_table.id != "models-table":
+            return
+        try:
+            row = event.data_table.get_row(event.row_key)
+            spec = str(row[1])  # "Provider / ID" column
+        except Exception:
+            return
+        if not spec:
+            return
+        with contextlib.suppress(Exception):
+            self.app.copy_to_clipboard(spec)
+            self.app.notify(f"Copied model spec to clipboard: {spec}", severity="information")

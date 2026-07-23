@@ -20,17 +20,17 @@ class RunningWidget(Static):
     """Read-only running-instance list with a loud insecure-server banner."""
 
     def compose(self) -> ComposeResult:
+        # B4-02b: no `panel-card` on this outer Vertical (the overlay panel is the box).
+        # B4-02c: Refresh sits to the right of the running-instances count/status.
         yield Vertical(
-            Label("RUNNING OPENCODE INSTANCES (observe-only)", classes="panel-card-title"),
             Horizontal(
+                Static("", id="lbl-running-status", classes="info-value"),
                 Button("Refresh", id="btn-refresh-running", variant="primary"),
                 Checkbox("All users", value=False, id="check-running-all-users"),
                 classes="search-bar-row",
             ),
-            Static("", id="lbl-running-status", classes="info-value"),
             DataTable(id="running-table"),
             Static("", id="lbl-running-banner", classes="info-value"),
-            classes="panel-card",
         )
 
     def on_mount(self) -> None:

@@ -85,17 +85,19 @@ class StorageWidget(Static):
 
     def compose(self) -> ComposeResult:
         yield Vertical(
-            # Doctor checkup
+            # Doctor checkup. B4-01b title rename; B4-01c "Run Checkup" sits immediately right
+            # of the title (id kept as btn-run-doctor for the handler).
             Vertical(
-                Label("STORAGE CHECKUP (read-only)", classes="panel-card-title"),
                 Horizontal(
-                    Button("Run / Refresh Checkup", id="btn-run-doctor", variant="primary"),
+                    Label("CHECKUP RESULTS (read-only)", classes="panel-card-title"),
+                    Button("Run Checkup", id="btn-run-doctor", variant="primary"),
                     Checkbox("Deep scan (slower)", value=False, id="check-doctor-deep"),
                     classes="search-bar-row",
                 ),
                 DataTable(id="doctor-table"),
                 Static("", id="lbl-doctor-summary", classes="info-value"),
                 classes="panel-card",
+                id="doctor-checkup-card",
             ),
             # Reclaim
             Vertical(
@@ -121,6 +123,7 @@ class StorageWidget(Static):
                 ),
                 RichLog(id="reclaim-log", max_lines=1000, classes="log-area"),
                 classes="panel-card",
+                id="reclaim-card",
             ),
         )
 

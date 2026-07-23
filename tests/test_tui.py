@@ -1349,8 +1349,15 @@ async def test_tui_footer_bar_buttons_present(tui_db):
     async with app.run_test() as pilot:
         await pilot.pause()
         for bid in ("foot-select", "foot-quit", "foot-sidebar", "foot-update",
-                    "foot-doctor", "foot-running", "foot-config", "foot-main"):
+                    "foot-doctor", "foot-running", "foot-config"):
             assert app.query_one("#" + bid, Button) is not None
+        # B4-03: the Main footer button was removed (Esc / click-outside return instead).
+        from textual.css.query import NoMatches as _NM
+        try:
+            app.query_one("#foot-main", Button)
+            assert False, "foot-main should have been removed"
+        except _NM:
+            pass
         # B2-08: the Search footer button is gone.
         from textual.css.query import NoMatches
         try:
@@ -1467,7 +1474,6 @@ async def test_tui_no_ctrl_m_binding_esc_dismisses(tui_db):
     async with app.run_test() as pilot:
         await pilot.pause()
         assert not any(b.key == "ctrl+m" for b in app.BINDINGS)
-        assert "Main" in str(app.query_one("#foot-main", Button).label)
         app.action_show_doctor()
         await pilot.pause()
         assert isinstance(app.screen, DoctorOverlay)
@@ -1747,3 +1753,101 @@ def test_tui_warn_glyph_has_trailing_space():
     bad = re.findall(r'\[b red\]⚠\[/\](?! )', src)
     assert not bad, f"warn glyph without trailing space: {len(bad)} occurrence(s)"
     assert "\u26a0" in src  # U+26A0
+
+
+# ---------------------------------------------------------------------------
+# TUI polish batch 4 (IPD 20260722-2026-01, B4-01..B4-06)
+# ---------------------------------------------------------------------------
+@pytest.mark.anyio
+async def test_tui_overlay_titles_no_ctrl_m(tui_db):
+    """B4-01d/02a: overlay titles say '(Esc to return)' and never mention ^m."""
+    from ocman_tui.app import DoctorOverlay, RunningOverlay
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_doctor(); await pilot.pause()
+        t = app.screen.title_text
+        assert "OCMAN DOCTOR" in t and "Esc to return" in t and "^m" not in t
+        app.screen.dismiss(); await pilot.pause()
+        app.action_show_running(); await pilot.pause()
+        t = app.screen.title_text
+        assert "Esc to return" in t and "^m" not in t
+
+
+@pytest.mark.anyio
+async def test_tui_overlay_click_outside_dismisses(tui_db):
+    """B4-01e/02e: clicking the modal backdrop dismisses; clicking the panel does not."""
+    from ocman_tui.app import DoctorOverlay, _FooterOverlay
+    from textual.containers import Vertical
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.action_show_doctor(); await pilot.pause()
+        screen = app.screen
+        # click INSIDE the panel: should NOT dismiss
+        panel = screen.query_one(".overlay-panel", Vertical)
+        screen.on_click(type("E", (), {"widget": panel})())
+        await pilot.pause()
+        assert isinstance(app.screen, DoctorOverlay), "panel click must not dismiss"
+        # click on the backdrop (the screen itself): dismisses
+        screen.on_click(type("E", (), {"widget": screen})())
+        await pilot.pause()
+        assert not isinstance(app.screen, _FooterOverlay), "backdrop click should dismiss"
+
+
+def _md_source(app):
+    """Best-effort read of the current Markdown source set on #transcript-md."""
+    from textual.widgets import Markdown
+    md = app.query_one("#transcript-md", Markdown)
+    for attr in ("_markdown", "source", "_source"):
+        v = getattr(md, attr, None)
+        if isinstance(v, str) and v:
+            return v
+    return ""
+
+
+@pytest.mark.anyio
+async def test_tui_transcript_preview_mode(tui_db):
+    """B4-06b: not-expanded transcript renders one collapsed preview line per turn."""
+    from ocman import Turn
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.current_turns = [Turn(role="user", text="hello\nworld " + "x" * 300, index=1, source={}),
+                             Turn(role="assistant", text="hi there", index=2, source={})]
+        app.selected_session_title = "S"
+        app._active_query = ""
+        app.query_one("#check-full-lines", Checkbox).value = False
+        app.render_current_transcript()
+        await pilot.pause()
+        src = _md_source(app)
+        # rendered inside a code fence with 'U:'/'A:' one-line previews; no 300-char line survives
+        assert "```" in src
+        assert "x" * 200 not in src  # the long line was collapsed/truncated to ~100 chars
+
+
+@pytest.mark.anyio
+async def test_tui_search_matches_render_separate_lines(tui_db):
+    """B4-06a: matching lines render on separate lines in a code fence; header count == shown."""
+    from ocman import Turn
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.current_turns = [Turn(role="user", text="alpha match", index=1, source={}),
+                             Turn(role="assistant", text="beta match", index=2, source={}),
+                             Turn(role="user", text="gamma other", index=3, source={})]
+        app.selected_session_title = "S"
+        app._active_query = "match"
+        app.query_one("#check-full-lines", Checkbox).value = False
+        app.render_current_transcript()
+        await pilot.pause()
+        src = _md_source(app)
+        import re
+        m = re.search(r"Showing (\d+) line", src)
+        assert m, f"no 'Showing N' header in: {src!r}"
+        n = int(m.group(1))
+        # the code-fence body lines equal N
+        fence = src.split("```")
+        assert len(fence) >= 3, src
+        body_lines = [ln for ln in fence[1].splitlines() if ln.strip()]
+        assert len(body_lines) == n, f"header says {n} but body has {len(body_lines)}: {body_lines}"

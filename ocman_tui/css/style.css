@@ -428,3 +428,17 @@ ModelsWidget > .panel-card {
     margin: 0;
     padding: 0 1 0 0;
 }
+
+/* B4-01a: Doctor checkup table dominates the overlay; the reclaim card sizes to content and
+   its log stays short so the checkup table gets the bulk of the height. */
+StorageWidget { height: 1fr; }
+StorageWidget > Vertical { height: 1fr; }
+#doctor-checkup-card { height: 3fr; }
+#doctor-table { height: 1fr; }
+#reclaim-card { height: 1fr; }
+#reclaim-log { height: 6; }
+
+/* B4-02d: Running table fills the overlay (RunningWidget outer box de-bordered in B4-02b). */
+RunningWidget { height: 1fr; }
+RunningWidget > Vertical { height: 1fr; }
+#running-table { height: 1fr; }
