@@ -5,7 +5,7 @@
   maintainer finds not working: model copy, format-control labels, running refresh placement)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{storage,running,models}.py`,
   `tests/test_tui.py`, and `TODO.md` (item 3 deferral). No `ocman/cli.py` change. No DB/dep change.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -14,6 +14,15 @@
 - 2026-07-22 (its_direct/pt3-claude-opus-4.8): fifth round of maintainer hand-test feedback
   (13 sub-items) after batch 4 (20260722-2026-01). Several items are re-reports of batch-4 work
   that does not work in the maintainer's terminal; diagnoses below.
+- 2026-07-22 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-501..PR-504. Verified: Collapsible(title, collapsed, collapsed_symbol='▶', expanded_symbol=
+  '▼') matches the ask; doctor status is add_row column 1; TRANSCRIPT LOG title is a movable
+  Label; only 2 refs to #activity-audit-log. Revisions: B5-02 use Rich Text cell not markup
+  (PR-501); B5-07 pin async remove+remount + contained ripple (PR-502); fill tests must await
+  the worker before asserting (PR-503); "Last copied" is a 1-row line (PR-504). Decisions
+  resolved (B5-07 collapsible per-run, fill=full height, B5-06b Last-copied fallback).
+  Status -> reviewed; GO - PENDING HUMAN APPROVAL. NOTE: this is the 5th consecutive TUI
+  hand-test batch; consider a consolidated real-terminal hand-test pass after execution.
 
 ## Diagnoses (done before writing requirements)
 - Model row-copy (item 6b): the handler IS correct and FIRES in a headless pilot (a real click
@@ -38,7 +47,7 @@
 | ID | Item | Approach | Evidence |
 |----|------|----------|----------|
 | B5-01 | Doctor table: fills only after scroll / half-empty pane | After the checkup worker populates `#doctor-table`, call a layout refresh (`table.refresh(layout=True)` / `self.refresh(layout=True)`) so the 1fr region is recomputed with rows present; verify the table region fills and no scroll is needed when rows fit. | storage.py worker update; item-1 hypothesis |
-| B5-02 | Doctor status values need red/yellow/green like CLI | In the doctor row loader, style the status cell: ERROR->red, WARN->yellow, OK->green, else default. Use a Rich `Text`/markup cell so the DataTable renders color. | storage.py:39 _status_label / :176 add_row |
+| B5-02 | Doctor status values need red/yellow/green like CLI | In `add_row`, pass the status as a Rich `Text(label, style=...)` (NOT a `[markup]` string - DataTable cells need a renderable, and markup is not parsed in a plain-string cell). Map ERROR/vulnerable->red, WARN/exposed->yellow, OK->green, UNKNOWN/other->default. Verify by asserting the cell is a Text with the mapped style. | storage.py:39 _status_label / :176 add_row (status is column index 1) |
 | B5-03 | Running table < 50% pane (5 rows) | Same root cause as B5-01 (region/refresh). Apply the same layout-refresh after load. If it still cannot fill with few rows (accepted earlier), DEFER to TODO.md per maintainer. | running.py refresh_running |
 | B5-03-TODO | If B5-03 not fully fixable, record in TODO.md | Add a TODO.md entry: "TUI tables (Running/Models/Doctor) do not always paint full-height background with few rows." | TODO.md |
 | B5-04 | Running: Refresh button missing (off-screen) | Fix the count/Refresh Horizontal so Refresh renders on-screen immediately right of the "N running instance(s)" status (size the status Static so the button fits within the pane width). | running.py:24 count row; render x=112..128 overflow |
@@ -61,6 +70,14 @@
 - B5-06b: RESOLVED = add a "Last copied:" selectable Static line under the models table as the
   clipboard fallback (plus keep the copy attempt + toast).
 
+## Plan-review findings (2026-07-22)
+| ID | Sev | Scope | Area | Evidence | Finding | Decision |
+|----|-----|-------|------|----------|---------|----------|
+| PR-501 | MEDIUM | UNDER-SCOPE | A/correctness | storage.py:176 | B5-02 must pass a Rich `Text(label, style=...)` cell; a `[markup]` string is NOT parsed in a DataTable cell | FIXED |
+| PR-502 | MEDIUM | UNDER-SCOPE | C/anti-regression | app.py:1326,1415 | B5-07 swaps RichLog->Collapsibles: `load_audit_trail` must remove old Collapsibles then async-mount new ones; only 2 refs to #activity-audit-log (ripple contained) | FIXED (design pins it) |
+| PR-503 | MEDIUM | UNDER-SCOPE | E/testing | batch-4 fill bug | The "table fills full height" tests MUST await the load worker before asserting region height, or they pass while reality fails (as in batch 4) | FIXED |
+| PR-504 | LOW | UNDER-SCOPE | F/UX | B5-06b | The "Last copied" Static must be a 1-row line that does not steal table height | FIXED |
+
 ## B5-07 design (collapsible per-run log; NEW scope)
 - Today `load_audit_trail` (app.py:1413) reads `runs[]` from the history ledger and writes one
   flat text block per run into a `RichLog#activity-audit-log`.
@@ -69,7 +86,10 @@
   RUN:"`, `collapsed=True`, containing `Static`(s) with that run's existing detail lines. Textual
   `Collapsible` provides the ▶/▼ disclosure + click-to-toggle natively (no custom key handling).
 - `load_audit_trail` must MOUNT new Collapsibles (async) into the scroll container, not write
-  text; on refresh it removes the old ones first. Guard for the not-yet-mounted case.
+  text; on refresh it FIRST removes the old ones (`scroll.remove_children()` or query+remove),
+  then mounts fresh ones. Guard for the not-yet-mounted case (contextlib.suppress). Only two refs
+  to `#activity-audit-log` exist (compose + load_audit_trail), so the ripple is contained; no
+  other code reads that RichLog (PR-502).
 - The B2-12 prune controls row + legend stay docked below the scroll.
 - Empty state: a single "No activity recorded yet." Static when `runs` is empty.
 
@@ -79,7 +99,9 @@
 ## Validation plan
 - `PYTHONPATH=. pytest -q` full suite green; paste ACTUAL output. TUI tests isolate OCMAN_CONFIG_PATH.
 - ON-SCREEN render assertions at 120x40: B5-04 Refresh button fully on-screen (x+width <= width);
-  B5-01/03/06a table region height ~= available pane height after load; B5-05a Expanded toggle
+  B5-01/03/06a table region height ~= available pane height AFTER awaiting the load worker
+  (PR-503: poll until rows are present / worker done, THEN assert region height, so the test
+  fails if the fill is only correct at mount but not after data loads); B5-05a Expanded toggle
   is a sibling of the TRANSCRIPT LOG title (same Horizontal); B5-05b each FORMAT CONTROLS input
   has a non-empty border_title; B5-02 an ERROR/WARN/OK row renders the status cell with the
   mapped color markup; B5-06b row-select sets the "Last copied" Static; B5-08 Tab.-active rule
