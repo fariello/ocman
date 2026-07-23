@@ -7,7 +7,7 @@
   map that does NOT match the CLI (NOTICE not yellow).
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/{storage,models,spend,running,database}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change (mirror its existing `_DOCTOR_TAGS`). No DB/dep change.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -40,19 +40,35 @@
 
 | ID | Item | Approach | Evidence |
 |----|------|----------|----------|
-| B6-01 | Tables fill full height (Models/Spend/Running/Doctor) | Give `.search-bar-row` (and the Database label+input `Horizontal`s) `height: auto` so the controls row takes ONE row and the `1fr` table gets the rest. This is the single root-cause fix for all small tables. Verify each table region ~= pane height after load. | style.css: no .search-bar-row rule (defaults 1fr); measured 50/50 split |
-| B6-02 | DOCTOR status colors EXACTLY like the CLI (esp. NOTICE=yellow) | Replace the TUI `_STATUS_STYLE` with a full mirror of the CLI `_DOCTOR_TAGS` (cli.py:13677): map every DOCTOR_* status to the same color + bold: INFO green, OK bold green, NOTICE yellow, WARN bold yellow, DEBUG teal, ERROR bold red, UNKNOWN white, SKIPPED default; unrecognized -> default. Use a Rich Text cell with the matching hex + bold. Keep the CLI's intent verbatim. | storage.py:40 _STATUS_STYLE (missing NOTICE etc.); cli.py:13677 _DOCTOR_TAGS |
+| B6-01 | Tables fill full height (Models/Spend/Running/Doctor) | Give `.search-bar-row` `height: auto` so the controls row takes its natural (1-row) height and the `1fr` table gets the rest. Also give `.horizontal-buttons` `height: auto` (same latent 1fr issue in dialogs/action rows; 10 uses in app.py). Audit confirmed: all `.search-bar-row` uses are single control rows, so `auto` is correct. Verify each table region ~= pane height after load. | style.css: no .search-bar-row rule (defaults 1fr); measured 50/50 split; .horizontal-buttons 10 uses |
+| B6-02 | DOCTOR status colors EXACTLY like the CLI (esp. NOTICE=yellow) | DERIVE the TUI status style from the CLI `_DOCTOR_TAGS` (importable from ocman) rather than a hand-copied dict, so they CANNOT drift again (this map has been wrong 3x). Build a `{status: (hex, bold)}` from `_DOCTOR_TAGS`' ANSI codes via a small fixed ANSI->hex table (32->green #a6e3a1, 33->yellow #f9e2af, 31->red #f38ba8, 36->teal #94e2d5, 37->white #cdd6f4, None->default). Render the status as a Rich `Text(label, style=hex + (" bold" if bold))`. NOTICE=33=yellow, OK=32 bold=bold green, etc. | storage.py:40 _STATUS_STYLE (missing NOTICE etc.); cli.py:13677 _DOCTOR_TAGS (importable, verified) |
 | B6-03 | FORMAT CONTROLS inputs must show a visible label | border_title is invisible without a border. FIX: put a visible inline `Label` immediately before each input (e.g. "Max interactions:" / "Max lines (when Expanded):") in the narrow controls pane, OR give ONLY these inputs a 1-line border so their border_title renders. DECIDE approach in review; RECOMMEND visible Labels (simpler, always shows, no height cost beyond 1 row each). | app.py:1244-1250; Input border:none style.css:98 |
 | B6-04 | DATABASE OPERATIONS inputs must be clearly labeled + on-screen | Constrain each label+input `Horizontal` to `height: auto` and give the Label an explicit width (or stack Label above Input) so the Input is not pushed off-screen; ensure all three (Clean Older Than, Project scope, Prune backups older-than) show their label and the field is fully visible. | database.py:241-254,283-286; measured off-screen x=131 |
 
-## Design decisions to settle in plan-review (OPEN)
-- B6-03: visible inline Labels vs a 1-line border on those two inputs. RECOMMEND inline Labels
-  (batch-2/3 already use info-label Labels elsewhere; consistent + guaranteed visible).
-- B6-02: mirror the CLI bold treatment too (OK/WARN/ERROR are bold in the CLI)? RECOMMEND yes -
-  full parity, so the TUI reads exactly like the command line.
-- B6-01: `.search-bar-row` -> `height: auto` is global (used by Models/Spend/Running/Storage);
-  confirm no row that legitimately needs to grow uses this class (audit: all uses are single
-  control rows, so auto is correct).
+## Design decisions (RESOLVED in plan-review 2026-07-22)
+- B6-03: RESOLVED = visible inline `Label` before each FORMAT CONTROLS input (Label above Input,
+  each 1 row), NOT border_title (invisible on a border-less input). "Max interactions:" and
+  "Max lines (when Expanded):".
+- B6-02: RESOLVED = mirror the CLI bold treatment too (OK/WARN/ERROR bold), derived from
+  `_DOCTOR_TAGS` for full parity + no drift.
+- B6-01: RESOLVED = `.search-bar-row` + `.horizontal-buttons` -> `height: auto`; audit confirms
+  all uses are single control/button rows.
+
+## Plan-review findings (2026-07-22)
+| ID | Sev | Scope | Area | Evidence | Finding | Decision |
+|----|-----|-------|------|----------|---------|----------|
+| PR-601 | MEDIUM | UNDER-SCOPE | A/anti-regression | cli.py:13677 | The color map has been wrong 3x; DERIVE the TUI map from cli._DOCTOR_TAGS (importable) so they cannot drift, not a hand-copied dict | FIXED |
+| PR-602 | LOW | UNDER-SCOPE | F/UX | style.css .horizontal-buttons | `.horizontal-buttons` (10 uses) has the same latent 1fr issue; give it height:auto too | FIXED |
+| PR-603 | LOW | UNDER-SCOPE | F/UX | Input border:none | B6-03 resolved to visible inline Labels (border_title cannot show without a border) | FIXED |
+
+## Workflow history
+- 2026-07-22 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-601..PR-603. Verified: `.search-bar-row` has no CSS (defaults 1fr) -> measured 50/50 table
+  split; Input border:none makes border_title invisible; Database label+input Horizontals push
+  inputs off-screen (x=131); cli._DOCTOR_TAGS is importable with ANSI codes + bold (NOTICE=33
+  yellow). Revisions: derive doctor colors from _DOCTOR_TAGS (PR-601); also fix .horizontal-buttons
+  (PR-602); FORMAT CONTROLS uses visible inline Labels (PR-603). Decisions resolved. Status ->
+  reviewed; GO - PENDING HUMAN APPROVAL.
 
 ## Non-goals
 - No CLI/DB/dependency change. Mirror the CLI color map; do not re-derive a new palette.
@@ -82,4 +98,4 @@ Create a step-granular TodoWrite checklist (one item per B6-*) BEFORE coding.
 - Release: 1.3.0 rung-C needs a delta release-review covering this batch.
 
 ## Deferred / open
-- The OPEN decisions above are resolved in plan-review before execution.
+- None. All open decisions resolved (see Design decisions).
