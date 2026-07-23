@@ -237,21 +237,15 @@ class DatabaseAdminWidget(Static):
             with Vertical(classes="panel-card"):
                 yield Label("DATABASE OPERATIONS", classes="panel-card-title")
                 yield VerticalScroll(
-                    # B2-10a: single "Clean Older Than" duration field (example inline).
-                    Horizontal(
-                        Label("Clean Older Than:", classes="info-label"),
-                        Input("5d", id="input-retention-duration",
-                              placeholder="example: 2h or 3mo"),
-                    ),
+                    # B6-04: label ABOVE each input (a Label+Input Horizontal pushed the input
+                    # off-screen; stacking keeps the label visible and the field on-screen).
+                    Label("Clean Older Than:", classes="info-label"),
+                    Input("5d", id="input-retention-duration", placeholder="example: 2h or 3mo"),
                     # B2-10b: units legend.
                     Label("h = hours, d = days, w = weeks, mo = months, y = years",
                           classes="info-label"),
-                    # B2-10c: labeled operation inputs.
-                    Horizontal(
-                        Label("Project scope (optional; blank = all projects):", classes="info-label"),
-                        Input("", id="input-prune-project",
-                              placeholder="project name/number/id/path"),
-                    ),
+                    Label("Project scope (optional; blank = all projects):", classes="info-label"),
+                    Input("", id="input-prune-project", placeholder="project name/number/id/path"),
                     Horizontal(
                         Checkbox("Dry Run (Preview changes, delete nothing)", value=True, id="check-dry-run"),
                     ),
@@ -280,10 +274,8 @@ class DatabaseAdminWidget(Static):
                         Label("Backup Target:", classes="info-label"),
                         Static("", id="lbl-backup-target-dir", classes="info-value"),
                     ),
-                    Horizontal(
-                        Label("Prune backups older than (days):", classes="info-label"),
-                        Input("30", id="input-backup-clean-days", placeholder="e.g. 30"),
-                    ),
+                    Label("Prune backups older than (days):", classes="info-label"),
+                    Input("30", id="input-backup-clean-days", placeholder="e.g. 30"),
                     id="backup-fields"
                 )
                 with Horizontal():

@@ -460,3 +460,13 @@ ModelsWidget > .panel-card { height: 1fr; }
 
 /* B5-04: bound the running status so the Refresh button stays on-screen next to it. */
 #lbl-running-status { width: 1fr; }
+
+/* B6-01: control/button rows must take their natural (1-row) height, NOT the default 1fr,
+   which was splitting each pane 50/50 with its DataTable and squeezing the tables. This single
+   fix lets the 1fr tables (Models/Spend/Running/Doctor) fill the space below their controls. */
+.search-bar-row {
+    height: auto;
+}
+.horizontal-buttons {
+    height: auto;
+}

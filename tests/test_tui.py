@@ -1866,15 +1866,26 @@ def test_tui_active_tab_css_blue():
     assert m.group(1).lower() == "#89b4fa"
 
 
-def test_tui_doctor_status_cell_colored():
-    """B5-02: doctor status cell is a colored Rich Text (green/yellow/red), not plain markup."""
-    from ocman_tui.widgets.storage import _status_cell
+def test_tui_doctor_status_cell_matches_cli():
+    """B6-02: doctor status colors are derived from the CLI _DOCTOR_TAGS (no drift). NOTICE is
+    yellow (exactly like the command line), OK/WARN/ERROR are bold with matching colors."""
+    from ocman_tui.widgets.storage import _status_cell, _ANSI_TO_HEX
     from rich.text import Text
-    ok = _status_cell("ok"); err = _status_cell("error"); warn = _status_cell("warn")
-    assert isinstance(ok, Text) and ok.style == "#a6e3a1"
-    assert err.style == "#f38ba8"
-    assert warn.style == "#f9e2af"
-    assert str(ok) == "OK"
+    import ocman
+    # NOTICE must be yellow, not bold (CLI: ("NOTIC", "33", False)).
+    notice = _status_cell("notice")
+    assert isinstance(notice, Text) and notice.style == "#f9e2af", notice.style
+    assert _status_cell("ok").style == "#a6e3a1 bold"
+    assert _status_cell("warn").style == "#f9e2af bold"
+    assert _status_cell("error").style == "#f38ba8 bold"
+    assert _status_cell("info").style == "#a6e3a1"
+    assert _status_cell("debug").style == "#94e2d5"
+    assert str(notice) == "NOTICE"
+    # Derivation actually reads the CLI map, so the two cannot silently diverge.
+    for status, (_label, code, bold) in ocman._DOCTOR_TAGS.items():
+        expected_hex = _ANSI_TO_HEX.get(code, "#cdd6f4")
+        expected = f"{expected_hex} bold" if bold else expected_hex
+        assert _status_cell(status).style == expected, f"{status}: {_status_cell(status).style} != {expected}"
 
 
 @pytest.mark.anyio
@@ -1890,13 +1901,17 @@ async def test_tui_expanded_toggle_next_to_transcript_title(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_format_controls_border_titles(tui_db):
-    """B5-05b: FORMAT CONTROLS inputs carry a border_title so they are self-describing."""
+async def test_tui_format_controls_have_visible_labels(tui_db):
+    """B6-03: FORMAT CONTROLS inputs have a visible sibling Label (border_title is invisible on
+    a border-less Input)."""
+    from textual.widgets import Label
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        assert app.query_one("#input-max-interactions", Input).border_title
-        assert app.query_one("#input-max-lines", Input).border_title
+        panel = app.query_one("#controls-panel")
+        label_texts = [str(l.render()) for l in panel.query(Label)]
+        assert any("Max interactions" in t for t in label_texts), label_texts
+        assert any("Max lines" in t for t in label_texts), label_texts
 
 
 @pytest.mark.anyio
@@ -1951,3 +1966,49 @@ async def test_tui_log_collapsible_per_run(tui_db, monkeypatch, tmp_path):
         assert cols, "no collapsible run entries"
         assert "2026-07-10 20:37:31 DELETE RUN:" in str(cols[0].title)
         assert cols[0].collapsed is True
+
+
+@pytest.mark.anyio
+async def test_tui_tables_fill_after_search_bar_fix(tui_db):
+    """B6-01: the controls row is 1 row (.search-bar-row height:auto) so the Models table fills
+    most of the pane instead of splitting it 50/50."""
+    from textual.widgets import DataTable
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-models"
+        await pilot.pause(); await pilot.pause()
+        mt = app.query_one("#models-table", DataTable)
+        # Was ~16 (50/50 split). After the fix it should be most of the ~32-row pane.
+        assert mt.region.height >= 24, f"models table too short: {mt.region.height}"
+
+
+@pytest.mark.anyio
+async def test_tui_database_ops_inputs_on_screen_and_labeled(tui_db):
+    """B6-04: DATABASE OPERATIONS inputs are on-screen and each has a visible label above it."""
+    from textual.widgets import Input, Label
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-admin"
+        await pilot.pause()
+        for iid in ("input-retention-duration", "input-prune-project", "input-backup-clean-days"):
+            inp = app.query_one("#" + iid, Input)
+            assert inp.region.x + inp.region.width <= 120, f"{iid} off-screen: {inp.region}"
+        # the labels exist in the admin widget
+        from ocman_tui.widgets.database import DatabaseAdminWidget
+        w = app.query_one(DatabaseAdminWidget)
+        texts = [str(l.render()) for l in w.query(Label)]
+        assert any("Clean Older Than" in t for t in texts)
+        assert any("Project scope" in t for t in texts)
+        assert any("Prune backups older than" in t for t in texts)
+
+
+def test_tui_control_row_css_height_auto():
+    """B6-01: .search-bar-row and .horizontal-buttons are height:auto (not the default 1fr)."""
+    from pathlib import Path as _P
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
+    import re
+    for cls in (r"\.search-bar-row", r"\.horizontal-buttons"):
+        m = re.search(cls + r"\s*\{[^}]*height:\s*auto", css)
+        assert m, f"{cls} missing height:auto"

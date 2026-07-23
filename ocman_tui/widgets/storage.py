@@ -35,22 +35,37 @@ from ..core import (
 from .database import TextualLogRedirector
 
 
-# Doctor status label as a colored Rich Text cell (B5-02): green OK / yellow WARN /
-# red ERROR, matching the CLI. A DataTable cell needs a renderable (Text), NOT [markup].
-_STATUS_STYLE = {
-    "ok": "#a6e3a1",
-    "error": "#f38ba8",
-    "vulnerable": "#f38ba8",
-    "warn": "#f9e2af",
-    "warning": "#f9e2af",
-    "exposed": "#f9e2af",
+# B6-02: doctor status colors are DERIVED from the CLI's authoritative `_DOCTOR_TAGS`
+# (ocman.cli) so the TUI and command line can never drift. The CLI stores each status as an
+# ANSI code + bold flag; we translate those to the TUI palette. NOTICE=33=yellow, OK=32 bold,
+# ERROR=31 bold, etc. A DataTable cell needs a renderable (Text), NOT a [markup] string.
+_ANSI_TO_HEX = {
+    "31": "#f38ba8",  # red
+    "32": "#a6e3a1",  # green
+    "33": "#f9e2af",  # yellow
+    "36": "#94e2d5",  # teal
+    "37": "#cdd6f4",  # white/default
 }
+
+
+def _doctor_status_style(status: str) -> tuple[str, bool]:
+    """Return (hex_color, bold) for a doctor status, mirroring the CLI _DOCTOR_TAGS."""
+    try:
+        from ocman import _DOCTOR_TAGS
+        entry = _DOCTOR_TAGS.get(str(status or "").lower())
+        if entry is not None:
+            _label, code, bold = entry
+            return (_ANSI_TO_HEX.get(code, "#cdd6f4"), bool(bold))
+    except Exception:
+        pass
+    return ("#cdd6f4", False)  # default (also covers unknown/skipped)
 
 
 def _status_cell(status: str) -> "Text":
     from rich.text import Text
     raw = str(status or "unknown")
-    style = _STATUS_STYLE.get(raw.lower(), "#cdd6f4")
+    hex_color, bold = _doctor_status_style(raw)
+    style = f"{hex_color} bold" if bold else hex_color
     return Text(raw.upper(), style=style)
 
 
