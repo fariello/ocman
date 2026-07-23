@@ -1524,7 +1524,7 @@ def test_tui_accessibility_css_present():
     (zero-vertical-padding) widget rules are present in the stylesheet, so a later edit cannot
     silently revert the accessibility fix."""
     from pathlib import Path as _P
-    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
     # PB-02 toast colors
     assert "Toast.-information" in css and "Toast.-warning" in css and "Toast.-error" in css
     # PB-08 high-contrast input text
@@ -1551,7 +1551,7 @@ def test_prune_history_runs_older_than(tmp_path, monkeypatch):
         "runs": [{"timestamp": old, "reason": "old"}, {"timestamp": new, "reason": "new"}],
     }))
     removed = ocman.prune_history_runs_older_than(30)
-    data = json.loads(hist.read_text())
+    data = json.loads(hist.read_text(encoding="utf-8"))
     assert removed == 1
     assert [r["reason"] for r in data["runs"]] == ["new"]
     # cumulative kept in perpetuity
@@ -1567,7 +1567,7 @@ def test_prune_history_keeps_unparseable_timestamps(tmp_path, monkeypatch):
     hist.write_text(json.dumps({"cumulative": {}, "runs": [{"reason": "no-ts"},
                                                             {"timestamp": "garbage", "reason": "bad-ts"}]}))
     removed = ocman.prune_history_runs_older_than(1)
-    data = json.loads(hist.read_text())
+    data = json.loads(hist.read_text(encoding="utf-8"))
     assert removed == 0 and len(data["runs"]) == 2
 
 
@@ -1613,7 +1613,7 @@ def test_tui_one_color_button_css():
     """B2-GEN regression guard: buttons share one color (xterm 215 -> #ffd75f) with black text;
     the footer buttons use the same theme."""
     from pathlib import Path as _P
-    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
     assert "#ffd75f" in css          # the single button color
     assert ".footer-btn" in css and "#ffd75f" in css
 
@@ -1634,7 +1634,7 @@ async def test_tui_destructive_buttons_carry_warn_glyph(tui_db):
     # Buttons that live inside overlays/modals (reset-config, delete-orphans, reclaim PROCEED,
     # confirm-delete) are verified by a static source scan.
     from pathlib import Path as _P
-    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text()
+    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text(encoding="utf-8")
                     for f in ("app.py", "widgets/database.py", "widgets/storage.py"))
     import re
     destructive = re.findall(r'Button\((?:\n\s*)?"([^"]*)",\s*id="[^"]*",\s*variant="(?:error|warning)"', src)
@@ -1746,7 +1746,7 @@ async def test_tui_esc_cancels_dialogs(tui_db):
 def test_tui_warn_glyph_has_trailing_space():
     """B3-04/B3-05: destructive labels use U+26A0 with a trailing space ('⚠ LABEL')."""
     from pathlib import Path as _P
-    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text()
+    src = "\n".join((_P(__file__).parent.parent / "ocman_tui" / f).read_text(encoding="utf-8")
                     for f in ("app.py", "widgets/database.py", "widgets/storage.py"))
     # every warn prefix is exactly '[b red]⚠[/] ' (glyph then closing tag then a space)
     import re
@@ -1859,7 +1859,7 @@ async def test_tui_search_matches_render_separate_lines(tui_db):
 def test_tui_active_tab_css_blue():
     """B5-08: the active tab has a blue background rule."""
     from pathlib import Path as _P
-    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text()
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
     import re
     m = re.search(r"Tab\.-active\s*\{[^}]*background:\s*(#[0-9a-fA-F]{6})", css)
     assert m, "no Tab.-active background rule"
