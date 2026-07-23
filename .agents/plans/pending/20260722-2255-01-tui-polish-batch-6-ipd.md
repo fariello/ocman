@@ -7,9 +7,9 @@
   map that does NOT match the CLI (NOTICE not yellow).
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/{storage,models,spend,running,database}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change (mirror its existing `_DOCTOR_TAGS`). No DB/dep change.
-- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-22; executing B6-01..B6-04)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-22 ("IPD them and implement")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -69,6 +69,14 @@
   yellow). Revisions: derive doctor colors from _DOCTOR_TAGS (PR-601); also fix .horizontal-buttons
   (PR-602); FORMAT CONTROLS uses visible inline Labels (PR-603). Decisions resolved. Status ->
   reviewed; GO - PENDING HUMAN APPROVAL.
+
+- 2026-07-22 (its_direct/pt3-claude-opus-4.8): EXECUTED B6-01..B6-04 (commit 2879ada). Full
+  suite 512 passed, 2 skipped. B6-01 `.search-bar-row`/`.horizontal-buttons` height:auto -> Models
+  table region 16->30; B6-02 doctor colors DERIVED from ocman._DOCTOR_TAGS (notice=#f9e2af yellow,
+  ok/warn/error bold, info green, debug teal, unknown default) with a test asserting parity with
+  the CLI map so it can't drift again; B6-03 FORMAT CONTROLS uses visible inline Labels; B6-04
+  Database Operations stacks Label-above-Input so inputs stay on-screen. Real config untouched.
+  CAVEAT for hand-test: NOTICE now renders yellow; verify tables fill and inputs are labeled.
 
 ## Non-goals
 - No CLI/DB/dependency change. Mirror the CLI color map; do not re-derive a new palette.
