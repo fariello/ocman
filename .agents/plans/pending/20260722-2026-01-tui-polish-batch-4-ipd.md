@@ -5,10 +5,10 @@
   per-line truncation never applied)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{storage,running,models,spend}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change (reuse `collapse_to_preview`). No DB/dependency change.
-- Status: reviewed (plan-review applied 2026-07-22; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-22; executing B4-01..B4-06)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused; delta
   release-review must cover all TUI work before rung C).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-22 ("approved. Go!")
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -57,6 +57,17 @@
   reaches `#spend-table` so the table region fills; do not add synthetic empty-row styling.
 - B4-01e/B4-02e: RESOLVED = click-outside dismisses ONLY when the click target is the modal
   backdrop (the screen itself), NOT when clicking inside `.overlay-panel`.
+
+- 2026-07-22 (its_direct/pt3-claude-opus-4.8): EXECUTED B4-01..B4-06 (commit b97c16d). Full
+  suite 502 passed, 2 skipped. Notes: B4-01a doctor table fills via #doctor-checkup-card 3fr +
+  #reclaim-log capped (table ~9 rows); B4-06a matches render in a code fence (line breaks kept,
+  N==shown); B4-06b non-expanded turns use collapse_to_preview(100) with U:/A: prefixes;
+  checkbox renamed "Full lines"->"Expanded"; B4-03 removed foot-main + action_show_main + overlay
+  close buttons; B4-01e/02e click-backdrop-dismiss added to _FooterOverlay; B4-04b models
+  row-click copies Provider/ID. Real config untouched. CAVEATS for hand-test: all visual/table
+  sizing, click-outside dismiss, model-row copy (OSC-52 terminal-dependent), transcript preview
+  vs Expanded, and search line breaks. Plan stays in pending/ until maintainer hand-test sign-off,
+  then git mv -> executed/.
 
 ## Plan-review findings (2026-07-22)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
