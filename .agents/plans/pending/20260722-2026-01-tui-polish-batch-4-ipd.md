@@ -23,29 +23,30 @@
 | B4-01b | "STORAGE CHECKUP (read-only)" -> "CHECKUP RESULTS (read-only)" | Rename the label in StorageWidget. | storage.py checkup title Label |
 | B4-01c | "Run / Refresh Checkup" -> "Run Checkup", placed immediately right of "CHECKUP RESULTS (read-only)" | Rename button + move it into a Horizontal with the title label. | storage.py run-checkup button |
 | B4-01d | Doctor overlay title -> "OCMAN DOCTOR (Esc to return)" (drop `^m`) | Change DoctorOverlay.title_text; remove the "^m" mention everywhere (^m no longer bound). | app.py:1105 |
-| B4-01e | Click outside the Doctor pane returns (like Esc) | Add `on_click` to `_FooterOverlay`: if the click target is the screen itself (outside `.overlay-panel`), dismiss. | app.py:1060 _FooterOverlay |
+| B4-01e | Click outside the Doctor pane returns (like Esc) | RESOLVED: add `on_click` to `_FooterOverlay` that dismisses ONLY when the click target is the modal backdrop (the screen itself), NOT when clicking inside `.overlay-panel`. Shared by Doctor + Running. | app.py:1060 _FooterOverlay |
 | B4-02a | Running overlay title -> "RUNNING OPENCODE INSTANCES (Esc to return)" | Change RunningOverlay.title_text (drop `^m`). | app.py:1117 |
-| B4-02b | Running has 3 nested boxes; keep only 2 (controls + table) | RunningWidget wraps content in a `panel-card` Vertical; the overlay ALSO wraps in `.overlay-panel` + a title. Flatten: drop the widget's inner extra box so only the opts row + the table box remain. | running.py compose |
+| B4-02b | Running has 3 nested boxes; keep only 2 (controls + table) | RESOLVED: drop the RunningWidget's OUTER `panel-card` wrapper; the overlay's `.overlay-panel` is the single surrounding box, leaving (controls/count row) + (table). | running.py compose |
 | B4-02c | "Refresh" goes to the right of the running-instances count | Put the count Label + Refresh button in one Horizontal. | running.py Refresh button + count label |
 | B4-02d | Running table fills space | `#running-table` (or the RunningWidget table) + parents `height: 1fr`. | running.py table |
 | B4-02e | Click outside Running pane returns (like Esc) | Same `_FooterOverlay.on_click` as B4-01e (shared). | app.py:1060 |
 | B4-03 | Remove "Main" (footer button + overlay close button) | Delete the `foot-main` footer button + its handler, and the `#overlay-close-row`/`btn-overlay-close` button in each overlay. Esc + click-outside now cover it. | app.py:1313 foot-main; 1098 btn-overlay-close |
 | B4-04a | Models table fills space | Same as batch-3 attempt but verify at render; models.py table + parents 1fr in the OVERLAY context (the widget is now shown in an overlay, not a tab, so overlay-panel must be 1fr too). | models.py; overlay |
 | B4-04b | Clicking a model row copies Provider/ID to clipboard + says so | ModelsWidget: on `DataTable.RowSelected`, read the Provider/ID cell, `app.copy_to_clipboard`, toast. | models.py models-table |
-| B4-05 | Spend table still does not fill | DIAGNOSE: likely the DataTable only grows to its row count unless its container forces height. Confirm the `1fr` chain reaches the table INSIDE the tab (Spend is still a TAB, not overlay). If it is just "few rows", the table should still expand its background to fill; ensure `#spend-table { height: 1fr }` AND the widget/panel-card chain are 1fr (verify at render). If Textual DataTable only draws rows, accept + note. | spend.py; css:403-410 |
+| B4-05 | Spend table still does not fill | RESOLVED (acceptable if few rows): ensure the `1fr` chain reaches `#spend-table` INSIDE the Spend tab so the table REGION fills; do NOT add synthetic empty-row styling. "Container fills, rows are few" is accepted. Verify the table region height at render. | spend.py; css:403-410 |
 | B4-06a | Search: transcript matching lines lost their line breaks; "Showing 15" should show 14 lines | The matching lines are joined with single `\n` into MARKDOWN, which collapses soft breaks into one paragraph. Render matches as a fenced code block or join with hard breaks (two spaces + `\n`, or `\n\n`), and make the "Showing N" count equal the number of lines actually shown. | app.py:1820-1823 |
-| B4-06b | Transcripts must show each U:/A: line TRUNCATED (CLI-style) unless Expanded | The current "not Full lines" path calls `truncate_turns_by_lines` (drops later interactions), NOT per-line char truncation. Reuse the CLI's `collapse_to_preview(text, max_chars=100)` (cli.py:1617): when NOT expanded, render each turn as a one-line collapsed preview (line breaks collapsed, ~100 chars + ellipsis); Expanded = current full render. Rename "Full lines" checkbox to "Expanded" for clarity. | app.py:1799 truncate_turns_by_lines; cli.py:1617 collapse_to_preview |
+| B4-06b | Transcripts must show each U:/A: line TRUNCATED (CLI-style) unless Expanded | RESOLVED: when NOT expanded, render each turn as a one-line `collapse_to_preview(turn.text, max_chars=100)` preview (line breaks collapsed, ~100 chars + ellipsis) with its role label; Expanded = current full `render_transcript`. RENAME the "Full lines" checkbox (id `check-full-lines`) label to "Expanded". Import collapse_to_preview from ocman; graceful fallback if unavailable. | app.py:1799 truncate_turns_by_lines; cli.py:1617 collapse_to_preview; checkbox app.py:1250 |
 | B4-06c | FORMAT CONTROLS text fields have no labels | The "Max interactions"/"Max lines" inputs have labels ABOVE (batch-2), but the maintainer wants them clearer; put the label inside via Input `placeholder`/border-title, or keep a tight inline label. Ensure every input in FORMAT CONTROLS is self-describing. | app.py:1251-1256 |
 
-## Design decisions to settle in plan-review (OPEN)
-- B4-06b: exact preview width. CLI uses `collapse_to_preview(max_chars=100)`. RECOMMEND reuse
-  100 (parity with CLI); confirm. Also confirm the checkbox rename "Full lines" -> "Expanded".
-- B4-02b: which of the 3 Running boxes to drop - confirm the target is (opts row) + (table),
-  removing the outer `panel-card` wrapper that duplicates the overlay panel.
-- B4-05: if the Textual DataTable genuinely cannot paint a full-height background with few rows,
-  is "table container fills, rows are few" acceptable, or should the empty area be styled?
-- B4-01e/B4-02e: click-outside-to-dismiss - confirm it should NOT trigger when clicking inside
-  the panel (only the surrounding modal backdrop dismisses).
+## Design decisions (RESOLVED with maintainer 2026-07-22)
+- B4-06b: RESOLVED = reuse the CLI's `collapse_to_preview(text, max_chars=100)` (100-char parity)
+  for non-expanded turn previews, AND rename the checkbox "Full lines" -> "Expanded". Fall back
+  to the current behavior gracefully if collapse_to_preview cannot be imported.
+- B4-02b: RESOLVED = drop the RunningWidget's OUTER `panel-card` wrapper so only (opts/controls
+  row) + (table) remain; the overlay's `.overlay-panel` is the single surrounding box.
+- B4-05: RESOLVED = "table container fills, rows are few" is ACCEPTABLE. Ensure the `1fr` chain
+  reaches `#spend-table` so the table region fills; do not add synthetic empty-row styling.
+- B4-01e/B4-02e: RESOLVED = click-outside dismisses ONLY when the click target is the modal
+  backdrop (the screen itself), NOT when clicking inside `.overlay-panel`.
 
 ## Non-goals
 - No CLI/DB/dependency change (reuse existing `collapse_to_preview`). Not restyling beyond the list.
@@ -62,8 +63,8 @@
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Create a step-granular TodoWrite checklist (one item per B4-*) BEFORE coding.
-- Open questions: B4-06b width + checkbox rename, B4-02b box target, B4-05 empty-area, B4-01e/02e
-  click-outside scope (resolve in plan-review).
+- Open questions: none (B4-06b=100/rename-to-Expanded, B4-02b=drop outer panel-card, B4-05=accept
+  few-rows, B4-01e/02e=backdrop-only dismiss - all resolved).
 - Scope fence: `ocman_tui/**`, `tests/test_tui.py`. Nothing else.
 - Honesty rule: paste the ACTUAL pytest output.
 - Config safety: TUI tests set an isolated OCMAN_CONFIG_PATH; never touch the real config.
@@ -72,4 +73,4 @@ Create a step-granular TodoWrite checklist (one item per B4-*) BEFORE coding.
 - Release: 1.3.0 rung-C needs a delta release-review covering this batch.
 
 ## Deferred / open
-- The OPEN decisions above are resolved in plan-review before execution.
+- None. All 4 prior open decisions resolved (see Design decisions).
