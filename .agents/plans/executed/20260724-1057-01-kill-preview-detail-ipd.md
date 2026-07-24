@@ -8,7 +8,7 @@
   No new detection, no DB change, no signal-handling change, no dependency. Corrective IPD for the
   already-executed kill feature (`.agents/plans/executed/20260720-2350-01-kill-ipd.md`); per
   AGENTS.md a post-execution gap is closed with a NEW IPD, not by editing the executed one.
-- Status: reviewed (plan-review applied 2026-07-24; awaiting maintainer approval to execute)
+- Status: EXECUTED (2026-07-24; maintainer approved; 517 passed / 2 skipped)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -54,6 +54,18 @@
   / unknown, with human provenance strings). Revisions: surface provenance not a flat guess (PR-101),
   handle the plural/unknown session shapes (PR-102), broaden tests (PR-103). Two format decisions
   resolved interactively (multi-line block; listener/auth only-when-present). Verdict: APPROVE WITH REVISIONS APPLIED; GO - PENDING HUMAN APPROVAL.
+
+## Execution record
+- 2026-07-24 (its_direct/pt3-claude-opus-4.8): executed KP-01..04. Lifted `_sess_str` from a
+  nested fn inside `cli_list_running` to module scope (single source of truth; already handles the
+  three session shapes + provenance) and reused it in both the kill choose list and the confirm
+  block. Confirm block is now a multi-line per-target block (PID / Kind / Uptime / Project /
+  Session), with a Listener/Auth line ONLY when the instance has a listener. Choose list enriched
+  with kind/uptime/project + a session sub-line. No change to selection, signalling, guards, flags,
+  or exit behavior. Added 5 tests (single rich block; listener-less omits line; directory
+  ids/count shape; multi-instance choose list; dry-run enriched preview + zero side effects).
+  Full suite: 517 passed, 2 skipped (perf benchmarks gated on OCMAN_BENCHMARK=1). No new em/en
+  dashes.
 
 ## Non-goals
 - No change to detection, selection, signalling, guards, flags, or exit behavior.

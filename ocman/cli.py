@@ -8175,6 +8175,19 @@ def _attribute_session(p: dict) -> dict:
     return {"provenance": "unknown"}
 
 
+def _sess_str(s: dict) -> str:
+    """Render a session-attribution dict (from `_attribute_session`) as one honest
+    line, surfacing the provenance so a stale/directory guess is never shown as a
+    certain 1:1 mapping. Handles the three shapes: single `id`, directory `ids`/`count`
+    (one-to-many), and `unknown`. Shared by `list running --long` and `kill`.
+    """
+    if s.get("id"):
+        return f"{s['id']} ({s['provenance']})"
+    if s.get("ids"):
+        return f"{s['count']} session(s) for cwd ({s['provenance']})"
+    return "unknown"
+
+
 def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
     """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
     clean_sid = str(session_id).strip()
@@ -12403,7 +12416,11 @@ def cli_kill(*, pattern: str | None = None, assume_yes: bool = False,
     else:
         print(color_bold("Multiple opencode instances:"))
         for i, it in enumerate(targets, 1):
-            print(f"  {i}. PID {it['pid']}  {it.get('kind','?')}  {it.get('cmdline','')[:80]}")
+            proj = it.get("cwd") or it.get("project") or "?"
+            sess = _sess_str(it.get("session") or {"provenance": "unknown"})
+            print(f"  {i}. PID {it['pid']}  {it.get('kind','?')}  "
+                  f"up {it.get('elapsed','?')}  {proj}")
+            print(f"       session: {sess}")
         print("  a. all of them")
         if not interactive:
             die("Multiple instances found and no TTY to choose; aborting (run interactively).")
@@ -12427,7 +12444,22 @@ def cli_kill(*, pattern: str | None = None, assume_yes: bool = False,
     print()
     print(color_bold(f"Will {sig} {len(to_kill)} opencode instance(s):"))
     for it in to_kill:
-        print(f"  PID {it['pid']}  ({it.get('cmdline','')[:80]})")
+        proj = it.get("cwd") or it.get("project") or "?"
+        sess = _sess_str(it.get("session") or {"provenance": "unknown"})
+        print(f"  PID {it['pid']}")
+        print(f"    Kind:    {it.get('kind','?')}")
+        print(f"    Uptime:  {it.get('elapsed','?')}")
+        print(f"    Project: {proj}")
+        print(f"    Session: {sess}")
+        # Listener/Auth are only meaningful when this instance actually serves; omit
+        # the line for listener-less tui instances (resolved with maintainer).
+        listeners = it.get("listeners") or []
+        if listeners:
+            listener = ", ".join(listeners)
+            if it.get("exposed"):
+                listener = f"{listener} (NON-LOOPBACK)"
+            auth = it.get("auth", "unknown")
+            print(f"    Listener: {listener}  Auth: {auth}")
 
     verb = f"kill {len(to_kill)} opencode instance(s)" + (" (SIGKILL)" if force else "")
     if not confirm_destructive(None, render=False, action_verb=verb,
@@ -12496,13 +12528,6 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
             return label
         seq = ("1;" + code) if bold else code
         return f"\033[{seq}m{label}\033[0m"
-
-    def _sess_str(s: dict) -> str:
-        if s.get("id"):
-            return f"{s['id']} ({s['provenance']})"
-        if s.get("ids"):
-            return f"{s['count']} session(s) for cwd ({s['provenance']})"
-        return "unknown"
 
     if json_output:
         emit_json("running", {"reliable": True, "count": len(instances),

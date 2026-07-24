@@ -5113,6 +5113,98 @@ def test_kill_survivor_exits_nonzero(monkeypatch, capsys):
     assert "777" in (err.out + err.err)
 
 
+@_linux_only
+def test_kill_preview_single_target_shows_rich_block(monkeypatch, capsys):
+    """KP-01/03: the single-target confirm shows PID, Kind, Uptime, Project, and the
+    session id + its provenance (not a flat '(guess)'). Listener/Auth line appears
+    because this instance has a listener."""
+    target = {"pid": 4242, "cwd": "/home/me/proj", "project": "proj-hash",
+              "kind": "tui+server", "elapsed": "1h02m", "cmdline": "opencode -s ses_abc",
+              "listeners": ["127.0.0.1:4096"], "exposed": False, "auth": "unsecured",
+              "session": {"id": "ses_abc", "provenance": "launched-with (may be stale)"}}
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: [target])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert "PID 4242" in out
+    assert "Kind:" in out and "tui+server" in out
+    assert "Uptime:" in out and "1h02m" in out
+    assert "Project:" in out and "/home/me/proj" in out
+    assert "Session:" in out and "ses_abc" in out
+    assert "launched-with (may be stale)" in out  # provenance surfaced, not "(guess)"
+    assert "(guess)" not in out
+    assert "Listener:" in out and "127.0.0.1:4096" in out and "Auth: unsecured" in out
+
+
+@_linux_only
+def test_kill_preview_listenerless_omits_listener_line(monkeypatch, capsys):
+    """KP-01: a listener-less tui instance shows NO Listener/Auth line (resolved:
+    only shown when a listener exists)."""
+    target = {"pid": 909, "cwd": "/home/me/x", "kind": "tui", "elapsed": "3m10s",
+              "cmdline": "opencode", "listeners": [], "session": {"provenance": "unknown"}}
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: [target])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert "Listener:" not in out
+    assert "Session: unknown" in out  # unknown session shape rendered honestly
+
+
+@_linux_only
+def test_kill_preview_directory_many_session_shape(monkeypatch, capsys):
+    """KP-01/03 + PR-102: the directory one-to-many session dict ({ids, count}) is
+    rendered as a count + provenance, never assuming a single id."""
+    target = {"pid": 51, "cwd": "/home/me/multi", "kind": "tui", "elapsed": "10m",
+              "cmdline": "opencode",
+              "session": {"ids": ["ses_1", "ses_2", "ses_3"], "count": 3,
+                          "provenance": "directory (one-to-many)"}}
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: [target])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert "3 session(s) for cwd (directory (one-to-many))" in out
+
+
+@_linux_only
+def test_kill_preview_multi_instance_choose_list_shows_context(monkeypatch, capsys):
+    """KP-02: the numbered choose list shows kind, uptime, project, and session per
+    entry, so the choice is informed too."""
+    targets = [
+        {"pid": 11, "cwd": "/home/me/a", "kind": "tui", "elapsed": "5m",
+         "cmdline": "opencode", "listeners": [],
+         "session": {"id": "ses_a", "provenance": "launched-with (may be stale)"}},
+        {"pid": 22, "cwd": "/home/me/b", "kind": "serve", "elapsed": "2h",
+         "cmdline": "opencode serve", "listeners": ["127.0.0.1:4096"], "exposed": False,
+         "auth": "secured", "session": {"provenance": "unknown"}},
+    ]
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: list(targets))
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: True)
+    monkeypatch.setattr(ocman.cli.sys.stdout, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda _p: "1")  # choose instance 1
+    ocman.cli.cli_kill(pattern=None, assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert "1. PID 11" in out and "up 5m" in out and "/home/me/a" in out
+    assert "session: ses_a (launched-with (may be stale))" in out
+    assert "2. PID 22" in out and "serve" in out and "up 2h" in out
+
+
+@_linux_only
+def test_kill_dry_run_shows_enriched_preview_zero_side_effects(monkeypatch, capsys):
+    """KP-04 + PR-103: --dry-run still prints the enriched block but performs ZERO
+    side effects (no signal)."""
+    calls = {}
+    target = {"pid": 88, "cwd": "/home/me/dr", "kind": "tui", "elapsed": "1m",
+              "cmdline": "opencode", "listeners": [],
+              "session": {"id": "ses_dr", "provenance": "argv hint (not in DB)"}}
+    monkeypatch.setattr(ocman.cli, "_kill_targets", lambda cwd, pattern, **k: [target])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    ocman.cli.cli_kill(pattern=None, assume_yes=False, dry_run=True, force=False)
+    out = capsys.readouterr().out
+    assert "killed" not in calls  # zero side effects
+    assert "PID 88" in out and "Session: ses_dr (argv hint (not in DB))" in out
+
+
 # --- doctor: listening opencode servers security check -----------------------
 
 def _fake_server(pid=1, listeners=None, vulnerable=False, exposed=False):
