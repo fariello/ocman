@@ -42,14 +42,14 @@ field, the field reads as a field, and there is no separate dim label to clip or
 | B7-03 | Fields must read as editable even when empty | With a visible resting border (B7-01/02) an empty field is clearly a field; ensure the placeholder stays legible (raise `.input--placeholder` contrast if needed). | css:110 input--placeholder #bac2de |
 | B7-04 | Restore a visible resting border on these captioned inputs without regressing the 1-row inputs elsewhere | Scope the border to ONLY the captioned fields (by id, or a shared class e.g. `.captioned-input`), so the search box and other 1-row inputs keep `border: none`. Do NOT change the global `Input { border: none }`. | css:95 Input border:none (global, keep) |
 
-## Design decisions to settle in plan-review (OPEN)
-- B7-01/02 border style: `round` (softer) vs `tall` (Textual's field style). RECOMMEND a thin
-  `round` border in the panel accent so border_title reads clearly; confirm it does not overflow
-  the 30-col controls pane / ~half-width DB card (a bordered Input is +2 cols, +2 rows).
-- Whether to keep the h/d/w/mo/y legend as a separate line (yes) now that "Clean older than" is
-  the field's border_title.
-- If border_title proves not to render reliably at these widths, FALLBACK to a brightened inline
-  Label on the SAME row as the field (Horizontal with a fixed-width label), not above it.
+## Design decisions (RESOLVED with maintainer 2026-07-23)
+- B7-01/02 border style: RESOLVED = a THIN border (`border: round <accent>` at thin weight; not
+  Textual's heavier `tall`). Verify it does not overflow the 30-col controls pane / ~half-width
+  DB card (a bordered Input is +2 cols, +2 rows).
+- Legend: RESOLVED = KEEP the h/d/w/mo/y legend as a separate line (the "Clean older than"
+  border_title is the caption; the legend still explains the unit letters).
+- Fallback: RESOLVED = if `border_title` does not render reliably at these widths, fall back to a
+  brightened Label on the SAME row as the field (Horizontal with a fixed-width label), not above.
 
 ## Non-goals
 - No change to the inputs' behavior/ids/handlers (only their border + caption + the removed Labels).
