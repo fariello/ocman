@@ -7,7 +7,7 @@
   map that does NOT match the CLI (NOTICE not yellow).
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/{storage,models,spend,running,database}.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change (mirror its existing `_DOCTOR_TAGS`). No DB/dep change.
-- Status: approved (maintainer GO 2026-07-22; executing B6-01..B6-04)
+- Status: executed (maintainer authorized move to executed/ 2026-07-24; code committed + pushed, CI green)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: maintainer approved 2026-07-22 ("IPD them and implement")
 - Author: its_direct/pt3-claude-opus-4.8

@@ -6,7 +6,7 @@
   Labels do not associate, some labels clip in the narrow cards, and empty fields look blank.
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/database.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change. No DB/dep change.
-- Status: approved (maintainer GO 2026-07-23; executing B7-01..B7-04)
+- Status: executed (maintainer authorized move to executed/ 2026-07-24; code committed + pushed, CI green)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: maintainer approved 2026-07-23 (OQ answers + proceed)
 - Author: its_direct/pt3-claude-opus-4.8

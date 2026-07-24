@@ -5,7 +5,7 @@
   maintainer finds not working: model copy, format-control labels, running refresh placement)
 - Scope: `ocman_tui/app.py`, `ocman_tui/css/style.css`, `ocman_tui/widgets/{storage,running,models}.py`,
   `tests/test_tui.py`, and `TODO.md` (item 3 deferral). No `ocman/cli.py` change. No DB/dep change.
-- Status: approved (maintainer GO 2026-07-22; executing B5-01..B5-08)
+- Status: executed (maintainer authorized move to executed/ 2026-07-24; code committed + pushed, CI green)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: maintainer approved 2026-07-22 ("approved. Go.")
 - Author: its_direct/pt3-claude-opus-4.8
