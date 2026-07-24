@@ -6,9 +6,9 @@
   Labels do not associate, some labels clip in the narrow cards, and empty fields look blank.
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/database.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change. No DB/dep change.
-- Status: reviewed (plan-review applied 2026-07-23; awaiting maintainer approval to execute)
+- Status: approved (maintainer GO 2026-07-23; executing B7-01..B7-04)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
-- Approval: awaiting maintainer review/approval
+- Approval: maintainer approved 2026-07-23 (OQ answers + proceed)
 - Author: its_direct/pt3-claude-opus-4.8
 
 ## Workflow history
@@ -58,6 +58,13 @@ field, the field reads as a field, and there is no separate dim label to clip or
   border_title is the caption; the legend still explains the unit letters).
 - Fallback: RESOLVED = if `border_title` does not render reliably at these widths, fall back to a
   brightened Label on the SAME row as the field (Horizontal with a fixed-width label), not above.
+
+- 2026-07-23 (its_direct/pt3-claude-opus-4.8): EXECUTED B7-01..B7-04 (this commit). Full suite
+  512 passed, 2 skipped. `.captioned-input` (thin round border) added; FORMAT CONTROLS + DATABASE
+  OPERATIONS inputs now carry an inline border_title caption, separate Labels removed, backup-clean
+  caption shortened to "Prune backups older than" so all 5 captions fit their field width
+  (render-verified). Real config untouched. CAVEAT for hand-test: can you now tell what each field
+  is? Plan stays in pending/ until maintainer hand-test sign-off.
 
 ## Plan-review findings (2026-07-23)
 | ID | Sev | Scope | Area | Evidence | Finding | Decision |
