@@ -42,6 +42,10 @@ still hold afterward, move in reversible steps, verify at each.
    line (`- <date> /migrate (<agent/model>): assessed migration; emitted IPD`). **Commit**
    the IPD and NEVER push (commit-only). Recommend `plan-review` before execution given the
    risk.
+7. **Closing report.** End by presenting the shared closing report
+   (`../assess/templates/closing-report.md`): the artifact CREATED (the IPD path), or - if you
+   concluded the migration should not proceed and wrote no IPD - that none was created and why,
+   plus the next steps (`/plan-review` the IPD given the risk, then approve).
 
 ## Migration IPD structure
 

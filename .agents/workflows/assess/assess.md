@@ -138,9 +138,11 @@ Then read the selected lens file and adopt its focus, lead personas, and rubric.
    They are committed deliverables by default (the same policy as release-review; keep
    local only if the user asks). Do not commit unrelated changes; run `git status --short`
    first.
-8. **Report and stop.** Present the report (below) to the user with the IPD and run-
-   record paths, and ask them to review and approve (optionally via `plan-review`)
-   before execution. Do not execute.
+8. **Report and stop.** Present the report (below) to the user, ending with the shared
+   closing report (`templates/closing-report.md`): the artifact paths CREATED (the IPD and
+   the run record), or - if the assessment proposed no IPD - that NONE was created and WHY,
+   plus the next steps. Ask them to review and approve (optionally via `plan-review`) before
+   execution. Do not execute.
 
 ---
 
@@ -194,7 +196,6 @@ is the durable evidence and report of *this assessment run*.
 ```
 ## Assessment - <concern> <scope if narrowed>
 Verdict: <strong / adequate / needs work / at risk> for <concern>
-IPD written: <path>
 
 ### Top findings
 | ID | Severity | Remediation Risk | Persona | Finding |
@@ -206,8 +207,26 @@ IPD written: <path>
 ### Deferred (with reason)
 - <finding>: Remediation Risk <Medium-High|High> on <axis> because <reason>.
 
+### Artifacts and next steps (see templates/closing-report.md)
+Created:
+  IPD:        <path to the IPD in the pending-plans dir>
+  Run record: <path>   (or: not written (local-only / skipped / none))
+
 Next step: review the IPD (optionally run plan-review on it) and approve before
 execution. This workflow does not execute the plan.
+```
+
+If the assessment proposed NO IPD (the current state is adequate, or the user declined the
+write), present the not-created form of the closing report instead of `Created: IPD: ...`:
+
+```
+### Artifacts and next steps (see templates/closing-report.md)
+Created: none.
+Reason:  <assessed <concern> across <scope> and found nothing warranting a plan | the user
+         declined the write | aborted at <point>>.
+  Run record: <path>   (or: not written (...))
+
+Next step: <no action required; re-run after relevant changes | the specific follow-up>.
 ```
 
 Be rigorous and specific, cite evidence, and do not invent issues where there are

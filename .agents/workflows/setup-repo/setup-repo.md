@@ -154,6 +154,13 @@ these workflows:
   `.git/hooks/pre-commit` script instead, and explain hooks are per-clone/local).
 - Offer a `.gitleaksignore` baseline (empty, documented) for future false positives.
 - If the repo already has committed-secret risk, recommend running `/assess-secrets`.
+- **Local-leaks CI backstop (ALWAYS ASK; default NO, `[y/N]`).** Distinct from secret
+  scanning: the local-leaks check catches maintainer/machine IDENTIFYING info (home paths,
+  usernames, hostnames, private repo names, session ids) that secret scanners miss. Ask
+  whether to add the `.github/workflows/local-leaks.yml` CI backstop; on yes, call
+  `engine.create_local_leaks_backstop(..., install_ci=True, install_hook=False)` (no-clobber;
+  the generated CI installs `agent-workflows` and runs the check). Default NO because not
+  every repo wants this gate; a decline installs nothing.
 
 ### 3. .gitignore hygiene
 
@@ -187,6 +194,15 @@ common, low-friction hooks: gitleaks (secrets), a large-file guard, end-of-file/
 trailing-whitespace fixers, and a stack-appropriate formatter/linter if the user wants.
 Then offer to run `pre-commit install`. Explain it is local per clone (each contributor
 runs `pre-commit install`), and that CI (step 2/5) is the enforcement backstop.
+
+- **Local-leaks pre-commit hook (ALWAYS ASK; default YES, `[Y/n]`).** Ask whether to add the
+  `local-leaks` hook (blocks a commit that adds maintainer/machine identifying info); default
+  YES because it is low-friction and protects a public repo. On yes, call
+  `engine.create_local_leaks_backstop(..., install_ci=False, install_hook=True)`: if the repo
+  has NO `.pre-commit-config.yaml`, it writes one carrying the whole-tree hook; if one ALREADY
+  exists, it is NEVER edited - the function returns the hook block to MERGE in, so present that
+  block and let the user add it. Note the hook needs `agent_workflows` importable in the hook
+  environment. A decline installs nothing.
 
 ### 7. Dependency / supply-chain hygiene
 

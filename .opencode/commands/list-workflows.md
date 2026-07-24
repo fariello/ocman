@@ -5,6 +5,6 @@ agent: build
 
 Read and execute @.agents/workflows/list-workflows/list-workflows.md.
 
-If the user provided arguments, treat them as the target path(s) and/or flags for this workflow: $ARGUMENTS
+If the user provided arguments, treat them as an optional filter to narrow the catalog (a concern, area, or category, e.g. `security` or `assess`); omit to list everything: $ARGUMENTS
 
 Treat the referenced file as the controlling instruction and follow it fully.

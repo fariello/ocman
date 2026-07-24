@@ -5,6 +5,6 @@ agent: build
 
 Read and execute @.agents/workflows/handoff/handoff.md.
 
-If the user provided arguments, treat them as the target path(s) and/or flags for this workflow: $ARGUMENTS
+If the user provided arguments, treat them as an optional focus for the handoff (an area or thread to emphasize, e.g. `release`); omit to capture the whole session: $ARGUMENTS
 
 Treat the referenced file as the controlling instruction and follow it fully.

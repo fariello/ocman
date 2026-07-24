@@ -44,7 +44,9 @@ In a few sentences, not a lecture:
 
 ## Step 3: Ask the goal and route
 
-Ask what they are trying to do, and route (offer to run the chosen workflow, with consent):
+Ask what they are trying to do, and route (offer to run the chosen workflow, with consent).
+When you pose a choice interactively, put its full question set (context, question, options)
+inside the prompt itself so it is decidable from the prompt alone (GUIDING_PRINCIPLES P12):
 
 - "Set this repo up / make it conformant" -> `setup-repo`
 - "Understand what this toolkit can do" -> `list-workflows`

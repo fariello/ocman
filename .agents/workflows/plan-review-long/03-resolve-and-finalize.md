@@ -29,7 +29,9 @@ For each question provide:
 5. Trade-offs.
 6. Recommendation and one-line reason.
 
-Use plain language. Define acronyms and identifiers. Do not guess.
+Use plain language. Define acronyms and identifiers. Do not guess. Present this whole
+six-part question set INSIDE the interactive prompt itself, so a human can decide from the
+prompt alone (GUIDING_PRINCIPLES P12); do not strand it in chat.
 
 After each answer:
 

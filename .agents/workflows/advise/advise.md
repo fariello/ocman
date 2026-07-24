@@ -26,7 +26,9 @@ reading and executing this file with a named persona). Resolve the persona:
    name, try these, then a closest-match against `personas/*.md`.
 3. **Unknown persona:** show the closest matches and the full list, and ask. Do not guess.
 4. **No persona given (bare `/advise`):** list the available personas with their one-line
-   charter and ask which to use. This is the picker.
+   charter and ask which to use. This is the picker. When you ask interactively, put the full
+   question set (context, question, options) inside the prompt itself so it is decidable from
+   the prompt alone (GUIDING_PRINCIPLES P12).
 5. **Further arguments** name the artifact to examine (path). With none, examine the
    current context / the thing under discussion.
 

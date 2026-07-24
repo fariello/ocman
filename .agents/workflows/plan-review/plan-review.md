@@ -210,7 +210,9 @@ For each question provide:
 6. **Recommendation**
 
 Use plain language. Define acronyms and identifiers. Ask and wait before the
-final report. Do not guess or bury the recommendation.
+final report. Do not guess or bury the recommendation. Present this whole six-part
+question set INSIDE the interactive prompt itself, so a human answering from the prompt
+can decide from the prompt alone (GUIDING_PRINCIPLES P12); do not strand it in chat.
 
 After each answer:
 1. Record it in the owning plan.

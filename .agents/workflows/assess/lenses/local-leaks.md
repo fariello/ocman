@@ -22,28 +22,51 @@ not resolve on their machines). See DECISIONS D92 (the first real incident) and 
 The stakeholder (privacy exposure of the maintainer), the software engineer (portable
 paths, prevention), and the power user/operator running the published package.
 
-## Do not eyeball it: run the deterministic engine
+## Do not eyeball it: run the deterministic engine and CONSUME its output
 
-Run the packaged scanner rather than reading files by hand. It is read-only, stdlib-only,
-and shares one engine with the pre-commit hook and CI (so the lens cannot drift from the
-gate):
+Run the packaged scanner rather than reading files by hand. It is read-only by default,
+stdlib-only, and is ONE unified engine (`agent_workflows/leak_sanitizer.py`, the
+`leak-sanitizer` Set) shared with the pre-commit hook and CI, so the lens cannot drift from
+the gate. `aw check-local-leaks` and its broader alias `aw sanitize` are the same command.
+
+CONSUME the deterministic `--agent` stream; do NOT re-derive the classification in prose.
+The canonical invocation for this lens is:
 
 ```
-aw check-local-leaks .                 # working tree (fast, default)
-aw check-local-leaks . --history       # git history (bounded; add --max-commits N)
-aw check-local-leaks . --wheel dist/<built>.whl   # the shipped surface
-aw check-local-leaks . --warn          # ALSO surface advisory auto-derived candidates
+aw check-local-leaks . --agent --warn            # working tree, machine-parseable, incl. advisory
+aw check-local-leaks . --wheel dist/<built>.whl --agent --warn   # the shipped surface
+aw check-local-leaks . --history --agent --warn  # git history (bounded; add --max-commits N)
 ```
 
-Equivalent without the CLI installed: `python3 -m agent_workflows check-local-leaks .`.
+`--agent` prints, to STDOUT, one tab-separated record per finding and NO prose:
 
-Severity model the engine uses (D93):
-- **fail** (fails the non-interactive gate): STRUCTURAL patterns (home paths, the
-  local-checkout dir style, session ids), the curated repo allowlist misses, and the
-  user-level personal hints.
-- **warn** (advisory, `--warn` only): auto-derived candidates from the environment
-  (`$HOME` basename, `git config user.*`, `$USER`/`$USERNAME`, hostname, sibling dir
-  names). These NEVER fail CI; they are for a human to confirm here.
+```
+<location>\t<rule>\t<severity>
+```
+
+where `<location>` is `path:line` (tree/staged), `commit:path:line` (history), or
+`wheel!entry:line` (wheel); `<rule>` is the matched rule name; `<severity>` is the engine's
+own `fail` or `warn`. Exit code is `1` if any `fail` record exists, else `0` (a `2` means git
+was unavailable / a usage error). Parse these records and use the engine's `severity` field
+directly - do not re-classify findings yourself. Human/prose output goes to stderr, so the
+stdout record stream stays clean. Equivalent without the CLI installed:
+`python3 -m agent_workflows check-local-leaks . --agent --warn`.
+
+Other modes (human-facing, not the agent path): `--staged` (only staged blobs, what the hook
+checks) and `aw sanitize . --fix --dry-run` (preview home-style path rewrites). `--fix`
+rewrites home-style absolute paths to `~`, INTERACTIVE per file by default (`--yes`/`--force`
+to batch); identity/private-repo/session tokens have no safe generic rewrite, so they are
+reported for manual editing and never auto-changed. `--fix` is opt-in and NOT in the hook. The
+IP ruleset (v4/v6) is OFF by default (`ip_enabled = true` per repo enables it). Author config
+with `aw sanitize --configure`.
+
+What the two severities in the stream mean (D93; you READ them off the record, you do not
+compute them):
+- **fail** records fail the non-interactive gate: structural patterns (home paths, the
+  local-checkout dir style, session ids), curated repo-allowlist misses, and user-level hints.
+- **warn** records are advisory (only present with `--warn`): auto-derived environment
+  candidates (`$HOME` basename, `git config user.*`, `$USER`/`$USERNAME`, hostname, sibling
+  dir names). They NEVER fail CI; they are the set a human confirms in triage below.
 
 ## What to cover
 
@@ -52,24 +75,30 @@ Severity model the engine uses (D93):
   on a registry, is effectively immutable. Lead the IPD with these.
 - **Working tree** and **history** (public on the forge even when not shipped): a leak
   reachable only via an old commit/tag is invisible to a tree scan; run `--history`.
-- **Emails and usernames** (the interactive part): enumerate every distinct email and
-  username the scan surfaces (emails are also flagged by `assess-secrets` as PII - do not
-  contradict it; here the angle is author identity). Present the enumerated set to the
-  human and **ask which are intended-public and which are leaks**. Record the approved
-  ones (see below) so the automated gate stops re-flagging them.
+- **Emails and usernames** (the interactive part - this IS judgment, and it stays): from the
+  parsed records, enumerate every distinct email and username surfaced (emails are also flagged
+  by `assess-secrets` as PII - do not contradict it; here the angle is author identity).
+  Present the enumerated set to the human and **ask which are intended-public and which are
+  leaks** (per GUIDING_PRINCIPLES P12, put that question and its context in the interactive
+  prompt itself). Record the approved ones (see below) so the automated gate stops re-flagging
+  them. The engine classifies fail-vs-warn deterministically; the human decides public-vs-leak.
 
-## Triage (human judgment on the candidates)
+## Triage (human judgment on the parsed records)
+
+Drive triage from the `--agent` records (the `severity` field is the engine's, not yours):
 
 1. **Intended-public identifiers** (the author email in package metadata, the public repo
    origin URL): confirm and ADD them to the repo-committed allowlist
    `.agents/local-leaks-allowlist.toml` (`allow_line_substrings = [...]`). This travels
-   with the repo and keeps CI deterministic.
-2. **Advisory (warn) auto-derived candidates:** confirm interactively. If a derived token
-   is a real leak, add it to the fail set (a repo `fail_patterns` entry, or the operator's
-   never-committed `~/.config/agent-workflows/local-leaks-hints.json` if it is machine-wide).
-   If it is a false positive (a common word that happens to match a username), leave it as
-   warn-only.
-3. **Real leaks:** classify and route to remediation.
+   with the repo and keeps CI deterministic. `aw sanitize --configure` authors this file (and
+   the personal hints + the IP/hostname toggles) interactively with a diff and confirmation,
+   rather than hand-editing the TOML.
+2. **`warn` records (advisory auto-derived candidates):** confirm interactively. If a derived
+   token is a real leak, add it to the fail set (a repo `fail_patterns` entry, or the
+   operator's never-committed `~/.config/agent-workflows/local-leaks-hints.json` if it is
+   machine-wide). If it is a false positive (a common word that happens to match a username),
+   leave it as warn-only.
+3. **`fail` records that are real leaks:** classify and route to remediation.
 
 ## Remediation to propose
 

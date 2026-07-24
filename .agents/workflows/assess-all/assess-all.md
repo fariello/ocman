@@ -58,6 +58,11 @@ Running all concerns is expensive (many deep passes). Before running anything:
 6. It does NOT change code and does NOT execute the plan (the assess contract). **Commit**
    the IPD and the rollup run record, and NEVER push (commit-only). Recommend `plan-review`
    before execution.
+7. **Closing report.** End by presenting the shared closing report
+   (`../assess/templates/closing-report.md`): the artifacts CREATED (the one consolidated IPD
+   path + the rollup run-record path), or - if every concern was adequate and no consolidated
+   IPD was warranted - that NONE was created and why, plus the next steps (`/plan-review` the
+   IPD, then approve).
 
 ## Honesty and guardrails
 
