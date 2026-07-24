@@ -268,6 +268,17 @@ DataTable:focus > .datatable--cursor {
     padding: 1 2;
     height: 1fr;
     overflow-y: scroll;
+    /* BG-01: the RichLog scrolls, so it reserves a vertical scrollbar. Textual defaults the
+       track to black, which shows as a black column on the panel's right edge (confirmed live:
+       scrollbar_background was Color(0,0,0)). Paint the track/thumb from the panel palette and
+       reserve a stable gutter so the edge matches the panel instead of going black. */
+    scrollbar-background: #11111b;
+    scrollbar-background-hover: #181825;
+    scrollbar-background-active: #181825;
+    scrollbar-color: #313244;
+    scrollbar-color-hover: #585b70;
+    scrollbar-color-active: #585b70;
+    scrollbar-gutter: stable;
 }
 
 /* B2-12: the Log-tab prune controls are docked below the (1fr) log with a fixed height so they
@@ -482,7 +493,19 @@ ModelsWidget > .panel-card { height: 1fr; }
     background: #45475a;
     color: #f5f5f5;
     padding: 0 1;
+    /* BG-02: this field does NOT scroll (height 3, single content row; confirmed live
+       show_vertical_scrollbar=False), so it should never reserve a black scrollbar gutter. Pin
+       the scrollbar colors to the field/panel palette defensively so no black cell can bleed on
+       the right edge in a real terminal (the headless compositor already paints the seam with the
+       panel background, but a terminal whose default bg is black can show through an unpainted
+       reserved gutter). */
+    scrollbar-background: #45475a;
+    scrollbar-color: #45475a;
+    overflow: hidden hidden;
 }
+/* BG-03: keep the focus border MAUVE #cba6f7 (the app's consistent focus/accent color). The
+   BLUE seen in a capture belongs to Textual's SYSTEM METRICS sparkline accent, NOT to any input
+   border; do not "fix" this to blue. Resolved with maintainer 2026-07-24. */
 .captioned-input:focus {
     border: round #cba6f7;
     background: #585b70;

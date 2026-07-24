@@ -102,6 +102,22 @@ Create a step-granular TodoWrite checklist (one per BG-*) BEFORE coding.
 - Commits: path-scoped, never `git add -A`, never push.
 - Release: rides 1.3.0; covered by the eventual delta release-review.
 
+## Execution record
+- 2026-07-24 (its_direct/pt3-claude-opus-4.8-1m-us): executed after maintainer approval.
+  Q2 live-verified in a 120x40 harness: `.log-area` (RichLog) has `show_vertical_scrollbar=True`
+  with `scrollbar_background=Color(0,0,0)` (a GENUINE unstyled scrollbar track); `.captioned-input`
+  has `show_vertical_scrollbar=False` (height 3, no scroll) and the headless compositor already
+  paints the seam with the panel bg, so its black cell is real-terminal default-bg bleed through a
+  reserved gutter. BG-01: added `scrollbar-background/-hover/-active`, `scrollbar-color/-hover/
+  -active` (panel palette) + `scrollbar-gutter: stable` to `.log-area` -> scrollbar_background now
+  `#11111b`. BG-02: pinned `.captioned-input` `scrollbar-background`/`scrollbar-color` to `#45475a`
+  + `overflow: hidden hidden` -> scrollbar_background now `#45475a`, no reserved black gutter.
+  BG-03: kept `:focus` mauve `#cba6f7` + added a clarifying CSS comment (blue = sparkline). BG-04:
+  only `.log-area`/`.captioned-input` touched; `.transcript-area` and global `Input` untouched.
+  Added 2 tests (no-black-scrollbar-gutter; focus-border-is-mauve). Full suite: 519 passed,
+  2 skipped (perf benchmarks gated on OCMAN_BENCHMARK=1). No em/en dashes. AWAITING maintainer
+  visual re-capture (per gate) before git mv pending -> executed.
+
 ## Workflow history
 - 2026-07-24 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): APPROVE WITH REVISIONS APPLIED;
   PR-001..PR-004. Re-verified the `.02` capture: the x=1842.2 black column is a `.captioned-input`

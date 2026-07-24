@@ -2007,6 +2007,42 @@ async def test_tui_database_ops_inputs_captioned_and_on_screen(tui_db):
             assert len(inp.border_title) <= inp.region.width - 2, f"{iid} caption clips"
 
 
+@pytest.mark.anyio
+async def test_tui_no_black_scrollbar_gutter(tui_db):
+    """BG-01/BG-02: neither the scrolling .log-area (RichLog) nor the non-scrolling
+    .captioned-input fields may leave their scrollbar/gutter at the default BLACK, which
+    renders as a black column on a panel's right edge in a real terminal. Assert the applied
+    scrollbar-background is a palette color (never pure black), and the log reserves a stable
+    gutter. Live-verified during execution: pre-fix scrollbar_background was Color(0,0,0)."""
+    from textual.color import Color
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        black = Color(0, 0, 0)
+        logs = list(app.query(".log-area"))
+        assert logs, "expected at least one .log-area"
+        for w in logs:
+            assert w.styles.scrollbar_background != black, (
+                f"{w.id}: scrollbar_background is black (unstyled track)")
+            assert str(w.styles.scrollbar_gutter) == "stable", (
+                f"{w.id}: scrollbar_gutter not stable ({w.styles.scrollbar_gutter})")
+        caps = list(app.query(".captioned-input"))
+        assert caps, "expected at least one .captioned-input"
+        for w in caps:
+            assert w.styles.scrollbar_background != black, (
+                f"{w.id}: captioned-input scrollbar_background is black")
+
+
+def test_tui_captioned_focus_border_is_mauve():
+    """BG-03: the focused captioned-input border stays MAUVE #cba6f7 (resolved with maintainer;
+    the blue in captures is the SYSTEM METRICS sparkline accent, not an input border)."""
+    from pathlib import Path as _P
+    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
+    import re
+    m = re.search(r"\.captioned-input:focus\s*\{[^}]*border:\s*round\s*#cba6f7", css)
+    assert m, ".captioned-input:focus border should be round #cba6f7 (mauve)"
+
+
 def test_tui_control_row_css_height_auto():
     """B6-01: .search-bar-row and .horizontal-buttons are height:auto (not the default 1fr)."""
     from pathlib import Path as _P
