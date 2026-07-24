@@ -5,19 +5,23 @@
   a column of PURE-BLACK (`#000000`) cells that clash with the control background:
     - `tmp/ocman-v130-20260724.01.svg` (Log tab): black column at x=1988.6 down the LIVE OPERATIONS
       LOG panel and the DATABASE OPERATIONS `.captioned-input` fields (bg `#11111b` / `#45475a`).
-    - `tmp/ocman-v130-20260724.02.svg` (Details tab): SAME symptom, black column at x=1842.2 down
-      the right edge of the `#input-session-search` "Filter tree + transcript" box (a PLAIN global
-      `Input`, bg `#45475a`, NOT a `.captioned-input`). Verified: x=1830 is `#45475a`, x=1842.2 is
-      46 `#000000` cells.
-  Same root cause in both: an unstyled right-edge scrollbar/gutter column defaulting to black.
+    - `tmp/ocman-v130-20260724.02.svg` (Details tab): SAME symptom, black column at x=1842.2. Re-
+      verified during plan-review: this is NOT `#input-session-search` (that filter box is the
+      LEFT-sidebar input at x~36, SVG "ilter tree + transcript"). The x=1842.2 column is inside the
+      RIGHT-side FORMAT CONTROLS panel (SVG "FORMAT CONTROLS" at x=1549.4), one cell OUTSIDE a
+      `.captioned-input` right border (the `╮`/`│` border glyph `#6c7086` is at x=1830, field bg
+      `#45475a` ends at x=1830, black `#000000` begins at x=1842.2). So `.02` is the SAME
+      `.captioned-input` class as `.01`'s DATABASE OPERATIONS fields, just a different panel.
+  Same defect in both: the cell just OUTSIDE a control's right border (or a scroll region's edge)
+  is left unpainted and renders black.
   Separately, the maintainer expected a focused input to show a BLUE border, but
   `.captioned-input:focus` uses mauve (`#cba6f7`); the only blue (`#0178d4`) in `.01` is Textual's
   default accent on the SYSTEM METRICS sparkline, not on the input.
-- Scope: `ocman_tui/css/style.css` (`.log-area`, `.captioned-input`, `#input-session-search`, and
-  the `.search-bar-row` inputs in models/running/spend that share the pattern), `ocman_tui/app.py`
-  and `ocman_tui/widgets/*.py` ONLY if a shared class must be added to the search inputs,
-  `tests/test_tui.py`. No Python logic change expected. Pure styling.
-- Status: PROPOSED (not yet executed; awaiting plan-review then maintainer approval)
+- Scope: `ocman_tui/css/style.css` (`.log-area`, `.captioned-input`) and `tests/test_tui.py`. Pure
+  styling; no Python logic change. (Plan-review PR-001 removed the earlier `#input-session-search`
+  / `.search-bar-row` widening: the `.02` black box is a `.captioned-input`, not the search input,
+  so no shared class needs adding to `app.py`/`widgets/*.py`.)
+- Status: reviewed (plan-review applied 2026-07-24; Q1 resolved; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting plan-review + maintainer approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -36,28 +40,38 @@
   clean; the log/inputs do not.
 
 ## Root cause (hypothesis to CONFIRM in a live render, not just the SVG)
-The black column is an UNSTYLED SCROLLBAR TRACK / gutter cell. Textual paints a scrollbar (or a
-reserved gutter) on the right inner edge; because `.log-area` (and the captioned inputs' scroll
-region) never set `scrollbar-background`/`scrollbar-background-hover`/`scrollbar-color`, the track
-defaults to black and clashes with the panel. `.transcript-area` avoids this by reserving a stable
-gutter and sitting flush. This must be VERIFIED by focusing each widget in a live 120x40 harness
-and re-capturing, because a static SVG cannot prove which element painted the cell.
+Plan-review (PR-002) tightened this. The earlier "unstyled scrollbar track" theory is only partly
+right and is CONTRADICTED for the captioned inputs:
+- `.captioned-input` is `height: 3` (style.css:480) - one text row plus its top/bottom border. It
+  does NOT scroll, and the `.02` capture shows NO scrollbar thumb at x=1842.2 (only `#000000` and
+  `#181825`). So for the inputs the black cell is NOT a scrollbar; it is the cell just OUTSIDE the
+  field's right `round` border, inside the panel body, left UNPAINTED (defaulting to black). Likely
+  the field's `width: 1fr` + `padding 0 1` + `round` border leaves a 1-col unpainted seam between
+  the border and the panel edge.
+- `.log-area` (style.css:264) DOES scroll (`overflow-y: scroll`) and sets no `scrollbar-*` colors,
+  so THERE the black edge may genuinely be an unstyled scrollbar track.
+So there may be TWO distinct causes wearing the same symptom. Both MUST be confirmed in a live
+120x40 harness (focus each widget, re-capture) before choosing the fix, because a static SVG cannot
+prove which element painted a given cell. Q2 below is the gating first step.
 
 ## Requirements
 | ID | Item | Approach | Evidence |
 |----|------|----------|----------|
-| BG-01 | The Log panel right edge is no longer black | On `.log-area`, set `scrollbar-background`, `scrollbar-background-hover`, `scrollbar-color`, `scrollbar-color-hover` to the panel palette (track ~`#11111b`/`#313244`, thumb ~`#585b70`), and add `scrollbar-gutter: stable`. Confirm the x=right-edge cells render the panel bg, not `#000000`. | style.css:264; SVG x=1988.6 black run |
-| BG-02 | The captioned inputs AND the search/filter inputs no longer show a black right-edge cell | Give `.captioned-input`, `#input-session-search`, and the `.search-bar-row` inputs (models/running/spend) matching `scrollbar-*` colors (or remove the reserved gutter if the field is single-line and does not scroll). If several share the fix, add ONE shared class rather than duplicating. Confirm each field's right edge is `#45475a`, not black, in BOTH the `.01` (Database) and `.02` (Details filter) renders. | style.css:478; app.py:1224 `#input-session-search`; SVG .02 x=1842.2 |
-| BG-03 | The focus border reads as intended (RESOLVE with maintainer: blue vs current mauve) | If the maintainer wants BLUE: set `.captioned-input:focus` border to the accent `#0178d4` (or the theme `$accent`). If mauve was intended and the SVG blue is just the sparkline accent, leave `:focus` as `#cba6f7` and instead document that the blue belongs to SYSTEM METRICS. DO NOT guess; this is an OPEN question below. | style.css:486; SVG r16 only on sparkline |
-| BG-04 | No regression to other scroll areas | Do not alter `.transcript-area` (already clean) or the global border-less Inputs; scope every rule to `.log-area` / `.captioned-input`. | style.css:301, 98 |
+| BG-01 | The scrolling `.log-area` right edge is no longer black | AFTER confirming (Q2) the `.log-area` black edge is its scrollbar track: set `scrollbar-background`, `scrollbar-background-hover`, `scrollbar-color`, `scrollbar-color-hover` to the panel palette (track ~`#11111b`/`#313244`, thumb ~`#585b70`) and add `scrollbar-gutter: stable`. Confirm the right-edge cells render the panel bg, not `#000000`. | style.css:264; SVG .01 x=1988.6 |
+| BG-02 | The `.captioned-input` fields no longer show a black cell just outside their right border | AFTER confirming (Q2) these fields do NOT scroll: the fix is to PAINT the seam, not recolor a scrollbar. Options to choose per the live finding: ensure the containing panel background covers the seam, or drop the field's right-edge gutter (e.g. adjust `width`/`padding`/`margin` so the `round` border sits flush against the panel bg). Confirm the cell right of the field border is the panel/field bg, not `#000000`, in BOTH `.01` (DATABASE OPERATIONS) and `.02` (FORMAT CONTROLS). Do NOT add scrollbar colors to a non-scrolling field. | style.css:478-489; SVG .01 x=1988.6 and .02 x=1842.2 (border `#6c7086` at x=1830) |
+| BG-03 | The focus border stays the app's consistent mauve | RESOLVED with maintainer 2026-07-24: KEEP `.captioned-input:focus` border MAUVE `#cba6f7` (no change). The "blue" observed in the capture was Textual's accent on the SYSTEM METRICS sparkline, not an input border. This requirement is effectively a NO-OP + a one-line comment in the CSS noting the blue belongs to the sparkline, so a future reader does not "fix" it. | style.css:486; SVG r16 (#0178d4) only on sparkline |
+| BG-04 | No regression to other scroll areas or the 1-row inputs | Do not alter `.transcript-area` (already clean, style.css:301) or the global border-less `Input` (style.css:95, `height: 1`, does not scroll, not implicated); scope every rule to `.log-area` / `.captioned-input`. | style.css:301, 95 |
 
-## Open questions (MUST resolve before executing BG-03)
-- Q1: For a FOCUSED captioned input, do you want a BLUE border (`#0178d4`, matching the app accent)
-  or keep the current MAUVE (`#cba6f7`)? The SVG's blue is currently only on the SYSTEM METRICS
-  sparkline, not on any input.
-- Q2 (verification): confirm the black cell is a scrollbar track (not, e.g., a border cell) by
-  re-capturing after the CSS change; if a scrollbar is not actually present on these widgets, BG-02
-  becomes "remove the reserved gutter" instead of "recolor the scrollbar."
+## Open questions
+- Q1 (focus border color): RESOLVED with maintainer 2026-07-24 = KEEP MAUVE `#cba6f7`. The blue in
+  the capture is the sparkline accent, not an input border. BG-03 is a no-op + a clarifying comment.
+- Q2 (verification, deferred to execution by design): the FIRST execution step MUST live-confirm,
+  per widget, which cause produces the black cell: for `.log-area` (which scrolls) it is expected to
+  be an unstyled scrollbar track (-> BG-01 recolor); for `.captioned-input` (`height: 3`, no scroll,
+  no thumb seen in `.02`) it is expected to be an unpainted seam just outside the right border
+  (-> BG-02 paint/flush the seam, NOT scrollbar colors). A static SVG cannot prove which element
+  painted a cell, so this is confirmed live before the fix is chosen. This is not a human decision;
+  it is an execution-time verification, correctly left OPEN-for-execution rather than asked here.
 
 ## Non-goals
 - No change to widget structure, Python rendering, or the sparkline/SYSTEM METRICS accent.
@@ -65,11 +79,12 @@ and re-capturing, because a static SVG cannot prove which element painted the ce
 
 ## Validation plan
 - `PYTHONPATH=. pytest -q` full suite green (paste ACTUAL output).
-- TUI test at 120x40 with an isolated `OCMAN_CONFIG_PATH`: open the Log tab, await workers, focus
-  the log and each captioned input; assert (a) the widget `.region` is non-empty and (b) via the
-  app's captured render there is no `#000000` cell inside the panel's right border column. If a
-  render-color assertion is impractical headlessly, at minimum assert the CSS rule is applied
-  (styles.scrollbar_background / border color) on the focused widget.
+- TUI test at 120x40 with an isolated `OCMAN_CONFIG_PATH`: open the Log tab AND a captioned-input
+  panel (Database / FORMAT CONTROLS), await workers, focus the log and a captioned input; assert
+  (a) the widget `.region` is non-empty and (b) via the app's captured render there is no `#000000`
+  cell in the column just right of the panel/field right border. If a render-color assertion is
+  impractical headlessly, at minimum assert the applied style (scrollbar-background for `.log-area`;
+  the seam-fix property for `.captioned-input`) on the focused widget.
 - Re-capture BOTH scenes the maintainer captured and eyeball: (a) the `.01` Log tab + DATABASE
   OPERATIONS, and (b) the `.02` Details tab `#input-session-search` filter box. Neither may show a
   `#000000` right-edge column.
@@ -77,9 +92,24 @@ and re-capturing, because a static SVG cannot prove which element painted the ce
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Create a step-granular TodoWrite checklist (one per BG-*) BEFORE coding.
-- Open questions: Q1 (focus color) and Q2 (verify scrollbar) MUST be resolved first.
-- Scope fence: `ocman_tui/css/style.css`, `tests/test_tui.py`. Nothing else.
+- Open questions: Q1 (focus color) resolved with maintainer (see Open questions). Q2 (live-confirm
+  the per-widget cause: scrollbar for `.log-area` vs unpainted seam for `.captioned-input`) MUST be
+  done as the first execution step, before choosing the BG-01/BG-02 fix.
+- Scope fence: `ocman_tui/css/style.css`, `tests/test_tui.py`. Nothing else. (No `app.py`/`widgets`
+  edit; PR-001 removed that need.)
 - Honesty rule: paste ACTUAL pytest output; this is a VISUAL fix, so a maintainer hand-check (or a
   fresh SVG capture) is required before git mv to executed/.
 - Commits: path-scoped, never `git add -A`, never push.
 - Release: rides 1.3.0; covered by the eventual delta release-review.
+
+## Workflow history
+- 2026-07-24 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): APPROVE WITH REVISIONS APPLIED;
+  PR-001..PR-004. Re-verified the `.02` capture: the x=1842.2 black column is a `.captioned-input`
+  in the FORMAT CONTROLS panel (border glyph `#6c7086` at x=1830), NOT `#input-session-search`
+  (PR-001) - dropped the search-input widening and narrowed scope to CSS+tests. The
+  "unstyled scrollbar" root cause holds only for the scrolling `.log-area`; `.captioned-input` is
+  `height: 3` (no scroll, no thumb) so its black cell is an unpainted seam outside the right border
+  (PR-002) - reshaped BG-01/BG-02 and made Q2 a gating live-verification first step. Reconciled the
+  gate scope fence with the scope block (PR-003) and pointed the headless test at a captioned-input
+  panel (PR-004). Q1 (focus border) resolved with maintainer = keep mauve `#cba6f7` (the blue was
+  the sparkline accent). Verdict: APPROVE WITH REVISIONS APPLIED; GO - PENDING HUMAN APPROVAL.
