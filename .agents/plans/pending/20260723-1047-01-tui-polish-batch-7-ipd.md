@@ -6,7 +6,7 @@
   Labels do not associate, some labels clip in the narrow cards, and empty fields look blank.
 - Scope: `ocman_tui/css/style.css`, `ocman_tui/app.py`, `ocman_tui/widgets/database.py`,
   `tests/test_tui.py`. No `ocman/cli.py` change. No DB/dep change.
-- Status: PROPOSED (not yet executed)
+- Status: reviewed (plan-review applied 2026-07-23; awaiting maintainer approval to execute)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting maintainer review/approval
 - Author: its_direct/pt3-claude-opus-4.8
@@ -15,6 +15,14 @@
 - 2026-07-23 (its_direct/pt3-claude-opus-4.8): batch-6 hand-test signed off items 1-4 (Doctor,
   Running, Models, Log all perfect). Item 5 (the unlabeled input "black boxes") remained;
   investigation found the root factors below. Maintainer prefers INLINE labels (not mandatory).
+
+## Workflow history
+- 2026-07-23 /plan-review (its_direct/pt3-claude-opus-4.8): APPROVE WITH REVISIONS APPLIED;
+  PR-701..PR-702. Verified a bordered Input renders border_title at height 3 (pilot). Revisions:
+  concise captions to avoid truncation in narrow panes + render-verify with same-row fallback
+  (PR-701); scope the border via a `.captioned-input` class, not per-id, leaving global
+  Input/border:none untouched (PR-702). Decisions resolved (thin border, keep legend, same-row
+  fallback). Status -> reviewed; GO - PENDING HUMAN APPROVAL.
 
 ## Root-cause diagnosis (verified at render)
 The "black boxes" are `Input` fields (`background #45475a`, `border: none`, height 1). They DO
@@ -51,6 +59,12 @@ field, the field reads as a field, and there is no separate dim label to clip or
 - Fallback: RESOLVED = if `border_title` does not render reliably at these widths, fall back to a
   brightened Label on the SAME row as the field (Horizontal with a fixed-width label), not above.
 
+## Plan-review findings (2026-07-23)
+| ID | Sev | Scope | Area | Evidence | Finding | Decision |
+|----|-----|-------|------|----------|---------|----------|
+| PR-701 | LOW | UNDER-SCOPE | F/UX | pilot: bordered Input renders border_title, truncates if title > field width | Keep captions CONCISE so they do not truncate in the narrow panes: FORMAT CONTROLS "Max interactions" / "Max lines (Expanded)"; DB "Clean older than" / "Project (blank=all)" / "Prune backups older-than (days)". If any still clips at render, apply the same-row-label fallback for that field. | FIXED (short captions pinned + render-verify) |
+| PR-702 | LOW | UNDER-SCOPE | C/maintainability | css:95 global Input | Scope the resting border via ONE shared class `.captioned-input`, not per-id rules, so the global `Input { border: none }` and other 1-row inputs are provably untouched. | FIXED |
+
 ## Non-goals
 - No change to the inputs' behavior/ids/handlers (only their border + caption + the removed Labels).
 - Do not alter the global Input style or other 1-row inputs (search box, cfg-* fields).
@@ -78,4 +92,4 @@ Create a step-granular TodoWrite checklist (one item per B7-*) BEFORE coding.
 - Release: 1.3.0 rung-C needs a delta release-review covering all TUI batches.
 
 ## Deferred / open
-- The OPEN decisions above are resolved in plan-review before execution.
+- None. All open decisions resolved (thin border, keep legend, same-row fallback).
