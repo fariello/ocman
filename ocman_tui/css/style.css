@@ -470,3 +470,23 @@ ModelsWidget > .panel-card { height: 1fr; }
 .horizontal-buttons {
     height: auto;
 }
+
+/* B7-01..04: captioned input fields. These specific fields get a visible resting border so the
+   box reads as an editable field, and Textual renders their border_title (the caption) ON the
+   top border - an inline label. Scoped to this class so the global border-less 1-row Input
+   (search box, cfg-* fields) is untouched. */
+.captioned-input {
+    border: round #6c7086;
+    height: 3;
+    width: 1fr;
+    background: #45475a;
+    color: #f5f5f5;
+    padding: 0 1;
+}
+.captioned-input:focus {
+    border: round #cba6f7;
+    background: #585b70;
+}
+.captioned-input > .input--placeholder {
+    color: #cdd6f4;
+}

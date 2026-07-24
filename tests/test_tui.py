@@ -1901,17 +1901,18 @@ async def test_tui_expanded_toggle_next_to_transcript_title(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_format_controls_have_visible_labels(tui_db):
-    """B6-03: FORMAT CONTROLS inputs have a visible sibling Label (border_title is invisible on
-    a border-less Input)."""
-    from textual.widgets import Label
+async def test_tui_format_controls_captioned(tui_db):
+    """B7-01: FORMAT CONTROLS inputs are bordered and carry an inline caption (border_title) that
+    fits the field width (so it renders, not truncates)."""
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        panel = app.query_one("#controls-panel")
-        label_texts = [str(l.render()) for l in panel.query(Label)]
-        assert any("Max interactions" in t for t in label_texts), label_texts
-        assert any("Max lines" in t for t in label_texts), label_texts
+        for iid, cap in (("input-max-interactions", "Max interactions"),
+                         ("input-max-lines", "Max lines (Expanded)")):
+            inp = app.query_one("#" + iid, Input)
+            assert inp.border_title == cap
+            assert inp.has_class("captioned-input")
+            assert len(inp.border_title) <= inp.region.width - 2, f"{iid} caption clips"
 
 
 @pytest.mark.anyio
@@ -1984,24 +1985,26 @@ async def test_tui_tables_fill_after_search_bar_fix(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_database_ops_inputs_on_screen_and_labeled(tui_db):
-    """B6-04: DATABASE OPERATIONS inputs are on-screen and each has a visible label above it."""
-    from textual.widgets import Input, Label
+async def test_tui_database_ops_inputs_captioned_and_on_screen(tui_db):
+    """B7-02: DATABASE OPERATIONS inputs are on-screen, bordered (captioned-input), and carry an
+    inline caption (border_title) that fits the field width."""
+    from textual.widgets import Input
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         app.query_one("TabbedContent").active = "tab-admin"
         await pilot.pause()
-        for iid in ("input-retention-duration", "input-prune-project", "input-backup-clean-days"):
+        expected = {
+            "input-retention-duration": "Clean older than",
+            "input-prune-project": "Project (blank=all)",
+            "input-backup-clean-days": "Prune backups older than",
+        }
+        for iid, cap in expected.items():
             inp = app.query_one("#" + iid, Input)
             assert inp.region.x + inp.region.width <= 120, f"{iid} off-screen: {inp.region}"
-        # the labels exist in the admin widget
-        from ocman_tui.widgets.database import DatabaseAdminWidget
-        w = app.query_one(DatabaseAdminWidget)
-        texts = [str(l.render()) for l in w.query(Label)]
-        assert any("Clean Older Than" in t for t in texts)
-        assert any("Project scope" in t for t in texts)
-        assert any("Prune backups older than" in t for t in texts)
+            assert inp.has_class("captioned-input")
+            assert inp.border_title == cap
+            assert len(inp.border_title) <= inp.region.width - 2, f"{iid} caption clips"
 
 
 def test_tui_control_row_css_height_auto():

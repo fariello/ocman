@@ -31,6 +31,14 @@ from ..core import (
     db_list_sessions,
 )
 
+def _captioned(inp: Input, caption: str) -> Input:
+    """B7-02: mark an Input as a captioned field (visible border via .captioned-input) with its
+    caption rendered inline on the top border via border_title."""
+    inp.add_class("captioned-input")
+    inp.border_title = caption
+    return inp
+
+
 class TextualLogRedirector(io.TextIOBase):
     """Redirects stdout writes to a textual RichLog widget in real time."""
     def __init__(self, log_widget: RichLog) -> None:
@@ -237,15 +245,14 @@ class DatabaseAdminWidget(Static):
             with Vertical(classes="panel-card"):
                 yield Label("DATABASE OPERATIONS", classes="panel-card-title")
                 yield VerticalScroll(
-                    # B6-04: label ABOVE each input (a Label+Input Horizontal pushed the input
-                    # off-screen; stacking keeps the label visible and the field on-screen).
-                    Label("Clean Older Than:", classes="info-label"),
-                    Input("5d", id="input-retention-duration", placeholder="example: 2h or 3mo"),
-                    # B2-10b: units legend.
+                    # B7-02: bordered inputs with an inline caption on the top border.
+                    _captioned(Input("5d", id="input-retention-duration",
+                                     placeholder="example: 2h or 3mo"), "Clean older than"),
+                    # B2-10b: units legend (explains the unit letters).
                     Label("h = hours, d = days, w = weeks, mo = months, y = years",
                           classes="info-label"),
-                    Label("Project scope (optional; blank = all projects):", classes="info-label"),
-                    Input("", id="input-prune-project", placeholder="project name/number/id/path"),
+                    _captioned(Input("", id="input-prune-project",
+                                     placeholder="name / number / id / path"), "Project (blank=all)"),
                     Horizontal(
                         Checkbox("Dry Run (Preview changes, delete nothing)", value=True, id="check-dry-run"),
                     ),
@@ -274,8 +281,8 @@ class DatabaseAdminWidget(Static):
                         Label("Backup Target:", classes="info-label"),
                         Static("", id="lbl-backup-target-dir", classes="info-value"),
                     ),
-                    Label("Prune backups older than (days):", classes="info-label"),
-                    Input("30", id="input-backup-clean-days", placeholder="e.g. 30"),
+                    _captioned(Input("30", id="input-backup-clean-days", placeholder="e.g. 30 (days)"),
+                               "Prune backups older than"),
                     id="backup-fields"
                 )
                 with Horizontal():

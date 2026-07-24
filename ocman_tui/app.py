@@ -1239,12 +1239,14 @@ class OrsessionApp(App):
                                     yield Label("FORMAT CONTROLS", classes="panel-card-title")
                                     yield Checkbox("Include Tools", value=False, id="check-include-tools")
                                     yield Checkbox("All Roles", value=False, id="check-all-roles")
-                                    # B6-03: visible inline Labels (a border_title cannot show
-                                    # on a border-less Input, so the earlier titles were invisible).
-                                    yield Label("Max interactions:", classes="info-label")
-                                    yield Input("100", id="input-max-interactions")
-                                    yield Label("Max lines (when Expanded):", classes="info-label")
-                                    yield Input("2500", id="input-max-lines")
+                                    # B7-01: bordered inputs with an inline caption on the top
+                                    # border (border_title), so each field is self-describing.
+                                    mi = Input("100", id="input-max-interactions", classes="captioned-input")
+                                    mi.border_title = "Max interactions"
+                                    yield mi
+                                    ml = Input("2500", id="input-max-lines", classes="captioned-input")
+                                    ml.border_title = "Max lines (Expanded)"
+                                    yield ml
                                     yield Button("Refresh View", id="btn-refresh-transcript", variant="primary")
 
                             # Transcript fills the rest of the tab, full width. B5-05a: the
