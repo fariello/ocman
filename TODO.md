@@ -31,3 +31,17 @@ live session `cost` columns plus the ledger `cumulative.cost_deleted`.
 Deferred stretch goal (not yet built): forked/shared-spend de-duplication (attribute
 shared ancestor tokens once across a fork tree rather than double-counting). Promote to
 its own IPD if wanted.
+
+## `OCMAN_CONFIG_PATH` environment override: TO CONSIDER
+
+The README once documented `OCMAN_CONFIG_PATH` as an environment variable that "overrides
+the location of ocman.toml", but the code never read it from the environment: it is a
+hardcoded module constant (`ocman/cli.py` `OCMAN_CONFIG_PATH`), overridable only
+programmatically (tests rebind it) or, for the DB path alone, per-run via `--db`. The false
+env-var row was removed from the README (assess-documentation IPD, 2026-07-25).
+
+To reconsider: add a real environment override, e.g. read `os.environ.get("OCMAN_CONFIG_PATH")`
+when the constant is initialized, so a user can relocate their config without editing code.
+This is a small behavior change but needs its own IPD + tests (config load ordering, precedence
+vs `--db`, and interaction with the test-suite rebinding). Promote to a code IPD if wanted;
+until then there is no env override for the config-file path.

@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+- **`ocman kill` accepts a PID.** A bare all-digits argument to `ocman kill` is now treated as a
+  process id and killed directly (rejected before any action if the PID is gone, owned by another
+  user, or is not an opencode process); non-digit arguments remain a case-insensitive
+  cwd/project/session filter.
+- **Enriched `kill` confirm/choose preview.** Before killing, `ocman kill` now shows PID, Kind,
+  Uptime, Project, and the attributed Session (with provenance) per target, plus a Listener/Auth
+  line when that instance serves a control server.
+
 ## [1.3.0] - 2026-07-21
 
 ### Added
