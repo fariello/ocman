@@ -6454,9 +6454,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     # 'ocman kill [PATTERN]' (stop opencode here or matching PATTERN; no relaunch).
     sp = new_sub("kill",
-                 help="Kill the opencode running in this dir (or matching PATTERN); no relaunch (Linux).")
-    sp.add_argument("pattern", nargs="?", default=None,
-                    help="Optional case-insensitive filter (cwd/project/session); default: this dir.")
+                 help="Kill the opencode in this dir, matching PATTERN, or with a given PID; no relaunch (Linux).")
+    sp.add_argument("pattern", nargs="?", default=None, metavar="PID|PATTERN",
+                    help="An all-digits value is a PID; otherwise a case-insensitive filter "
+                         "(cwd/project/session). Default: this dir.")
     sp.add_argument("--dry-run", action="store_true",
                     help="Show what would be killed without acting.")
     sp.add_argument("-9", "--force", dest="force", action="store_true",
@@ -8185,7 +8186,9 @@ def _sess_str(s: dict) -> str:
         return f"{s['id']} ({s['provenance']})"
     if s.get("ids"):
         return f"{s['count']} session(s) for cwd ({s['provenance']})"
-    return "unknown"
+    # No id/ids: surface the provenance verbatim. For the normal attribution this is the plain
+    # word "unknown"; for a kill-by-PID partial target it carries the informative caveat.
+    return str(s.get("provenance") or "unknown")
 
 
 def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
@@ -12394,15 +12397,64 @@ def _kill_targets(cwd: str, pattern: str | None, *, verbosity: int = 0) -> list[
     return out
 
 
+def _kill_target_for_pid(pid: int, *, verbosity: int = 0) -> list[dict]:
+    """Resolve a single own-user opencode PID to a kill target (list of one dict).
+
+    Rejects loudly (die) BEFORE returning anything if the pid is gone, not owned by the current
+    user, or does not look like an opencode process (own-user-only + opencode-only posture; no
+    signal is ever sent to a rejected pid). Prefers the fully enriched dict from
+    detect_running_instances when the pid is among the detected instances; otherwise returns a
+    PARTIAL target (pid + cmdline + best-effort uptime from /proc) with a Session caveat, so a
+    real opencode process the detector missed can still be killed after an informed confirm.
+    """
+    # KB-04: reject gone / not-own-user / not-opencode before any preview.
+    if _pid_is_gone(pid):
+        die(f"No such process: PID {pid} (already gone).")
+    my_uid = os.getuid() if hasattr(os, "getuid") else None
+    if my_uid is not None:
+        try:
+            if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                die(f"Refusing: PID {pid} is not owned by the current user.")
+        except OSError:
+            die(f"No such process: PID {pid} (already gone).")
+    if not _pid_looks_like_opencode(pid):
+        die(f"Refusing: PID {pid} does not look like an opencode process.")
+
+    # KB-02: prefer the enriched detected dict when the pid is among running instances.
+    try:
+        for it in detect_running_instances(all_users=False, verbosity=verbosity):
+            if it.get("pid") == pid:
+                return [it]
+    except RunningDetectionError:
+        raise  # let cli_kill translate to the Linux-only message
+
+    # KB-03: valid own-user opencode pid not in the detected set -> partial target + caveat.
+    try:
+        with open(f"/proc/{pid}/cmdline", "rb") as fh:
+            cmdline = fh.read().replace(b"\x00", b" ").decode("utf-8", "replace").strip()
+    except OSError:
+        cmdline = ""
+    return [{
+        "pid": pid, "cmdline": cmdline, "elapsed": "?", "kind": "?",
+        "cwd": "", "project": "", "listeners": [],
+        "session": {"provenance": "unknown (pid not in detected instance set)"},
+    }]
+
+
 def cli_kill(*, pattern: str | None = None, assume_yes: bool = False,
              dry_run: bool = False, force: bool = False, verbosity: int = 0) -> None:
-    """`ocman kill [PATTERN]`: stop the opencode running in this dir (or matching PATTERN)
-    WITHOUT relaunching. Own-user only, Linux-only. SIGTERM by default; --force adds SIGKILL.
+    """`ocman kill [PID|PATTERN]`: stop the opencode running in this dir, matching PATTERN, or with
+    the given PID. WITHOUT relaunching. Own-user only, Linux-only. SIGTERM by default; --force adds
+    SIGKILL. An all-digits argument is treated as a PID (not a substring filter).
     """
     interactive = sys.stdout.isatty()
     cwd = str(Path.cwd())
     try:
-        targets = _kill_targets(cwd, pattern, verbosity=verbosity)
+        # KB-01: a bare all-digits arg is a PID, not a PATTERN.
+        if pattern is not None and pattern.isdigit():
+            targets = _kill_target_for_pid(int(pattern), verbosity=verbosity)
+        else:
+            targets = _kill_targets(cwd, pattern, verbosity=verbosity)
     except RunningDetectionError as e:
         die(f"Cannot kill: {e} (kill is Linux-only).")
 

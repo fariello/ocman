@@ -5205,6 +5205,141 @@ def test_kill_dry_run_shows_enriched_preview_zero_side_effects(monkeypatch, caps
     assert "PID 88" in out and "Session: ses_dr (argv hint (not in DB))" in out
 
 
+# --- kill by PID (KB-01..05) -------------------------------------------------
+
+@_linux_only
+def test_kill_by_pid_uses_enriched_detected_instance(monkeypatch, capsys):
+    """KB-01/KB-02: a bare all-digits arg is a PID; when that PID is among the detected instances,
+    the full enriched preview is shown and it is killed once."""
+    calls = {}
+    inst = {"pid": 4242, "cwd": "/home/me/proj", "project": "proj-hash", "kind": "tui+server",
+            "elapsed": "1h02m", "cmdline": "opencode -s ses_abc", "listeners": ["127.0.0.1:4096"],
+            "exposed": False, "auth": "unsecured",
+            "session": {"id": "ses_abc", "provenance": "launched-with (may be stale)"}}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: False)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: True)
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    # a PATTERN-only path must NOT be consulted for a digit arg
+    monkeypatch.setattr(ocman.cli, "_kill_targets",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("PATTERN path used for a PID")))
+    ocman.cli.cli_kill(pattern="4242", assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert calls["killed"] == [4242]
+    assert "PID 4242" in out and "1h02m" in out and "/home/me/proj" in out
+    assert "ses_abc" in out and "launched-with (may be stale)" in out
+
+
+@_linux_only
+def test_kill_by_pid_partial_when_not_detected(monkeypatch, capsys):
+    """KB-03: an own-user opencode PID that is NOT in the detected set still kills, with a partial
+    preview carrying the 'unknown (pid not in detected instance set)' caveat and no Listener line."""
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: False)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: True)
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [])  # not detected
+    import builtins as _b
+    real_open = _b.open
+    monkeypatch.setattr(_b, "open",
+                        lambda p, *a, **k: (__import__("io").BytesIO(b"opencode\x00serve")
+                                            if str(p) == "/proc/777/cmdline" else real_open(p, *a, **k)))
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    ocman.cli.cli_kill(pattern="777", assume_yes=True, dry_run=False, force=False)
+    out = capsys.readouterr().out
+    assert calls["killed"] == [777]
+    assert "PID 777" in out
+    assert "unknown (pid not in detected instance set)" in out
+    assert "Listener:" not in out
+
+
+@_linux_only
+def test_kill_by_pid_rejects_gone(monkeypatch, capsys):
+    """KB-04a: a gone PID is rejected before any preview; zero kills."""
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: True)
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_kill(pattern="999", assume_yes=True, dry_run=False, force=False)
+    err = capsys.readouterr()
+    assert "already gone" in (err.out + err.err)
+    assert "killed" not in calls
+
+
+@_linux_only
+def test_kill_by_pid_rejects_other_user(monkeypatch, capsys):
+    """KB-04b: a PID owned by another user is rejected before any preview; zero kills."""
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: False)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 0})())  # root-owned
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_kill(pattern="1", assume_yes=True, dry_run=False, force=False)
+    err = capsys.readouterr()
+    assert "not owned by the current user" in (err.out + err.err)
+    assert "killed" not in calls
+
+
+@_linux_only
+def test_kill_by_pid_rejects_non_opencode(monkeypatch, capsys):
+    """KB-04c: an own-user PID that is not an opencode process is rejected; zero kills."""
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: False)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: False)
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_kill(pattern="2222", assume_yes=True, dry_run=False, force=False)
+    err = capsys.readouterr()
+    assert "does not look like an opencode process" in (err.out + err.err)
+    assert "killed" not in calls
+
+
+@_linux_only
+def test_kill_non_digit_pattern_still_uses_pattern_path(monkeypatch, capsys):
+    """KB-01/KB-05: a NON-digit arg still routes through the PATTERN path (_kill_targets), and the
+    PID resolver is not consulted."""
+    calls = {}
+    monkeypatch.setattr(ocman.cli, "_kill_targets",
+                        lambda cwd, pattern, **k: [{"pid": 5, "cwd": cwd, "kind": "tui",
+                                                    "cmdline": "opencode", "session": {}}])
+    monkeypatch.setattr(ocman.cli, "_kill_target_for_pid",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("PID path used for a PATTERN")))
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    ocman.cli.cli_kill(pattern="alpha", assume_yes=True, dry_run=False, force=False)
+    assert calls["killed"] == [5]
+
+
+@_linux_only
+def test_kill_by_pid_dry_run_zero_side_effects(monkeypatch, capsys):
+    """KB-05: --dry-run on a PID prints the preview and sends ZERO signals."""
+    calls = {}
+    inst = {"pid": 321, "cwd": "/home/me/x", "kind": "tui", "elapsed": "2m", "cmdline": "opencode",
+            "listeners": [], "session": {"id": "ses_z", "provenance": "launched-with (may be stale)"}}
+    monkeypatch.setattr(ocman.cli, "_pid_is_gone", lambda pid: False)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_pid_looks_like_opencode", lambda pid: True)
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst])
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully",
+                        lambda pid, **k: calls.setdefault("killed", []).append(pid) or True)
+    ocman.cli.cli_kill(pattern="321", assume_yes=False, dry_run=True, force=False)
+    out = capsys.readouterr().out
+    assert "killed" not in calls
+    assert "PID 321" in out
+
+
 # --- doctor: listening opencode servers security check -----------------------
 
 def _fake_server(pid=1, listeners=None, vulnerable=False, exposed=False):
