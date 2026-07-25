@@ -128,7 +128,8 @@ Select:focus {
 
 Checkbox {
     color: #cdd6f4;
-    background: transparent;
+    background: #45475a;
+    border: none;
     height: 1;
     padding: 0 1;
     margin: 0;
@@ -170,6 +171,25 @@ Checkbox > .checkbox--box {
 
 Checkbox > .checkbox--box.--checked {
     color: #cba6f7;
+}
+
+/* Action-button row in the narrow DATABASE OPERATIONS / BACKUP panels: let each button shrink to
+   its label (Textual buttons default to min-width 16) so all three fit one row at moderate widths
+   (Import was going off-screen). Buttons stay in a row per maintainer preference. */
+.ops-button-row {
+    height: auto;
+}
+.ops-button-row Button {
+    width: auto;
+    min-width: 0;
+}
+
+/* #ops-fields is a VerticalScroll, which defaults to height:1fr and expands to fill the panel,
+   crushing the action-button row placed BELOW it into the panel's last sliver (buttons then fall
+   outside the painted area). Size it to its content so the buttons below get real space; the tab
+   itself scrolls if the panel is tall. */
+#ops-fields {
+    height: auto;
 }
 
 /* Buttons */
@@ -227,13 +247,21 @@ Button.-warning:hover {
 /* B3-02: cap the metadata + FORMAT CONTROLS row so it does not eat the transcript. The 8
    FORMAT CONTROLS rows + the metadata (7-8 lines) fit in ~11; the transcript takes the rest. */
 #details-top {
-    height: 11;
+    height: 12;
 }
+/* Details panels sit flush (no interior padding), overriding the shared .panel-card padding. */
 #metadata-panel {
     width: 1fr;
+    padding: 0;
 }
 #controls-panel {
     width: 30;
+    padding: 0;
+}
+/* Database tab panels also sit flush (no interior padding), scoped so other tabs' .panel-card
+   (Models/Spend) are untouched. */
+DatabaseAdminWidget .panel-card {
+    padding: 0;
 }
 /* B2-06: transcript card sits flush (no inner padding) so the scroll area fills it. */
 #transcript-container {
@@ -328,6 +356,16 @@ DataTable:focus > .datatable--cursor {
 .info-label {
     color: #a6adc8;
     text-style: bold;
+}
+
+/* Caption label above a borderless input (FORMAT CONTROLS). No box, no padding; sits flush on the
+   line above its field. */
+.field-caption {
+    color: #a6adc8;
+    text-style: bold;
+    height: 1;
+    padding: 0;
+    margin: 0;
 }
 
 .info-value {
@@ -482,34 +520,4 @@ ModelsWidget > .panel-card { height: 1fr; }
     height: auto;
 }
 
-/* B7-01..04: captioned input fields. These specific fields get a visible resting border so the
-   box reads as an editable field, and Textual renders their border_title (the caption) ON the
-   top border - an inline label. Scoped to this class so the global border-less 1-row Input
-   (search box, cfg-* fields) is untouched. */
-.captioned-input {
-    border: round #6c7086;
-    height: 3;
-    width: 1fr;
-    background: #45475a;
-    color: #f5f5f5;
-    padding: 0 1;
-    /* BG-02: this field does NOT scroll (height 3, single content row; confirmed live
-       show_vertical_scrollbar=False), so it should never reserve a black scrollbar gutter. Pin
-       the scrollbar colors to the field/panel palette defensively so no black cell can bleed on
-       the right edge in a real terminal (the headless compositor already paints the seam with the
-       panel background, but a terminal whose default bg is black can show through an unpainted
-       reserved gutter). */
-    scrollbar-background: #45475a;
-    scrollbar-color: #45475a;
-    overflow: hidden hidden;
-}
-/* BG-03: keep the focus border MAUVE #cba6f7 (the app's consistent focus/accent color). The
-   BLUE seen in a capture belongs to Textual's SYSTEM METRICS sparkline accent, NOT to any input
-   border; do not "fix" this to blue. Resolved with maintainer 2026-07-24. */
-.captioned-input:focus {
-    border: round #cba6f7;
-    background: #585b70;
-}
-.captioned-input > .input--placeholder {
-    color: #cdd6f4;
-}
+

@@ -31,14 +31,6 @@ from ..core import (
     db_list_sessions,
 )
 
-def _captioned(inp: Input, caption: str) -> Input:
-    """B7-02: mark an Input as a captioned field (visible border via .captioned-input) with its
-    caption rendered inline on the top border via border_title."""
-    inp.add_class("captioned-input")
-    inp.border_title = caption
-    return inp
-
-
 class TextualLogRedirector(io.TextIOBase):
     """Redirects stdout writes to a textual RichLog widget in real time."""
     def __init__(self, log_widget: RichLog) -> None:
@@ -245,32 +237,26 @@ class DatabaseAdminWidget(Static):
             with Vertical(classes="panel-card"):
                 yield Label("DATABASE OPERATIONS", classes="panel-card-title")
                 yield VerticalScroll(
-                    # B7-02: bordered inputs with an inline caption on the top border.
-                    _captioned(Input("5d", id="input-retention-duration",
-                                     placeholder="example: 2h or 3mo"), "Clean older than"),
+                    # Borderless inputs with a plain caption label above (no box, no padding).
+                    Label("Clean older than", classes="field-caption"),
+                    Input("5d", id="input-retention-duration", placeholder="example: 2h or 3mo"),
                     # B2-10b: units legend (explains the unit letters).
                     Label("h = hours, d = days, w = weeks, mo = months, y = years",
                           classes="info-label"),
-                    _captioned(Input("", id="input-prune-project",
-                                     placeholder="name / number / id / path"), "Project (blank=all)"),
-                    Horizontal(
-                        Checkbox("Dry Run (Preview changes, delete nothing)", value=True, id="check-dry-run"),
-                    ),
-                    Horizontal(
-                        Checkbox("Force (Bypass active-process safety checks)", value=False, id="check-force"),
-                    ),
-                    Horizontal(
-                        Checkbox("Sweep orphaned rows/files too", value=True, id="check-sweep-orphans"),
-                    ),
-                    Horizontal(
-                        Checkbox("Write recovery extracts before deleting", value=True, id="check-prune-extracts"),
-                    ),
+                    Label("Project (blank=all)", classes="field-caption"),
+                    Input("", id="input-prune-project", placeholder="name / number / id / path"),
+                    # Checkboxes yielded directly (no per-checkbox Horizontal wrapper, which added
+                    # stray blank rows). Short labels; the destructive Force option carries a warn glyph.
+                    Checkbox("Dry Run", value=True, id="check-dry-run"),
+                    Checkbox("[b red]⚠[/] Force", value=False, id="check-force"),
+                    Checkbox("Delete orphaned", value=True, id="check-sweep-orphans"),
+                    Checkbox("Backup Before", value=True, id="check-prune-extracts"),
                     id="ops-fields"
                 )
-                with Horizontal():
-                    yield Button("[b red]⚠[/] Run Prune / Clean", id="btn-run-prune", variant="error")
-                    yield Button("Inspect Orphans", id="btn-inspect-orphans", variant="primary")
-                    yield Button("Import Session", id="btn-import-session", variant="success")
+                with Horizontal(classes="ops-button-row"):
+                    yield Button("[b red]⚠[/] Prune", id="btn-run-prune", variant="error")
+                    yield Button("Inspect", id="btn-inspect-orphans", variant="primary")
+                    yield Button("Import", id="btn-import-session", variant="success")
 
             # Backup & Restore Card
             with Vertical(classes="panel-card"):
@@ -281,11 +267,11 @@ class DatabaseAdminWidget(Static):
                         Label("Backup Target:", classes="info-label"),
                         Static("", id="lbl-backup-target-dir", classes="info-value"),
                     ),
-                    _captioned(Input("30", id="input-backup-clean-days", placeholder="e.g. 30 (days)"),
-                               "Prune backups older than"),
+                    Label("Prune backups older than", classes="field-caption"),
+                    Input("30", id="input-backup-clean-days", placeholder="e.g. 30 (days)"),
                     id="backup-fields"
                 )
-                with Horizontal():
+                with Horizontal(classes="ops-button-row"):
                     yield Button("Create Backup", id="btn-create-backup", variant="success")
                     yield Button("Restore Backup", id="btn-restore-backup", variant="primary")
                     yield Button("[b red]⚠[/] Prune Old Backups", id="btn-clean-backups", variant="error")

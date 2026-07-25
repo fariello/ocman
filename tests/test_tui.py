@@ -1901,18 +1901,23 @@ async def test_tui_expanded_toggle_next_to_transcript_title(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_format_controls_captioned(tui_db):
-    """B7-01: FORMAT CONTROLS inputs are bordered and carry an inline caption (border_title) that
-    fits the field width (so it renders, not truncates)."""
+async def test_tui_format_controls_labeled_borderless(tui_db):
+    """FORMAT CONTROLS fields are borderless (no box) with a plain .field-caption Label above each,
+    and the inputs keep their ids/values. (Replaces the old bordered border_title design.)"""
+    from textual.widgets import Label
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        for iid, cap in (("input-max-interactions", "Max interactions"),
-                         ("input-max-lines", "Max lines (Expanded)")):
+        app.query_one("TabbedContent").active = "tab-details"
+        await pilot.pause()
+        for iid, val in (("input-max-interactions", "100"), ("input-max-lines", "2500")):
             inp = app.query_one("#" + iid, Input)
-            assert inp.border_title == cap
-            assert inp.has_class("captioned-input")
-            assert len(inp.border_title) <= inp.region.width - 2, f"{iid} caption clips"
+            assert inp.value == val
+            assert not inp.has_class("captioned-input")
+            assert inp.styles.border.top[0] == ""  # no border box (edge type is none)
+        captions = {str(lbl.content) for lbl in app.query(".field-caption")}
+        assert "Max interactions" in captions
+        assert "Max lines (Expanded)" in captions
 
 
 @pytest.mark.anyio
@@ -1985,35 +1990,30 @@ async def test_tui_tables_fill_after_search_bar_fix(tui_db):
 
 
 @pytest.mark.anyio
-async def test_tui_database_ops_inputs_captioned_and_on_screen(tui_db):
-    """B7-02: DATABASE OPERATIONS inputs are on-screen, bordered (captioned-input), and carry an
-    inline caption (border_title) that fits the field width."""
+async def test_tui_database_ops_inputs_labeled_borderless(tui_db):
+    """DATABASE OPERATIONS + BACKUP inputs are borderless (no box) with a plain .field-caption
+    Label above each; on-screen with ids/values intact. (Replaces the old bordered design.)"""
     from textual.widgets import Input
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         app.query_one("TabbedContent").active = "tab-admin"
         await pilot.pause()
-        expected = {
-            "input-retention-duration": "Clean older than",
-            "input-prune-project": "Project (blank=all)",
-            "input-backup-clean-days": "Prune backups older than",
-        }
-        for iid, cap in expected.items():
+        for iid in ("input-retention-duration", "input-prune-project", "input-backup-clean-days"):
             inp = app.query_one("#" + iid, Input)
             assert inp.region.x + inp.region.width <= 120, f"{iid} off-screen: {inp.region}"
-            assert inp.has_class("captioned-input")
-            assert inp.border_title == cap
-            assert len(inp.border_title) <= inp.region.width - 2, f"{iid} caption clips"
+            assert not inp.has_class("captioned-input")
+            assert inp.styles.border.top[0] == ""  # no border box
+        captions = {str(lbl.content) for lbl in app.query(".field-caption")}
+        for cap in ("Clean older than", "Project (blank=all)", "Prune backups older than"):
+            assert cap in captions
 
 
 @pytest.mark.anyio
 async def test_tui_no_black_scrollbar_gutter(tui_db):
-    """BG-01/BG-02: neither the scrolling .log-area (RichLog) nor the non-scrolling
-    .captioned-input fields may leave their scrollbar/gutter at the default BLACK, which
-    renders as a black column on a panel's right edge in a real terminal. Assert the applied
-    scrollbar-background is a palette color (never pure black), and the log reserves a stable
-    gutter. Live-verified during execution: pre-fix scrollbar_background was Color(0,0,0)."""
+    """BG-01: the scrolling .log-area (RichLog) must not leave its scrollbar track at the default
+    BLACK (which rendered as a black column on the panel's right edge in a real terminal). Assert
+    the applied scrollbar-background is a palette color (never pure black) and a stable gutter."""
     from textual.color import Color
     app = OrsessionApp()
     async with app.run_test(size=(120, 40)) as pilot:
@@ -2026,21 +2026,60 @@ async def test_tui_no_black_scrollbar_gutter(tui_db):
                 f"{w.id}: scrollbar_background is black (unstyled track)")
             assert str(w.styles.scrollbar_gutter) == "stable", (
                 f"{w.id}: scrollbar_gutter not stable ({w.styles.scrollbar_gutter})")
-        caps = list(app.query(".captioned-input"))
-        assert caps, "expected at least one .captioned-input"
-        for w in caps:
-            assert w.styles.scrollbar_background != black, (
-                f"{w.id}: captioned-input scrollbar_background is black")
 
 
-def test_tui_captioned_focus_border_is_mauve():
-    """BG-03: the focused captioned-input border stays MAUVE #cba6f7 (resolved with maintainer;
-    the blue in captures is the SYSTEM METRICS sparkline accent, not an input border)."""
-    from pathlib import Path as _P
-    css = (_P(__file__).parent.parent / "ocman_tui" / "css" / "style.css").read_text(encoding="utf-8")
-    import re
-    m = re.search(r"\.captioned-input:focus\s*\{[^}]*border:\s*round\s*#cba6f7", css)
-    assert m, ".captioned-input:focus border should be round #cba6f7 (mauve)"
+@pytest.mark.anyio
+async def test_tui_checkboxes_render_label_row(tui_db):
+    """Textual 8.x makes Checkbox a bordered 3-row ToggleButton; our `Checkbox { height: 1 }`
+    without `border: none` crushed out the label row (content_size.height==0), so every checkbox
+    rendered as two empty block bars ('black boxes'). Assert every VISIBLE checkbox has a rendered
+    label row (content_size.height == 1). Regression for the DATABASE OPERATIONS 'black boxes'."""
+    from textual.widgets import Checkbox
+    app = OrsessionApp()
+    async with app.run_test(size=(154, 50)) as pilot:
+        await pilot.pause()
+        for tab in ("tab-details", "tab-admin"):
+            app.query_one("TabbedContent").active = tab
+            await pilot.pause()
+            visible = [cb for cb in app.query(Checkbox) if cb.region.width > 0]
+            assert visible, f"no visible checkbox on {tab}"
+            for cb in visible:
+                assert cb.content_size.height == 1, (
+                    f"{tab}:{cb.id} content_size.height={cb.content_size.height} "
+                    "(label row crushed; needs Checkbox border:none)")
+
+
+@pytest.mark.anyio
+async def test_tui_database_ops_checkboxes_direct_children(tui_db):
+    """The 4 prune checkboxes must be direct children of #ops-fields (no Horizontal wrapper, which
+    added stray blank rows), and carry the short labels."""
+    from textual.widgets import Checkbox
+    from textual.containers import Horizontal
+    app = OrsessionApp()
+    async with app.run_test(size=(154, 50)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-admin"
+        await pilot.pause()
+        ops = app.query_one("#ops-fields")
+        assert not any(isinstance(ch, Horizontal) for ch in ops.children)
+        ids = {cb.id for cb in ops.children if isinstance(cb, Checkbox)}
+        assert {"check-dry-run", "check-force", "check-sweep-orphans", "check-prune-extracts"} <= ids
+
+
+@pytest.mark.anyio
+async def test_tui_database_ops_buttons_fit_row_at_120(tui_db):
+    """DATABASE OPERATIONS + BACKUP action buttons stay in a row and all fit at a moderate 120-col
+    width (Import Session was off-screen); short labels + .ops-button-row min-width 0."""
+    from textual.widgets import Button
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 50)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-admin"
+        await pilot.pause()
+        for bid in ("btn-run-prune", "btn-inspect-orphans", "btn-import-session",
+                    "btn-create-backup", "btn-restore-backup", "btn-clean-backups"):
+            b = app.query_one("#" + bid, Button)
+            assert b.region.right <= 120, f"{bid} off-screen: {b.region}"
 
 
 def test_tui_control_row_css_height_auto():
