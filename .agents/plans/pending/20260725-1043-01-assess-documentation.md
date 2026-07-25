@@ -2,12 +2,13 @@
 
 - Date: 2026-07-25
 - Concern: documentation
-- Scope: whole project, README.md primary (with CHANGELOG.md cross-check); verified against ocman/cli.py
-- Status: to-review
+- Scope: whole project; edits limited to README.md, CHANGELOG.md, and TODO.md; verified against ocman/cli.py
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Workflow history
 - 2026-07-25 /assess documentation (its_direct/pt3-claude-opus-4.8-1m-us): assessed; proposed 7 changes
+- 2026-07-25 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): APPROVE WITH REVISIONS APPLIED; PR-01..PR-03 (added execution-contract gate: scope fence, honesty rule, path-scoped/never-push, lifecycle; completed the AD-06 changelog entry to cover both kill IPDs). AD-02 resolved with maintainer.
 
 ## Goal
 Bring the user-facing docs back into exact agreement with what ocman 1.3.0 actually does. The
@@ -50,8 +51,9 @@ Fix inaccuracies first (AD-01, AD-02), then navigation/reference, then hygiene/p
 | 3 | AD-03 | Move the `ocman spend` row out of the `### history` table into "Top-level verbs and aliases" (or annotate it as a top-level verb, not `history spend`). | README.md:425, 433 | Low | Confirm `spend` registered top-level at ocman/cli.py:6497; no `history spend` in parser |
 | 4 | AD-04 | Add `--long` to the `lr` options description ("adds a best-guess, possibly stale Session column"). | README.md:439 | Low | Matches ocman/cli.py:6533-6534 |
 | 5 | AD-05 | Add a parenthetical to the `session export` row pointing to `ocman export project SPEC to FILE` for whole-project bundles. | README.md:357 | Low | Matches ocman/cli.py:6482-6484 |
-| 6 | AD-06 | Add an `[Unreleased]` CHANGELOG entry for kill-by-PID and the enriched kill preview (Added). | CHANGELOG.md:3 | Low | Entry references the two shipped behaviors; Keep-a-Changelog format preserved |
+| 6 | AD-06 | Add an `[Unreleased]` `### Added` CHANGELOG entry covering BOTH post-1.3.0 kill changes shipped in code: the enriched `kill` confirm/choose preview (executed IPD `20260724-1057-01`) AND kill-by-PID (executed IPD `20260724-1454-01`). | CHANGELOG.md:3 | Low | Entry references both shipped behaviors and their executed IPDs; Keep-a-Changelog format preserved |
 | 7 | AD-07 | Add a short "Platforms" note to Known Limitations: fully supported on Linux; on macOS/Windows the process features (kill/reconnect/list running/doctor server check) degrade or are unavailable, and `pysqlite3-binary` is Linux-only (stdlib sqlite3 elsewhere). | README.md:605 | Low | Matches per-command Linux-only markers + pyproject.toml:19 |
+| 8 | AD-02 | Add a TODO.md item (to-consider/reconsider) recording the removed `OCMAN_CONFIG_PATH` env-override: note it was documented but never implemented (only a per-run `--db` override and programmatic rebinding exist), and that adding a real env override would be a small code change with its own tests + load-ordering care. | TODO.md | Low | TODO.md carries the deferred capability with rationale so it is not lost |
 
 ## Deferred / out of scope (with reason)
 None deferred on Remediation-Risk grounds (all fixes are Low risk). The CODE alternative for AD-02
@@ -80,10 +82,25 @@ match already-shipped behavior. If AD-02 is later resolved by implementing the e
 (separate plan), that plan owns adding the row back plus tests.
 
 ## Open questions
-- AD-02: prefer the docs fix (remove the false `OCMAN_CONFIG_PATH` env-override row) OR implement
-  the env override in code (read `os.environ.get("OCMAN_CONFIG_PATH")` at ocman/cli.py:224)? This
-  IPD proposes the docs fix; the code option is a separate behavior change with its own tests.
-  ASSUMPTION pending confirmation: docs fix.
+- AD-02: RESOLVED with maintainer 2026-07-25 = DOCS FIX. Remove the false `OCMAN_CONFIG_PATH`
+  env-override row from README (step 2), and ALSO record the env-override as a future
+  to-consider/reconsider item in `TODO.md` with a short explanation (step 8), so the dropped
+  capability is not lost. Implementing the env override remains a SEPARATE code plan if pursued.
+
+## Gate / execution contract (MUST, per AGENTS.md)
+- Open questions: AD-02 (docs-fix vs code env-override) MUST be resolved before executing step 2
+  (see Open questions; resolved with maintainer during /plan-review, recorded there).
+- Scope fence: `README.md`, `CHANGELOG.md`, and `TODO.md` ONLY. No code, tests, or other files.
+  (This is a documentation plan; the AD-02 env-override, if pursued, is a SEPARATE code plan with
+  its own scope and tests.)
+- Honesty rule (hard MUST): paste the ACTUAL verification output, i.e. the `ocman kill -h`,
+  `ocman lr -h`, and `ocman spend -h` help text, alongside the changed README rows, to prove the
+  docs match the shipped parser. Do not claim a match you did not run.
+- Commits: path-scoped (`git commit -- README.md CHANGELOG.md ...`), never `git add -A`, never push.
+- Prose: no em/en dashes introduced (`grep -nP $'[\u2013\u2014]' README.md CHANGELOG.md` yields no
+  NEW matches beyond sanctioned glyph exceptions).
+- Lifecycle: on completion + validation, set terminal `Status: executed` and `git mv` this file
+  from `.agents/plans/pending/` to `.agents/plans/executed/`.
 
 ## Approval and execution gate
 This IPD is a proposal. It MUST be reviewed and approved by a human before execution, and it is NOT
