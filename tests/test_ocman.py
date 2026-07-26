@@ -1422,12 +1422,21 @@ def test_subcommand_history_and_config(monkeypatch):
     assert a.create_config is True
 
 
-def test_subcommand_filter(monkeypatch):
-    a = _parse(monkeypatch, ["filter", "doc.md", "--scope", "x only", "-P", "proj"])
-    assert a.command == "filter"
+def test_subcommand_focus(monkeypatch):
+    # SD-06: `focus` is the primary verb; parse produces command == "focus".
+    a = _parse(monkeypatch, ["focus", "doc.md", "--scope", "x only", "-P", "proj"])
+    assert a.command == "focus"
     assert a.command_arg == "doc.md"
     assert a.scope == "x only"
     assert a.project == "proj"
+
+
+def test_subcommand_filter_is_hidden_alias_for_focus(monkeypatch):
+    # SD-06: the legacy `filter` verb still works, rewritten to `focus` before argparse.
+    a = _parse(monkeypatch, ["filter", "doc.md", "--scope", "x only"])
+    assert a.command == "focus"
+    assert a.command_arg == "doc.md"
+    assert a.scope == "x only"
 
 
 def test_subcommand_models_and_prompt_and_ui(monkeypatch):
@@ -2238,6 +2247,31 @@ def test_e2e_unknown_command_errors(tmp_path):
     r = _run_ocman_py(["frobnicate"], tmp_path)
     assert r.returncode != 0
     assert "invalid choice" in (r.stdout + r.stderr)
+
+
+def test_e2e_db_info_missing_db_exits_nonzero(tmp_path):
+    """SD-03: `db info` against a missing database must fail loud (exit 1) with the
+    actionable message, not print a soft warning and exit 0."""
+    missing = tmp_path / "does-not-exist.db"
+    r = subprocess.run(
+        [_sys.executable, _OCMAN_PY, "--db", str(missing), "db", "info"],
+        capture_output=True, text=True, cwd=str(tmp_path),
+    )
+    assert r.returncode != 0, r.stdout + r.stderr
+    assert "Database not found" in (r.stdout + r.stderr)
+
+
+def test_e2e_no_args_non_tty_does_not_crash(tmp_path):
+    """SD-01: bare `ocman` with non-TTY stdin (a subprocess) must NOT hit the interactive
+    picker's input() and EOF-crash; it exits 0 (or the clean no-project help), never with an
+    'Unexpected error: EOF' at a nonzero code."""
+    r = subprocess.run(
+        [_sys.executable, _OCMAN_PY, "--db", str(_make_empty_db(tmp_path))],
+        capture_output=True, text=True, cwd=str(tmp_path), stdin=subprocess.DEVNULL,
+    )
+    combined = r.stdout + r.stderr
+    assert "EOF" not in combined and "Unexpected error" not in combined, combined
+    assert r.returncode == 0, combined
 
 
 def test_e2e_installed_console_script_matches(tmp_path):

@@ -5560,7 +5560,7 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} session compact ID", "Recover + LLM-compact (pick model interactively)"),
         (f"{prog} session compact ID MODEL", "Recover + compact with a specific model"),
         (f"{prog} list models", "List available LLM models"),
-        (f"{prog} filter FILE.md --scope TEXT", "Re-scope a recovery doc via the LLM"),
+        (f"{prog} focus FILE.md --scope TEXT", "Narrow a recovery doc to a topic via the LLM"),
     ]
 
     maintain = [
@@ -5631,7 +5631,7 @@ def build_help(topic: str | None = None) -> str:
 
     lines.append(_h_head("Usage", c))
     lines.append(f"  {_h_cmd(prog + ' <command> [options]', c)}")
-    _noarg = "   (no args: lists this directory's sessions, or all projects if none)"
+    _noarg = "   (no args: at a terminal, pick a session to recover; when piped, lists this dir's sessions)"
     lines.append(f"  {_h_cmd(prog, c)}{_h_dim(_noarg, c)}")
     lines.append("")
 
@@ -5734,7 +5734,7 @@ def build_help_reference() -> str:
             ("lp | ls | lr [PATTERN]", "Short aliases for 'list projects' / 'list sessions' / 'list running'; optional PATTERN filters"),
             ("info / disk", "Alias of 'db info' / 'db info --by-project'"),
             ("logs", "Alias of 'history show'"),
-            ("filter FILE [--scope TEXT -P NAME]", "Re-scope a recovery doc via the LLM"),
+            ("focus FILE [--scope TEXT -P NAME]", "Narrow a recovery doc to a topic via the LLM"),
             ("list models / compaction-prompt", "List models / print the compaction prompt"),
             ("ui / gui", "Launch the interactive terminal dashboard"),
             ("help [TOPIC]", "This help; TOPIC focuses one section"),
@@ -5828,6 +5828,10 @@ def preprocess_argv(argv: list[str]) -> list[str]:
         rest = ["project", "list", *rest[1:]]
     elif rest and rest[0].lower() == "lr":
         rest = ["running", *rest[1:]]
+    # SD-06: `focus` is the primary verb; `filter` is a kept-working but HIDDEN alias
+    # (rewritten before argparse sees it, so `ocman filter ...` behaves exactly as `focus`).
+    elif rest and rest[0].lower() == "filter":
+        rest = ["focus", *rest[1:]]
 
     # (1) word-order: "list projects|sessions ..."
     if rest and rest[0].lower() == "list" and len(rest) >= 2:
@@ -6257,14 +6261,16 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagent/child sessions when resolving.")
 
-    sp = new_action(p_session, s_sub, "recover", help="Recover sessions to restart-ready Markdown.")
+    sp = new_action(p_session, s_sub, "recover", help="Recover sessions to restart-ready Markdown.",
+                    epilog="Example: ocman session recover ses_abc -mi 50")
     sp.add_argument("specs", nargs="*", default=[],
                     help="Sessions or projects to recover (omit to pick interactively).")
     sp.add_argument("-A", "--all-sessions", action="store_true",
                     help="Include subagent/child sessions when resolving project targets.")
     _add_recovery_opts(sp)
 
-    sp = new_action(p_session, s_sub, "compact", help="Recover and LLM-compact sessions.")
+    sp = new_action(p_session, s_sub, "compact", help="Recover and LLM-compact sessions.",
+                    epilog="Example: ocman session compact ses_abc anthropic/claude-3-5-sonnet -mi 50")
     sp.add_argument("specs", nargs="*", default=[],
                     help="Sessions, projects, or model to compact (omit to pick interactively).")
     sp.add_argument("-A", "--all-sessions", action="store_true",
@@ -6376,7 +6382,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--by-project", action="store_true",
                     help="Add a per-project on-disk breakdown.")
 
-    sp = new_action(p_db, db_sub, "clean", help="Delete sessions older than the retention window.")
+    sp = new_action(p_db, db_sub, "clean", help="Delete sessions older than the retention window.",
+                    epilog="Example: ocman db clean --older-than 6mo --dry-run")
     _add_clean_opts(sp, with_name=True)
 
     sp = new_action(p_db, db_sub, "clean-orphans", help="Delete orphaned DB records.")
@@ -6384,7 +6391,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
-    sp = new_action(p_db, db_sub, "rebase", help="Bulk rebase path prefixes in the database.")
+    sp = new_action(p_db, db_sub, "rebase",
+                    help="Bulk-rewrite stored path prefixes (e.g. after moving your home dir); --from OLD --to NEW.")
     sp.add_argument("--from", dest="from_prefix", required=True, metavar="PREFIX",
                     help="Source path prefix.")
     sp.add_argument("--to", required=True, metavar="PREFIX", help="Destination path prefix.")
@@ -6394,7 +6402,8 @@ def build_parser() -> argparse.ArgumentParser:
     p_backup = new_sub("backup", help="Backup and restore opencode state.")
     b_sub = p_backup.add_subparsers(dest="_action", metavar="<action>")
 
-    sp = new_action(p_backup, b_sub, "create", help="Create a ZIP backup or target bundles.")
+    sp = new_action(p_backup, b_sub, "create", help="Create a ZIP backup or target bundles.",
+                    epilog="Example: ocman backup create --to ~/ocman-backups")
     sp.add_argument("specs", nargs="*", default=[],
                     help="Optional sessions/projects to back up, or destination directory/file.")
     sp.add_argument("--to", dest="to_flag", default=None,
@@ -6425,7 +6434,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Overwrite an existing config.")
 
     # ---- top-level verbs / aliases ----------------------------------------
-    sp = new_sub("search", help="Search session content and titles (alias of 'session search').")
+    sp = new_sub("search", help="Search session content and titles (alias of 'session search').",
+                 epilog='Example: ocman search "auth refactor" in myproject')
     _add_search_opts(sp)
 
     # 'ocman move [project|session] SPEC to DST' (kind auto-detected if omitted).
@@ -6503,15 +6513,18 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Also include historically-saved (deleted) spend from the ledger.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
-    sp = new_sub("filter", help="Re-scope a recovery/compacted document via the LLM.")
-    sp.add_argument("file", help="Input Markdown file.")
-    sp.add_argument("-P", "--project", default=None, help="Project to scope to.")
+    sp = new_sub("focus",
+                 help="Narrow a recovery/compacted Markdown doc to one topic via the LLM.",
+                 epilog='Example: ocman focus session-recovery.md --scope "the auth refactor"')
+    sp.add_argument("file", help="Input Markdown file (a recovery/compacted session document).")
+    sp.add_argument("-P", "--project", default=None,
+                    help="Keep only content for this project (name/id/path).")
     sp.add_argument("--scope", default=None, metavar="TEXT",
-                    help="Free-text scope of content to keep.")
+                    help="Plain-language description of what to keep (required unless --project is given).")
     sp.add_argument("-C", "--compact", dest="model", nargs="?", const="", default="",
-                    metavar="MODEL", help="Model to use.")
+                    metavar="MODEL", help="LLM model to narrow with (prompts to pick if omitted).")
     sp.add_argument("-oc", "--output-compact", type=Path, default=None, metavar="FILE",
-                    help="Output path.")
+                    help="Output path for the narrowed document.")
     sp.add_argument("--allow-secrets", action="store_true",
                     help="Bypass the pre-egress secret/PII scan.")
     sp.add_argument("--show-secrets", nargs="?", const="masked", choices=["masked", "raw"],
@@ -6966,8 +6979,8 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["spend_historical"] = bool(g("historical", False))
         out["json_output"] = bool(g("json", False))
 
-    elif group == "filter":
-        out["command"] = "filter"
+    elif group == "focus":
+        out["command"] = "focus"
         out["command_arg"] = g("file")
         out["project"] = g("project")
         out["scope"] = g("scope")
@@ -12890,22 +12903,11 @@ def db_show_info(args) -> None:
 
     # 1. Database path and on-disk size
     db_path = OPENCODE_DB_PATH
+    # SD-03: a missing DB is an error, not a warning. Fail loud with the single actionable
+    # message (exit 1 via RecoveryError) instead of printing a soft warning + an empty screen
+    # and exiting 0 (which hid the failure from scripts).
     if not db_path.exists():
-        print(color_yellow(f"Database file not found at {db_path}"))
-        db_family_size_str = "N/A"
-        integrity = "N/A"
-        sqlite_version = "N/A"
-        projects_count = 0
-        sessions_count = 0
-        root_sessions = 0
-        child_sessions = 0
-        messages_count = 0
-        oldest_str = "N/A"
-        newest_str = "N/A"
-        total_cost = 0.0
-        total_tokens_in = 0
-        total_tokens_out = 0
-        top_models = []
+        raise _db_not_found_error()
     else:
         db_size = get_file_size_local(db_path)
 
@@ -15698,10 +15700,10 @@ def _run_main() -> None:
             die(str(e))
         return
 
-    # Handle the 'filter' command early.
-    if getattr(args, "command", None) == "filter":
+    # Handle the 'focus' command early ('filter' is a hidden alias rewritten to 'focus').
+    if getattr(args, "command", None) == "focus":
         if not args.command_arg:
-            die("Error: 'filter' requires an input file: ocman filter <input.md> [--project X | --scope \"...\"]")
+            die("Error: 'focus' requires an input file: ocman focus <input.md> [--project X | --scope \"...\"]")
         if getattr(args, "allow_secrets", False) and getattr(args, "expunge_secrets", False):
             die("Error: --allow-secrets and --expunge-secrets are mutually exclusive.")
         try:
@@ -16180,11 +16182,12 @@ def _run_main() -> None:
             all_sessions = db_list_sessions(_project_id)
         if not all_sessions:
             if _project_id:
-                die(f"No sessions found for project: {_project_dir}")
+                die(f"No sessions found for project: {_project_dir}. "
+                    "Run 'ocman list projects' to see what exists.")
             else:
                 all_sessions = db_list_sessions()
                 if not all_sessions:
-                    die("No sessions found.")
+                    die("No sessions found. Run 'ocman list projects' to see what exists.")
 
         # Optional text filter (project-scope precedence fallback): keep sessions whose
         # title, directory, or project directory contains the pattern (case-insensitive).
@@ -16342,6 +16345,9 @@ def _run_main() -> None:
         else:
             scope = " across all projects"
         if not results:
+            # SD-04: an empty search is a SUCCESSFUL query with zero hits, so it exits 0
+            # (intentionally, unlike a mistyped target which the resolver treats as an
+            # error/exit 1). Print a next-step hint rather than failing.
             print(color_bold(f"No sessions match {args.search!r}{scope}."))
             if not args.all_sessions:
                 print("  (Subagent sessions were excluded. Use --all-sessions to include them.)")
@@ -16791,6 +16797,15 @@ def _run_main() -> None:
                 else:
                     session_obj = find_session_by_id(sessions, args.session)
             else:
+                # SD-01: the no-args flow ends in an interactive picker. Only prompt at a
+                # real terminal; when stdin is not a TTY (piped / CI / output capture),
+                # print the listing and exit 0 instead of hitting EOF on input() and
+                # crashing with a nonzero exit.
+                if not sys.stdin.isatty():
+                    display_sessions(sessions)
+                    print("\nRun 'ocman session recover <number|id>' to recover one, "
+                          "or run 'ocman' at a terminal to pick interactively.")
+                    return
                 session_obj = prompt_for_session(sessions)
             
             target_sessions = [session_obj.raw]

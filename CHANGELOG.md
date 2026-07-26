@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Changed
+- **CLI self-documentation.** `ocman filter` renamed to **`ocman focus`** ("narrow a recovery doc
+  to one topic"); `filter` still works as a hidden alias. Bare `ocman` with non-interactive stdin
+  now prints the session listing and exits 0 instead of prompting and crashing on EOF. `ocman db
+  info` against a missing database now fails loud (exit 1) with an actionable message. Added `-h`
+  examples to high-traffic subcommands, de-jargoned `db rebase` help, and added next-step hints to
+  empty-result messages.
+
 ### Added
 - **`ocman kill` accepts a PID.** A bare all-digits argument to `ocman kill` is now treated as a
   process id and killed directly (rejected before any action if the PID is gone, owned by another

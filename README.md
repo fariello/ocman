@@ -451,7 +451,7 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | `ocman compaction-prompt` | Print the compaction prompt template, then exit. |
 | `ocman ui` / `ocman gui` | Launch the interactive terminal dashboard. |
 | `ocman help [TOPIC]` | Show help. `TOPIC` is one of `browse`, `recover`, `maintain`, `backup`, `move`, `config`, `all`. |
-| `ocman filter FILE` | Re-scope a recovery/compacted document to one project/scope via the LLM. Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. Supports `--allow-secrets`, `--show-secrets[=masked\|raw]`, `--expunge-secrets`, and `--force`. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
+| `ocman focus FILE` | Narrow a recovery/compacted document to one project/topic via the LLM (`ocman filter` is a kept, hidden alias). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. Supports `--allow-secrets`, `--show-secrets[=masked\|raw]`, `--expunge-secrets`, and `--force`. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
 
 ---
 
