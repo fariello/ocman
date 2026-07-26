@@ -59,3 +59,26 @@ when the constant is initialized, so a user can relocate their config without ed
 This is a small behavior change but needs its own IPD + tests (config load ordering, precedence
 vs `--db`, and interaction with the test-suite rebinding). Promote to a code IPD if wanted;
 until then there is no env override for the config-file path.
+
+## workflow-artifacts leak sanitization: TO REMEDIATE
+
+`aw sanitize` reports about 8,472 findings inside `workflow-artifacts/` run records: home paths
+(`/home/<user>/...`), the maintainer username/handle, and some session ids. `workflow-artifacts/`
+is now gitignored (commit 50774d9) so future re-adds stay untracked, and these files are not in
+this repo's committed git history. Remaining work: confirm nothing sensitive from run records ever
+reached committed history (a full `aw sanitize` over tracked files + git history), and keep run
+records local only going forward. A framework-level fix was requested via a comms task to
+agent-workflows (flip the "committed deliverable" default, add the gitignore in setup-repo).
+
+## Persistent TUI pending-actions banner: CONSIDER
+
+The pending-actions feature (executed 2026-07-26) surfaces the deferred-action count via a Pending
+tab in the TUI, but not as an always-visible count in the TUI chrome. Consider adding a persistent
+banner or footer indicator showing the pending count, mirroring the CLI `[NOTIC] X items pending`
+reminder.
+
+## CI: bump Node 20 GitHub Actions: CONSIDER
+
+CI runs emit a deprecation warning that `actions/checkout@v4` and `actions/setup-python@v5` target
+Node 20 and are being forced onto Node 24. Bump those actions to versions that run on Node 24
+natively to silence the warning and stay current. Non-blocking; CI is green.
