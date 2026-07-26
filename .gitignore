@@ -232,3 +232,8 @@ run_log.txt
 
 # agent-workflows installer local backups
 .agent-workflows-installer-backups/
+
+# agent-workflow run records: local-only. Agents tend to sprinkle machine-identifying
+# info (home paths, usernames, session ids) into these, and their long-term provenance
+# value is low, so keep them untracked.
+workflow-artifacts/
