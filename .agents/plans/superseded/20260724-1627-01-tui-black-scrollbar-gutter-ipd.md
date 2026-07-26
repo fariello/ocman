@@ -1,3 +1,8 @@
+RETIRED 2026-07-26: root-cause theory (unstyled scrollbar/gutter seam) was wrong for the "black
+boxes"; superseded by .agents/plans/executed/20260724-2354-01-checkbox-border-render-fix-ipd.md
+(the real cause was the Textual 8.x Checkbox border). Its only correct part, the BG-01 `.log-area`
+scrollbar-color fix, already shipped in commit 0e19b4e and remains in effect.
+
 # IPD: fix black scrollbar/gutter boxes + focus-border color in the TUI
 
 - Date: 2026-07-24
@@ -21,7 +26,7 @@
   styling; no Python logic change. (Plan-review PR-001 removed the earlier `#input-session-search`
   / `.search-bar-row` widening: the `.02` black box is a `.captioned-input`, not the search input,
   so no shared class needs adding to `app.py`/`widgets/*.py`.)
-- Status: reviewed (plan-review applied 2026-07-24; Q1 resolved; awaiting maintainer approval to execute)
+- Status: superseded (see RETIRED header; scrollbar theory replaced by the checkbox-border IPD; BG-01 shipped in 0e19b4e)
 - Target version: rides the in-flight 1.3.0 line (final promotion still paused).
 - Approval: awaiting plan-review + maintainer approval
 - Author: its_direct/pt3-claude-opus-4.8
