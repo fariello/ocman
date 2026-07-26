@@ -60,7 +60,7 @@ polish. All are Low Remediation Risk (local, verifiable, no data path touched).
 | 3 | SD-03 | Route `db info` on a missing DB through the existing `_db_not_found_error()` (raise -> `die` exit 1 with the actionable "Point at a database with --db PATH, or run OpenCode first" wording) instead of the soft yellow warning + empty screen. | ocman/cli.py:12894 (use :1214-1223) | Low | `ocman --db /nope db info` exits 1 with the actionable message; add a test |
 | 4 | SD-04 | Keep `session search` empty-result exit 0 (defensible: "ran, no matches"), but make the intent explicit: a one-line code comment at the branch and confirm it prints a next-step hint. Do NOT change the exit code (changing it could break scripts). | ocman/cli.py:16345 | Low | Comment present; behavior unchanged; note in validation that empty-search intentionally exits 0 |
 | 5 | SD-05 | Add an `epilog=` with 1-2 runnable examples to the highest-traffic subcommands (`session recover`, `session compact`, `db clean`, `search`, `backup create`), OR a footer line pointing to `ocman help <topic>`. | ocman/cli.py (those subparsers) | Low | `ocman session recover -h` shows at least one example (e.g. `-mi 50`) |
-| 6 | SD-06 | RESOLVED with maintainer 2026-07-25: make `focus` the PRIMARY verb (plain: "focus this recovery doc on the topic I describe"), keep `filter` as a still-working alias. Minimal-churn approach: register the subcommand as `focus` (rename the `new_sub("filter", ...)` at cli.py:6506 to `new_sub("focus", ...)`) and add a `filter` -> `focus` rewrite branch in `preprocess_argv` (cli.py:5766; mirror the `lr`/`lp` branches at cli.py:5827-5829). Do NOT register two subparsers. Update the dispatch key (`group == "filter"`) and the top-level help line to `focus`. Confirm the argv rewrite happens BEFORE argparse sees the verb so `ocman filter ...` still works unchanged. | ocman/cli.py:6506 (subparser + its dispatch); cli.py:5766/5827-5829 (alias mechanism) | Low | `ocman focus FILE.md --scope ...` works; `ocman filter ...` still works (aliased); `ocman -h`/`help` lists `focus` |
+| 6 | SD-06 | RESOLVED with maintainer 2026-07-25: make `focus` the PRIMARY verb (plain: "focus this recovery doc on the topic I describe"), keep `filter` as a still-working but HIDDEN alias (so new users are steered to `focus`; existing `filter` usage does not break). Minimal-churn approach: register the subcommand as `focus` (rename the `new_sub("filter", ...)` at cli.py:6506 to `new_sub("focus", ...)`) and add a `filter` -> `focus` rewrite branch in `preprocess_argv` (cli.py:5766; mirror the `lr`/`lp` branches at cli.py:5827-5829). Do NOT register two subparsers. Update the dispatch key (`group == "filter"`) and the top-level help/`build_help` line to show `focus` ONLY; `filter` must NOT appear in `ocman -h`/`ocman help` output (it stays a silent alias). Confirm the argv rewrite happens BEFORE argparse sees the verb so `ocman filter ...` still works unchanged. | ocman/cli.py:6506 (subparser + its dispatch); cli.py:5766/5827-5829 (alias mechanism); build_help ~5519+ | Low | `ocman focus FILE.md --scope ...` works; `ocman filter ...` still works (aliased); `ocman -h`/`help` lists `focus` and does NOT mention `filter` |
 | 7 | SD-07 | Rewrite `db rebase` help to teach without the jargon: "Bulk-rewrite stored path prefixes (e.g. after moving your home dir); --from OLD --to NEW." | ocman/cli.py:6387 | Low | `ocman db rebase -h` no longer defines "rebase" with "rebase" |
 | 8 | SD-08 | Flesh out the `filter` option help: `-C/--compact` -> "Model to re-scope with"; `-oc/--output-compact` -> "Output path for the re-scoped document"; `--scope` -> note it is required unless `--project` is given. | ocman/cli.py:6509-6514 | Low | `ocman filter -h` reads clearly |
 | 9 | SD-09 | Append a next-step to the bare empty-result dies: "Run 'ocman list projects' to see what exists." | ocman/cli.py:16183, 16187 | Low | those messages now include a next step |
@@ -97,15 +97,18 @@ polish. All are Low Remediation Risk (local, verifiable, no data path touched).
 - Manual/`-h` checks (paste ACTUAL output): the SD-01 proof `ocman </dev/null; echo $?` MUST print
   the listing (no "EOF"/"Unexpected error") and `$?` MUST be `0`; `ocman session recover -h` shows
   an example (SD-05); `ocman focus -h` / `ocman db rebase -h` read clearly; `ocman filter -h`
-  still resolves to the same command (SD-06 alias).
+  still resolves to the same command (SD-06 alias); and `ocman help` / `ocman -h` mention `focus`
+  but NOT `filter` (hidden alias).
 - Prose: no em/en dashes introduced in any help/error string or comment
   (`grep -nP $'[\u2013\u2014]'` on the changed files yields no NEW matches).
 
 ## Spec / documentation sync
 Steps 1-2 change user-visible first-run behavior and the help text together (the help is corrected
-in the same step, so it cannot drift). Step 6 renames the verb to `focus` (with `filter` kept as an
-alias): update README's Top-level verbs table (rename the `filter` row to `focus`, note the `filter`
-alias) and add a CHANGELOG `[Unreleased]` entry. Steps 3-9 are otherwise in-product wording; no
+in the same step, so it cannot drift). Step 6 renames the verb to `focus` (with `filter` kept as a
+HIDDEN alias): in README's Top-level verbs table rename the `filter` row to `focus` and, at most, a
+brief parenthetical that `filter` remains as a legacy alias (or omit `filter` entirely, matching the
+hidden-in-help intent); add a CHANGELOG `[Unreleased]` entry ("`ocman filter` renamed to
+`ocman focus`; `filter` kept as a hidden alias"). Steps 3-9 are otherwise in-product wording; no
 further README change required.
 
 ## Open questions
