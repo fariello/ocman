@@ -4,11 +4,12 @@
 - Concern: self-documentation (in-product, learn-as-you-go clarity)
 - Scope: whole project, `ocman/cli.py` CLI surface (help text, naming, errors, first-run,
   discoverability); verified against the shipped binary and source
-- Status: to-review
+- Status: reviewed
 - Author: its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Workflow history
 - 2026-07-25 /assess self-documentation (its_direct/pt3-claude-opus-4.8-1m-us): assessed; proposed 9 changes
+- 2026-07-25 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): APPROVE WITH REVISIONS APPLIED; PR-01..PR-04 (added anti-regression clause naming existing picker + db-info tests; confirmed the db-info exit-code change has no TUI caller; pinned the SD-06 verb change to preprocess_argv; named the SD-01 exit-0 proof). SD-06 resolved = verb `focus` with `filter` alias; SD-01 resolved = keep TTY picker, fix piped path. No open questions remain.
 
 ## Goal
 The ocman CLI already teaches unusually well (near-total `help=` coverage, task-grouped runnable
@@ -59,7 +60,7 @@ polish. All are Low Remediation Risk (local, verifiable, no data path touched).
 | 3 | SD-03 | Route `db info` on a missing DB through the existing `_db_not_found_error()` (raise -> `die` exit 1 with the actionable "Point at a database with --db PATH, or run OpenCode first" wording) instead of the soft yellow warning + empty screen. | ocman/cli.py:12894 (use :1214-1223) | Low | `ocman --db /nope db info` exits 1 with the actionable message; add a test |
 | 4 | SD-04 | Keep `session search` empty-result exit 0 (defensible: "ran, no matches"), but make the intent explicit: a one-line code comment at the branch and confirm it prints a next-step hint. Do NOT change the exit code (changing it could break scripts). | ocman/cli.py:16345 | Low | Comment present; behavior unchanged; note in validation that empty-search intentionally exits 0 |
 | 5 | SD-05 | Add an `epilog=` with 1-2 runnable examples to the highest-traffic subcommands (`session recover`, `session compact`, `db clean`, `search`, `backup create`), OR a footer line pointing to `ocman help <topic>`. | ocman/cli.py (those subparsers) | Low | `ocman session recover -h` shows at least one example (e.g. `-mi 50`) |
-| 6 | SD-06 | Add `rescope` as the primary/alias name for `filter` (keep `filter` working as an alias) so the verb reveals intent; update the top-level help line accordingly. | ocman/cli.py:6506 (+ alias handling ~5825) | Low | `ocman rescope FILE.md --scope ...` works; `ocman filter ...` still works; help lists rescope |
+| 6 | SD-06 | RESOLVED with maintainer 2026-07-25: make `focus` the PRIMARY verb (plain: "focus this recovery doc on the topic I describe"), keep `filter` as a still-working alias. Minimal-churn approach: register the subcommand as `focus` (rename the `new_sub("filter", ...)` at cli.py:6506 to `new_sub("focus", ...)`) and add a `filter` -> `focus` rewrite branch in `preprocess_argv` (cli.py:5766; mirror the `lr`/`lp` branches at cli.py:5827-5829). Do NOT register two subparsers. Update the dispatch key (`group == "filter"`) and the top-level help line to `focus`. Confirm the argv rewrite happens BEFORE argparse sees the verb so `ocman filter ...` still works unchanged. | ocman/cli.py:6506 (subparser + its dispatch); cli.py:5766/5827-5829 (alias mechanism) | Low | `ocman focus FILE.md --scope ...` works; `ocman filter ...` still works (aliased); `ocman -h`/`help` lists `focus` |
 | 7 | SD-07 | Rewrite `db rebase` help to teach without the jargon: "Bulk-rewrite stored path prefixes (e.g. after moving your home dir); --from OLD --to NEW." | ocman/cli.py:6387 | Low | `ocman db rebase -h` no longer defines "rebase" with "rebase" |
 | 8 | SD-08 | Flesh out the `filter` option help: `-C/--compact` -> "Model to re-scope with"; `-oc/--output-compact` -> "Output path for the re-scoped document"; `--scope` -> note it is required unless `--project` is given. | ocman/cli.py:6509-6514 | Low | `ocman filter -h` reads clearly |
 | 9 | SD-09 | Append a next-step to the bare empty-result dies: "Run 'ocman list projects' to see what exists." | ocman/cli.py:16183, 16187 | Low | those messages now include a next step |
@@ -74,39 +75,54 @@ polish. All are Low Remediation Risk (local, verifiable, no data path touched).
   renaming stable commands risks breaking users' muscle memory and scripts (usability axis).
 
 ## Scope check
-- Over-scope: none. SD-06 adds an alias (does not remove `filter`); no gold-plating.
+- Over-scope: none. SD-06 renames the verb to `focus` but keeps `filter` working as an alias (no
+  removal, no broken usage); no gold-plating.
 - Under-scope: SD-01 (the first-run EOF crash) is the one genuine capability gap and is proposed as
   step 1. Shell completion is a real gap but deferred with the named axis (not dropped).
 
 ## Required tests / validation
 - `PYTHONPATH=. pytest -q` full suite green (paste ACTUAL output).
+- ANTI-REGRESSION (steps 1 and 3 change behavior; name the affected invariants and their tests):
+  BEFORE editing, note the existing tests on these paths and confirm they still pass (or are updated
+  intentionally, not accidentally broken): the session picker `test_picker_uses_real_db_stats`
+  (tests/test_ocman.py:2408) for step 1; and the db-info tests `test_db_show_info` /
+  `test_db_show_info_by_project` / `test_e2e_db_info_runs` (tests/test_ocman.py:425/546/2232) for
+  step 3. Step 3 changes the missing-DB path from exit 0 to a raised RecoveryError/exit 1: confirm
+  NO caller depends on `db info` returning 0 on a missing DB (verified in review: `ocman_tui/` does
+  NOT call `db_show_info`; re-check `doctor`/`reclaim` storage-discovery paths do not route through
+  it for the missing-DB case).
 - New/updated tests: (a) no-args + non-TTY stdin exits 0 and prints the listing without "EOF"/
   "Unexpected error" (SD-01); (b) `db info` on a missing DB exits 1 with the actionable message
-  (SD-03); (c) `ocman rescope` alias dispatches like `filter` (SD-06).
-- Manual/`-h` checks (paste ACTUAL output): `ocman </dev/null; echo $?` = 0; `ocman session
-  recover -h` shows an example (SD-05); `ocman filter -h` / `ocman db rebase -h` read clearly.
+  (SD-03); (c) `ocman focus ...` and the `ocman filter ...` alias both dispatch to the same command (SD-06).
+- Manual/`-h` checks (paste ACTUAL output): the SD-01 proof `ocman </dev/null; echo $?` MUST print
+  the listing (no "EOF"/"Unexpected error") and `$?` MUST be `0`; `ocman session recover -h` shows
+  an example (SD-05); `ocman focus -h` / `ocman db rebase -h` read clearly; `ocman filter -h`
+  still resolves to the same command (SD-06 alias).
 - Prose: no em/en dashes introduced in any help/error string or comment
   (`grep -nP $'[\u2013\u2014]'` on the changed files yields no NEW matches).
 
 ## Spec / documentation sync
 Steps 1-2 change user-visible first-run behavior and the help text together (the help is corrected
-in the same step, so it cannot drift). Step 6 adds a `rescope` alias: add it to README's Top-level
-verbs table and to the CHANGELOG `[Unreleased]`. Steps 3-9 are in-product wording; no README change
-required beyond the rescope alias.
+in the same step, so it cannot drift). Step 6 renames the verb to `focus` (with `filter` kept as an
+alias): update README's Top-level verbs table (rename the `filter` row to `focus`, note the `filter`
+alias) and add a CHANGELOG `[Unreleased]` entry. Steps 3-9 are otherwise in-product wording; no
+further README change required.
 
 ## Open questions
-- SD-06: is adding a `rescope` alias for `filter` wanted, or keep `filter` as-is (accept the naming
-  finding)? ASSUMPTION pending confirmation: add the alias.
-- SD-01: confirm the intended no-args-at-a-TTY behavior is the interactive picker (this plan keeps
-  it for TTYs and only changes the non-TTY path). ASSUMPTION: keep the TTY picker.
+- SD-06: RESOLVED with maintainer 2026-07-25 = make `focus` the primary verb, keep `filter` as a
+  working alias (both `rescope` and keeping `filter`-only were rejected: `rescope`/`filter` do not
+  teach a novice; `focus FILE.md --scope "X"` reads as "narrow this doc to that topic").
+- SD-01: RESOLVED with maintainer 2026-07-25 = keep the interactive picker at a TTY; change ONLY
+  the non-TTY (piped/CI) path to print the listing and exit 0. (Dropping the picker / printing help
+  were rejected to preserve established, tested behavior.)
 
 ## Approval and execution gate
 This IPD is a proposal. It MUST be reviewed and approved by a human before execution, and it is NOT
 auto-executed.
-- Open questions: SD-06 (rescope alias) and SD-01 (keep TTY picker) MUST be confirmed before
-  executing steps 1/6.
-- Scope fence: `ocman/cli.py`, `tests/test_ocman.py`, and (for the rescope alias only) `README.md`
-  and `CHANGELOG.md`. Nothing else.
+- Open questions: SD-06 (verb -> `focus`, keep `filter` alias) and SD-01 (keep TTY picker, fix
+  piped path) RESOLVED with maintainer 2026-07-25; no open questions remain.
+- Scope fence: `ocman/cli.py`, `tests/test_ocman.py`, and (for the `focus` rename + `filter` alias)
+  `README.md` and `CHANGELOG.md`. Nothing else.
 - Honesty rule (hard MUST): paste the ACTUAL `pytest -q` output and the ACTUAL `-h` / `echo $?`
   output that demonstrates each behavior change.
 - Commits: path-scoped (`git commit -- <paths>`), never `git add -A`, never push.
