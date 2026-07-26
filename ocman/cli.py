@@ -76,6 +76,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import uuid
 import re
 import shlex
 import shutil
@@ -194,6 +195,12 @@ def color_dim(text: str) -> str:
 def info_prefix() -> str:
     """Return the standard INFO log prefix with green coloring."""
     return f"[{color_green('INFO')}]"
+
+
+def notice_prefix() -> str:
+    """Return the standard NOTIC log prefix with yellow coloring (brackets uncolored),
+    mirroring `info_prefix` and the doctor NOTICE tag (yellow, not bold)."""
+    return f"[{color_yellow('NOTIC')}]"
 
 
 # ---------------------------------------------------------------------------
@@ -1079,6 +1086,11 @@ class Turn:
     text: str
     index: int
     source: str
+
+
+class PendingDeferred(Exception):
+    """Raised when a destructive action was added to the pending list (PA-03) instead of run,
+    so the calling command can stop cleanly (exit 0, no error) without performing the action."""
 
 
 class RecoveryError(Exception):
@@ -5574,6 +5586,8 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} session delete ID", "Delete a single session (with confirmation)"),
         (f"{prog} project delete NAME", "Delete a project and all its sessions"),
         (f"{prog} db clean --dry-run", "Preview any clean/delete without changing data"),
+        (f"{prog} <delete> --pend", "If OpenCode is running, add the action to the pending list"),
+        (f"{prog} pending", "List/run/clear actions you added while OpenCode was running"),
     ]
 
     backup = [
@@ -6161,6 +6175,14 @@ def _add_while_running(p: argparse.ArgumentParser) -> None:
                    help="Proceed even if OpenCode instances are running (may corrupt their state).")
 
 
+def _add_pend_opt(p: argparse.ArgumentParser) -> None:
+    """PA-04: add --pend to a delete-family command. When OpenCode is running, this adds the
+    action to the pending list (run later with 'ocman pending run') instead of refusing."""
+    p.add_argument("--pend", action="store_true",
+                   help="If OpenCode is running, add this action to the pending list instead of "
+                        "refusing (run later with 'ocman pending run').")
+
+
 def _add_extract_opts(p: argparse.ArgumentParser) -> None:
     """Add --extracts/--no-extracts and -o/--output-dir for delete-time recovery extracts.
 
@@ -6197,6 +6219,7 @@ def _add_clean_opts(p: argparse.ArgumentParser, with_name: bool = True) -> None:
     p.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
     if with_name:
         _add_extract_opts(p)
+        _add_pend_opt(p)  # PA-04: db clean is deferrable; backup clean (with_name=False) is not.
     p._ocman_clean_has_name = with_name  # type: ignore[attr-defined]
 
 
@@ -6298,6 +6321,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip confirmation prompt.")
     _add_extract_opts(sp)
+    _add_pend_opt(sp)
 
     sp = new_action(p_session, s_sub, "export", help="Export a session bundle (.ocbox).")
     sp.add_argument("session", help="Session to export.")
@@ -6360,6 +6384,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
     _add_extract_opts(sp)
+    _add_pend_opt(sp)
 
     sp = new_action(p_project, pr_sub, "move", help="Relocate a project (local or remote DST).")
     sp.add_argument("src", help="Project ID or current path.")
@@ -6390,6 +6415,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+    _add_pend_opt(sp)
 
     sp = new_action(p_db, db_sub, "rebase",
                     help="Bulk-rewrite stored path prefixes (e.g. after moving your home dir); --from OLD --to NEW.")
@@ -6461,6 +6487,20 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--dry-run", action="store_true",
                     help="Show the reconnect plan (kill + launch) without acting.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
+
+    # 'ocman pending [list|run|clear]' (deferred destructive actions added via --pend / [p]).
+    sp = new_sub("pending",
+                 help="Show, run, or clear actions you added to the pending list while OpenCode ran.")
+    sp.add_argument("pending_action", nargs="?", default="list",
+                    choices=["list", "run", "clear"],
+                    help="list (default): show pending actions; run: perform them now (re-confirmed); "
+                         "clear: remove them without running.")
+    sp.add_argument("pending_index", nargs="?", type=int, default=None,
+                    help="For 'clear': the 1-based item number to remove (default: all).")
+    sp.add_argument("--while-running", dest="while_running", action="store_true",
+                    help="For 'run': proceed even if OpenCode is running (can corrupt state).")
+    sp.add_argument("-y", "--yes", action="store_true",
+                    help="For 'run'/'clear': skip the per-item / clear confirmation prompt.")
 
     # 'ocman kill [PATTERN]' (stop opencode here or matching PATTERN; no relaunch).
     sp = new_sub("kill",
@@ -6806,6 +6846,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["yes"] = bool(g("yes", False))
             out["extracts"] = g("extracts", None)
             out["extract_output_dir"] = g("extract_output_dir", None)
+            out["pend"] = bool(g("pend", False))
         elif action == "export":
             out["export_session"] = g("session")
             out["to"] = g("to")
@@ -6848,6 +6889,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["yes"] = bool(g("yes", False))
             out["extracts"] = g("extracts", None)
             out["extract_output_dir"] = g("extract_output_dir", None)
+            out["pend"] = bool(g("pend", False))
         elif action == "move":
             out["move_project"] = g("src")
             out["to"] = g("to")
@@ -6873,11 +6915,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["yes"] = bool(g("yes", False))
             out["extracts"] = g("extracts", None)
             out["extract_output_dir"] = g("extract_output_dir", None)
+            out["pend"] = bool(g("pend", False))
         elif action == "clean-orphans":
             out["clean_orphans"] = True
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
+            out["pend"] = bool(g("pend", False))
         elif action == "rebase":
             out["rebase_paths"] = True
             out["from_prefix"] = g("from_prefix")
@@ -7024,6 +7068,13 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
 
     elif group == "compaction-prompt":
         out["show_compaction_prompt"] = True
+
+    elif group == "pending":
+        out["command"] = "pending"
+        out["pending_action"] = g("pending_action", "list") or "list"
+        out["pending_index"] = g("pending_index", None)
+        out["while_running"] = bool(g("while_running", False))
+        out["yes"] = bool(g("yes", False))
 
     elif group in ("ui", "gui"):
         out["command"] = group
@@ -7932,16 +7983,25 @@ def _render_running_opencode(procs: list[dict]) -> str:
 
 
 def require_safe_to_mutate(action: str, *, while_running: bool = False,
-                           interactive: bool | None = None, verbosity: int = 0) -> None:
+                           interactive: bool | None = None, verbosity: int = 0,
+                           pend_item: dict | None = None, pend: bool = False) -> str | None:
     """Guard a DB/file mutation against concurrent OpenCode instances.
 
     OpenCode has NO cross-process session lock (verified via the opencode repo agent),
     so mutating the shared DB/files while an instance runs can corrupt state. Outcomes:
-      - no instances running -> return (proceed silently; unchanged happy path).
+      - no instances running -> return None (proceed silently; unchanged happy path).
       - `while_running` (the --while-running / --force override) -> print the listing +
-        a bold-red warning, then proceed.
+        a bold-red warning, then proceed (return None).
       - running + interactive TTY -> print the listing, then a typed-'yes' confirm.
       - running + non-interactive + no override -> raise RecoveryError (refuse).
+
+    PA-03 (add-to-pending): when the CALLER opts in by passing `pend_item` (a validated
+    structured PendingItem for one of the deferrable delete-family actions), the running
+    branch also offers "[p] add to the pending list": interactively as a prompt choice, or
+    non-interactively when `pend` is True. If chosen, the item is appended to the manifest and
+    this returns the sentinel "pended" so the caller records-and-exits WITHOUT acting. Callers
+    that pass no `pend_item` (the 5 out-of-scope call sites) get the exact prior behavior and
+    the historical `-> None` contract.
     Reliability: on Linux an enumeration FAILURE ("unknown") FAILS CLOSED (refuse
     unless override); on non-Linux ("unknown") FAILS OPEN with a printed caveat.
     Uses the BROAD matcher so ANY opencode instance (serve/web/bare TUI) gates.
@@ -7972,31 +8032,61 @@ def require_safe_to_mutate(action: str, *, while_running: bool = False,
             f"WARNING: proceeding to {action} while OpenCode is running can corrupt "
             "its state (there is no cross-process session lock).")))
         print(listing)
-        return
+        return None
+    # PA-03: non-interactive --pend adds the action to the pending list instead of refusing.
+    if pend_item is not None and pend:
+        n = add_pending_item(pend_item)
+        print(color_yellow(f"{notice_prefix()} OpenCode is running; added to the pending list "
+                           f"({n} pending). Run later with 'ocman pending run'."))
+        return "pended"
     print(color_red(color_bold(
         f"OpenCode is running. {action.capitalize()} now can corrupt its state "
         "(no cross-process session lock).")))
     print(listing)
     if not interactive:
+        if pend_item is not None:
+            raise RecoveryError(
+                f"Refusing to {action} while OpenCode is running (non-interactive). Re-run with "
+                "--while-running to proceed anyway, or --pend to add it to the pending list.")
         raise RecoveryError(
             f"Refusing to {action} while OpenCode is running (non-interactive). "
             "Re-run with --while-running to proceed anyway.")
+    # PA-03: at a TTY, offer the "[p] add to pending" choice when the caller opted in.
+    if pend_item is not None:
+        prompt = (f"Type 'yes' to {action} now, 'p' to add it to the pending list, "
+                  "or anything else to cancel: ")
+    else:
+        prompt = f"Type 'yes' to {action} anyway: "
     try:
-        answer = input(f"Type 'yes' to {action} anyway: ").strip()
+        answer = input(prompt).strip().lower()
     except (EOFError, KeyboardInterrupt):
         print()
         raise RecoveryError(f"Aborted; did not {action}.")
+    if pend_item is not None and answer in ("p", "pend"):
+        n = add_pending_item(pend_item)
+        print(color_yellow(f"{notice_prefix()} Added to the pending list ({n} pending). "
+                           "Run later with 'ocman pending run'."))
+        return "pended"
     if answer != "yes":
         raise RecoveryError(f"Aborted; did not {action}.")
+    return None
 
 
-def check_opencode_process_lock(force: bool, verbosity: int = 0) -> None:
+def check_opencode_process_lock(force: bool, verbosity: int = 0, *, action: str = "modify the database",
+                                pend_item: dict | None = None, pend: bool = False) -> None:
     """Back-compat shim: delegate to `require_safe_to_mutate`.
 
     Existing callers pass `force` (the process-lock bypass); it maps to the
     `--while-running` override. Uniform behavior via the single guard.
+
+    PA-03: the delete-family callers additionally pass `action` (for a readable prompt/manifest),
+    plus `pend_item`/`pend` to opt into "add to pending". If the guard reports the action was
+    added to the pending list, raise `PendingDeferred` so the caller stops cleanly.
     """
-    require_safe_to_mutate("modify the database", while_running=force, verbosity=verbosity)
+    result = require_safe_to_mutate(action, while_running=force, verbosity=verbosity,
+                                    pend_item=pend_item, pend=pend)
+    if result == "pended":
+        raise PendingDeferred(action)
 
 
 # --- `ocman list running`: instance + listener + vulnerability detection ---------
@@ -8204,7 +8294,8 @@ def _sess_str(s: dict) -> str:
     return str(s.get("provenance") or "unknown")
 
 
-def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True) -> None:
+def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True,
+                                pend_item: dict | None = None, pend: bool = False) -> None:
     """Recursively delete a session, its descendant sub-sessions, and all related database and disk data."""
     clean_sid = str(session_id).strip()
     if "/" in clean_sid or "\\" in clean_sid or ".." in clean_sid:
@@ -8217,8 +8308,10 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
     if not OPENCODE_DB_PATH.exists():
         raise _db_not_found_error()
 
-    # Check for running opencode (fail-open; --force bypasses only this lock).
-    check_opencode_process_lock(force, verbosity)
+    # Check for running opencode (fail-open; --force bypasses only this lock). PA-03: when the
+    # caller opted in (pend_item), a running OpenCode can instead be added to the pending list.
+    check_opencode_process_lock(force, verbosity, action=f"delete session {clean_sid}",
+                                pend_item=pend_item, pend=pend)
 
     conn = None
     transaction_started = False
@@ -8935,7 +9028,8 @@ def db_delete_sessions_batch(
 
 
 def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True,
-                                extracts: bool | None = None, extract_output_dir: str | None = None) -> None:
+                                extracts: bool | None = None, extract_output_dir: str | None = None,
+                                pend_item: dict | None = None, pend: bool = False) -> None:
     """Recursively delete a project, all its sessions, and all related database and disk data."""
     clean_pid = str(project_id).strip()
     if "/" in clean_pid or "\\" in clean_pid or ".." in clean_pid:
@@ -8948,8 +9042,10 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
     if not OPENCODE_DB_PATH.exists():
         raise _db_not_found_error()
 
-    # Check for running opencode (fail-open; --force bypasses only this lock).
-    check_opencode_process_lock(force, verbosity)
+    # Check for running opencode (fail-open; --force bypasses only this lock). PA-03: pend_item
+    # lets a running OpenCode be added to the pending list instead of refusing.
+    check_opencode_process_lock(force, verbosity, action=f"delete project {clean_pid}",
+                                pend_item=pend_item, pend=pend)
 
     conn = None
     transaction_started = False
@@ -11080,6 +11176,8 @@ def db_run_cleanup(
     assume_yes: bool = False,
     extracts: bool | None = None,
     extract_output_dir: str | None = None,
+    pend_item: dict | None = None,
+    pend: bool = False,
 ) -> None:
     """Run OpenCode SQLite database retention cleanup and orphan sweeping.
 
@@ -11098,8 +11196,12 @@ def db_run_cleanup(
     if not OPENCODE_DB_PATH.exists():
         raise _db_not_found_error()
 
-    # Check for running opencode (fail-open; --force bypasses only this lock).
-    check_opencode_process_lock(force, verbosity)
+    # Check for running opencode (fail-open; --force bypasses only this lock). PA-03: pend_item
+    # lets a running OpenCode be added to the pending list instead of refusing.
+    check_opencode_process_lock(force, verbosity,
+                                action=("clean orphaned rows/files" if clean_orphans and days == 0
+                                        else "clean the database"),
+                                pend_item=pend_item, pend=pend)
 
     # Compute cutoff time (Unix epoch milliseconds)
     import time
@@ -11796,6 +11898,129 @@ def _save_history(data: dict) -> None:
         os.replace(tmp_name, str(OPENCODE_HISTORY_PATH))
     except Exception as e:
         print(color_yellow(f"Warning: failed to save historical metrics: {e}"))
+
+
+# --- pending-actions manifest (deferred destructive actions) -----------------
+# PA-02: a list of destructive actions the user chose to "add to pending" because OpenCode was
+# running. Stored next to the history ledger (config-driven data dir), schema-versioned, and
+# treated as UNTRUSTED input at drain time (PA-12): each item is re-resolved, re-previewed, and
+# re-confirmed against the CURRENT db before anything is deleted; it is never shell/eval'd.
+
+PENDING_SCHEMA_VERSION = 1
+PENDING_ACTIONS = ("session-delete", "project-delete", "db-clean", "db-clean-orphans")
+
+
+def pending_path() -> Path:
+    """Path to the pending-actions manifest: a sibling of the history ledger, so it follows the
+    same config-driven data dir / --db resolution (NOT hardcoded)."""
+    return OPENCODE_HISTORY_PATH.parent / "ocman_pending.json"
+
+
+def _valid_pending_item(item: object) -> bool:
+    """PA-12: validate an item's shape before trusting it. A malformed item is skipped, never run."""
+    if not isinstance(item, dict):
+        return False
+    if item.get("action") not in PENDING_ACTIONS:
+        return False
+    if not isinstance(item.get("id"), str) or not item["id"]:
+        return False
+    if not isinstance(item.get("target"), str):
+        return False
+    return True
+
+
+def load_pending() -> list[dict]:
+    """Load the pending-actions list, tolerating a missing/empty/corrupt file or an unknown schema
+    (PA-10): on any problem return an empty list rather than crashing a normal command. Malformed
+    individual items are dropped."""
+    p = pending_path()
+    if not p.exists():
+        return []
+    try:
+        with open(p, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        print(color_yellow(f"{notice_prefix()} Pending list at {p} is unreadable; ignoring it."))
+        return []
+    if not isinstance(data, dict) or data.get("schema") != PENDING_SCHEMA_VERSION:
+        print(color_yellow(f"{notice_prefix()} Pending list at {p} has an unsupported format; "
+                           "ignoring it."))
+        return []
+    items = data.get("items")
+    if not isinstance(items, list):
+        return []
+    return [it for it in items if _valid_pending_item(it)]
+
+
+def _write_pending(items: list[dict]) -> None:
+    """Atomically write the pending list (schema-wrapped), mirroring the history ledger's
+    temp-file + os.replace pattern."""
+    p = pending_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"schema": PENDING_SCHEMA_VERSION, "items": items}
+    with tempfile.NamedTemporaryFile("w", dir=str(p.parent), delete=False, encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+        tmp_name = f.name
+    os.replace(tmp_name, str(p))
+
+
+@contextmanager
+def _pending_lock():
+    """PA-11: serialize read-modify-write of the manifest across concurrent ocman processes via a
+    lockfile next to it. Best-effort: if locking is unavailable, proceed (single-user is the norm)."""
+    p = pending_path()
+    p.parent.mkdir(parents=True, exist_ok=True)
+    lock = p.with_suffix(".lock")
+    fd = None
+    try:
+        try:
+            fd = os.open(str(lock), os.O_CREAT | os.O_RDWR)
+            try:
+                import fcntl
+                fcntl.flock(fd, fcntl.LOCK_EX)
+            except (ImportError, OSError):
+                pass  # non-POSIX or lock unsupported: best-effort, continue
+        except OSError:
+            fd = None
+        yield
+    finally:
+        if fd is not None:
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
+def add_pending_item(item: dict) -> int:
+    """PA-11: append one action to the pending manifest under a lock (re-read before write, so a
+    concurrent append cannot clobber). Returns the new pending count."""
+    if not _valid_pending_item(item):
+        raise RecoveryError("Refusing to record a malformed pending item.")
+    with _pending_lock():
+        items = load_pending()
+        items.append(item)
+        _write_pending(items)
+        return len(items)
+
+
+def save_pending(items: list[dict]) -> None:
+    """Replace the whole pending list (used by drain/clear) under the same lock."""
+    with _pending_lock():
+        _write_pending(items)
+
+
+def _make_pend_item(action: str, target: str, *, snapshot: dict | None = None,
+                    args: dict | None = None) -> dict:
+    """Build a structured PendingItem (PA-02) for the given deferrable delete-family action."""
+    return {
+        "id": uuid.uuid4().hex,
+        "action": action,
+        "target": str(target),
+        "snapshot": snapshot or {},
+        "args": args or {},
+        "queued_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "queued_from_cwd": str(Path.cwd()),
+    }
 
 
 def clear_history_ledger() -> None:
@@ -15582,6 +15807,146 @@ def cli_reclaim(args) -> None:
         reclaim_snapshots(force_snapshots, loc, dry_run=dry_run, verbosity=verbosity)
 
 
+def _pending_item_summary(item: dict) -> str:
+    """One-line human description of a pending item (for `pending list` and prompts)."""
+    action = item.get("action", "?")
+    target = item.get("target", "?")
+    when = item.get("queued_at", "?")
+    label = {
+        "session-delete": "delete session(s)",
+        "project-delete": "delete project",
+        "db-clean": "clean the database",
+        "db-clean-orphans": "clean orphaned rows/files",
+    }.get(action, action)
+    return f"{label}: {target}  (queued {when})"
+
+
+def _pending_target_exists(item: dict) -> bool:
+    """Re-resolve a pending item's target against the CURRENT db (PA-07 staleness check)."""
+    action = item.get("action")
+    if action == "session-delete":
+        ids = (item.get("args") or {}).get("session_ids") or [item.get("target")]
+        return any(db_find_session(str(sid)) is not None for sid in ids if sid)
+    if action == "project-delete":
+        return db_find_project(str(item.get("target"))) is not None
+    # db-clean / db-clean-orphans operate on the whole DB; always "exists" if the DB does.
+    return OPENCODE_DB_PATH.exists()
+
+
+def _run_pending_item(item: dict, *, verbosity: int, assume_yes: bool) -> None:
+    """Replay ONE pending item through the SAME delete path, with re-preview + re-confirm
+    (PA-07). force=True skips the inner running-guard (the drain already re-checked running
+    once); the per-item confirm/-y still applies."""
+    action = item.get("action")
+    args = item.get("args") or {}
+    if action == "session-delete":
+        ids = args.get("session_ids") or [item.get("target")]
+        ids = [str(s) for s in ids if s]
+        alive = [s for s in ids if db_find_session(s) is not None]
+        if not alive:
+            return
+        if len(alive) == 1 and not args.get("remove_project_ids"):
+            db_delete_session_recursive(session_id=alive[0], dry_run=False, force=True,
+                                        verbosity=verbosity, confirm=not assume_yes)
+        else:
+            db_delete_sessions_batch(alive, dry_run=False, force=True, verbosity=verbosity,
+                                     remove_project_ids=args.get("remove_project_ids") or [])
+    elif action == "project-delete":
+        found = db_find_project(str(item.get("target")))
+        if not found:
+            return
+        db_delete_project_recursive(project_id=found[0], dry_run=False, force=True,
+                                    verbosity=verbosity, confirm=not assume_yes,
+                                    extracts=args.get("extracts"),
+                                    extract_output_dir=args.get("extract_output_dir"))
+    elif action in ("db-clean", "db-clean-orphans"):
+        days = float(args.get("days", 0) or 0)
+        db_run_cleanup(days=days, project_id=None, project_dir=args.get("project"),
+                       dry_run=False, force=True, clean_orphans=bool(args.get("clean_orphans"))
+                       or action == "db-clean-orphans",
+                       verbosity=verbosity, assume_yes=assume_yes,
+                       extracts=args.get("extracts"),
+                       extract_output_dir=args.get("extract_output_dir"))
+
+
+def cli_pending(action: str, *, index: int | None = None, while_running: bool = False,
+                assume_yes: bool = False, verbosity: int = 0) -> None:
+    """`ocman pending [list|run|clear]`: manage deferred destructive actions (PA-06/PA-07)."""
+    items = load_pending()
+
+    if action == "list":
+        if not items:
+            print("No pending actions.")
+            return
+        print(color_bold(f"Pending actions ({len(items)}):"))
+        for i, it in enumerate(items, 1):
+            stale = "" if _pending_target_exists(it) else color_yellow("  [target no longer exists]")
+            print(f"  {i}. {_pending_item_summary(it)}{stale}")
+        print("\nRun them with 'ocman pending run' (each is re-previewed and re-confirmed), "
+              "or 'ocman pending clear' to discard.")
+        return
+
+    if action == "clear":
+        if not items:
+            print("No pending actions to clear.")
+            return
+        if index is not None:
+            if index < 1 or index > len(items):
+                die(f"No pending item #{index} (there are {len(items)}).")
+            removed = items.pop(index - 1)
+            save_pending(items)
+            print(f"{info_prefix()} Cleared pending item: {_pending_item_summary(removed)}")
+            return
+        if not assume_yes and sys.stdout.isatty():
+            try:
+                ans = input(f"Clear all {len(items)} pending action(s)? Type 'yes': ").strip().lower()
+            except (EOFError, KeyboardInterrupt):
+                print(); die("Aborted; pending list unchanged.")
+            if ans != "yes":
+                die("Aborted; pending list unchanged.")
+        save_pending([])
+        print(f"{info_prefix()} Cleared all pending actions.")
+        return
+
+    if action == "run":
+        if not items:
+            print("No pending actions to run.")
+            return
+        # PA-07: refuse to drain while OpenCode is running (the reason they were deferred), unless
+        # overridden; on non-Linux the guard warns it cannot fully verify.
+        try:
+            require_safe_to_mutate("run pending actions", while_running=while_running,
+                                   verbosity=verbosity)
+        except RecoveryError as e:
+            die(str(e))
+        remaining: list[dict] = []
+        done = skipped = kept = 0
+        for it in items:
+            print()
+            print(color_bold(f"Pending: {_pending_item_summary(it)}"))
+            if not _pending_target_exists(it):
+                print(color_yellow(f"{notice_prefix()} Target no longer exists; skipping and "
+                                   "removing from the list."))
+                skipped += 1
+                continue
+            try:
+                # Each item re-previews + re-confirms inside the delete path (assume_yes honors -y).
+                _run_pending_item(it, verbosity=verbosity, assume_yes=assume_yes)
+                done += 1
+            except RecoveryError as e:
+                # A declined confirm or a recoverable error: KEEP the item for a later attempt.
+                print(color_yellow(f"{notice_prefix()} Not completed ({e}); keeping it pending."))
+                remaining.append(it)
+                kept += 1
+        save_pending(remaining)
+        print()
+        print(f"{info_prefix()} Pending run complete: {done} done, {skipped} skipped "
+              f"(vanished), {kept} kept.")
+        return
+
+    die(f"Unknown pending action: {action!r} (use list, run, or clear).")
+
+
 def main() -> None:
     """Entry point wrapper: run the CLI, and never leak a raw traceback to the user.
 
@@ -15631,6 +15996,29 @@ def _run_main() -> None:
     global OPENCODE_DB_PATH
     if args.db:
         OPENCODE_DB_PATH = args.db
+
+    # PA-06: the `pending` command (list/run/clear) is handled early and prints its own detail.
+    if getattr(args, "command", None) == "pending":
+        try:
+            cli_pending(getattr(args, "pending_action", None) or "list",
+                        index=getattr(args, "pending_index", None),
+                        while_running=bool(getattr(args, "while_running", False)),
+                        assume_yes=bool(getattr(args, "yes", False)),
+                        verbosity=verbosity)
+        except RecoveryError as e:
+            die(str(e))
+        return
+
+    # PA-05: remind the user of any pending actions on every run (yellow NOTIC; brackets uncolored).
+    # Suppressed for machine output (--json) and for the `pending` command (handled above).
+    if not bool(getattr(args, "json", False)):
+        try:
+            _pn = len(load_pending())
+            if _pn:
+                print(color_yellow(f"{notice_prefix()} {_pn} item(s) pending "
+                                   "(run: ocman pending run)"))
+        except Exception:
+            pass  # never let the reminder break a normal command
 
     # Handle --create-config early.
     if getattr(args, "create_config", False):
@@ -16377,6 +16765,18 @@ def _run_main() -> None:
     if args.clean or args.clean_orphans:
         try:
             days = args.days if args.clean else 0
+            _pend = bool(getattr(args, "pend", False))
+            if args.clean_orphans and not args.clean:
+                _pend_item = _make_pend_item("db-clean-orphans", "orphans",
+                                             args={"dry_run": bool(args.dry_run)})
+            else:
+                _pend_item = _make_pend_item(
+                    "db-clean", (args.project or ""),
+                    snapshot={"days": days},
+                    args={"days": days, "project": args.project,
+                          "clean_orphans": bool(args.clean_orphans),
+                          "extracts": getattr(args, "extracts", None),
+                          "extract_output_dir": getattr(args, "extract_output_dir", None)})
             db_run_cleanup(
                 days=days,
                 project_id=_project_id,
@@ -16388,7 +16788,11 @@ def _run_main() -> None:
                 assume_yes=getattr(args, "yes", False),
                 extracts=getattr(args, "extracts", None),
                 extract_output_dir=getattr(args, "extract_output_dir", None),
+                pend_item=_pend_item,
+                pend=_pend,
             )
+        except PendingDeferred:
+            return  # added to the pending list; the guard already printed the NOTIC.
         except RecoveryError as e:
             die(str(e))
         return
@@ -16421,7 +16825,14 @@ def _run_main() -> None:
                 confirm=not getattr(args, "yes", False),
                 extracts=getattr(args, "extracts", None),
                 extract_output_dir=getattr(args, "extract_output_dir", None),
+                pend_item=_make_pend_item("project-delete", str(args.project or _project_id),
+                                          snapshot={"project": args.project},
+                                          args={"extracts": getattr(args, "extracts", None),
+                                                "extract_output_dir": getattr(args, "extract_output_dir", None)}),
+                pend=bool(getattr(args, "pend", False)),
             )
+        except PendingDeferred:
+            return  # added to the pending list.
         except Exception as e:
             die(str(e))
         return
@@ -16499,6 +16910,30 @@ def _run_main() -> None:
         # to empty a project will NOT auto-remove the project row (intent-gated).
         remove_project_ids = [p["id"] for p in res.projects]
 
+        # PA-03: single running-guard for the whole delete (covers both the single-session and
+        # batch paths); when OpenCode is running the user can add it to the pending list. If they
+        # do, we stop here; otherwise (proceeded / --while-running) the inner delete calls run with
+        # force=True so they do not re-prompt the same guard.
+        _sess_ids = [s["id"] for s in res.sessions]
+        _pend_target = _sess_ids[0] if len(_sess_ids) == 1 and not remove_project_ids \
+            else ",".join(_sess_ids)
+        try:
+            check_opencode_process_lock(
+                args.force, verbosity,
+                action=(f"delete session {_pend_target}" if len(_sess_ids) == 1 and not remove_project_ids
+                        else f"delete {len(_sess_ids)} session(s)"),
+                pend_item=_make_pend_item(
+                    "session-delete", _pend_target,
+                    snapshot={"count": len(_sess_ids)},
+                    args={"session_ids": _sess_ids, "remove_project_ids": remove_project_ids,
+                          "extracts": getattr(args, "extracts", None),
+                          "extract_output_dir": getattr(args, "extract_output_dir", None)}),
+                pend=bool(getattr(args, "pend", False)))
+        except PendingDeferred:
+            return  # added to the pending list.
+        except RecoveryError as e:
+            die(str(e))
+
         try:
             if len(res.sessions) == 1 and not remove_project_ids:
                 # Single loose session: keep the existing, characterized single-
@@ -16506,7 +16941,7 @@ def _run_main() -> None:
                 db_delete_session_recursive(
                     session_id=res.sessions[0]["id"],
                     dry_run=args.dry_run,
-                    force=args.force,
+                    force=True,  # running-guard already handled above
                     verbosity=verbosity,
                     confirm=False
                 )
@@ -16516,7 +16951,7 @@ def _run_main() -> None:
                 db_delete_sessions_batch(
                     [s["id"] for s in res.sessions],
                     dry_run=args.dry_run,
-                    force=args.force,
+                    force=True,  # running-guard already handled above
                     verbosity=verbosity,
                     remove_project_ids=remove_project_ids,
                 )

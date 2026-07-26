@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Added
+- **Pending-actions list for cleanups blocked while OpenCode is running.** When a delete-family
+  action (`session delete`, `project delete`, `db clean`, `db clean-orphans`) is refused because
+  OpenCode is running, you can add it to a pending list instead of killing every OpenCode or having
+  to remember: press `[p]` at the prompt, or use `--pend` non-interactively. Every `ocman` run then
+  shows `[NOTIC] X item(s) pending`, and `ocman pending list/run/clear` manages them. `pending run`
+  refuses to drain while OpenCode is still up (override `--while-running`), and re-resolves,
+  re-previews, and re-confirms each action against the current database before deleting (vanished
+  targets are skipped; declined items are kept). The TUI shows the count and a Pending tab. The
+  manifest lives at `~/.local/share/opencode/ocman_pending.json`.
+
 ### Changed
 - **CLI self-documentation.** `ocman filter` renamed to **`ocman focus`** ("narrow a recovery doc
   to one topic"); `filter` still works as a hidden alias. Bare `ocman` with non-interactive stdin

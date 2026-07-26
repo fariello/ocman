@@ -452,6 +452,33 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | `ocman ui` / `ocman gui` | Launch the interactive terminal dashboard. |
 | `ocman help [TOPIC]` | Show help. `TOPIC` is one of `browse`, `recover`, `maintain`, `backup`, `move`, `config`, `all`. |
 | `ocman focus FILE` | Narrow a recovery/compacted document to one project/topic via the LLM (`ocman filter` is a kept, hidden alias). Requires `-P/--project` and/or `--scope`; reuses `-C/--compact` for model and `-oc` for output. Written next to the source (or `-oc`) as `YYYYMMDD-HHMM-<session_id>.<scope>.compacted.md`. Supports `--allow-secrets`, `--show-secrets[=masked\|raw]`, `--expunge-secrets`, and `--force`. Input is size-capped (`filter_max_bytes`) and scanned for secrets/PII before sending. |
+| `ocman pending [list\|run\|clear]` | Manage actions you added to the pending list while OpenCode was running (see below). `list` (default) shows them, `run` performs them now (each re-confirmed), `clear` discards them. |
+
+---
+
+## Deferring cleanups while OpenCode is running
+
+ocman refuses destructive database changes while OpenCode is running, because OpenCode has no
+cross-process session lock and a concurrent write can corrupt its state. Instead of killing every
+OpenCode or trying to remember later, you can add the action to a pending list and run it when the
+coast is clear.
+
+Eligible commands (the delete-family): `session delete`, `project delete`, `db clean`, and
+`db clean-orphans`.
+
+- When one of these is blocked because OpenCode is running, at a terminal you are offered
+  `[p]` to add it to the pending list (or type `yes` to proceed anyway, or anything else to
+  cancel). Non-interactively, pass `--pend` to add it without prompting.
+- Every `ocman` run then prints `[NOTIC] X item(s) pending (run: ocman pending run)`.
+- `ocman pending list` shows the queued actions (and flags any whose target no longer exists).
+- `ocman pending run` drains the list. It first refuses if OpenCode is still running
+  (override with `--while-running`), then for each item it re-resolves the target against the
+  current database, re-shows the normal preview, and re-confirms (`-y` skips only the prompt).
+  Actions whose target has vanished are skipped and removed; anything you decline is kept.
+- `ocman pending clear` discards the list (all, or a single `N` by number) without running it.
+
+The pending list is stored at `~/.local/share/opencode/ocman_pending.json` (next to the activity
+ledger). It never auto-runs; draining is always an explicit, re-confirmed step.
 
 ---
 

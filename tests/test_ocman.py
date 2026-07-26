@@ -1041,6 +1041,103 @@ def test_require_safe_to_mutate_outcomes(monkeypatch):
         ocman.require_safe_to_mutate("delete x", interactive=True, while_running=False)
 
 
+# --- pending-actions manifest (PA-01..12) ------------------------------------
+
+def _running_some(monkeypatch):
+    import ocman.cli as _cli
+    monkeypatch.setattr(_cli, "detect_running_opencode_status", lambda *a, **k: (
+        "some", [{"pid": 9, "tty": "?", "elapsed": "1m", "started": "now", "cwd": "", "project": ""}]))
+
+
+def _running_none(monkeypatch):
+    import ocman.cli as _cli
+    monkeypatch.setattr(_cli, "detect_running_opencode_status", lambda *a, **k: ("none", []))
+
+
+def test_pending_storage_roundtrip_and_tolerance(temp_db):
+    """PA-02/10: add/load round-trips; missing/corrupt/unknown-schema files degrade to []."""
+    import ocman.cli as _cli
+    assert _cli.load_pending() == []  # missing file
+    item = _cli._make_pend_item("session-delete", "ses_x", args={"session_ids": ["ses_x"]})
+    assert _cli.add_pending_item(item) == 1
+    assert [i["action"] for i in _cli.load_pending()] == ["session-delete"]
+    # malformed item dropped
+    import json
+    p = _cli.pending_path()
+    data = json.load(open(p)); data["items"].append({"action": "bogus"}); json.dump(data, open(p, "w"))
+    assert len(_cli.load_pending()) == 1
+    # corrupt file -> []
+    open(p, "w").write("{not json")
+    assert _cli.load_pending() == []
+    # unknown schema -> []
+    json.dump({"schema": 999, "items": [item]}, open(p, "w"))
+    assert _cli.load_pending() == []
+
+
+def test_pending_defer_records_and_does_not_act(temp_db, monkeypatch):
+    """PA-03/04: --pend (non-interactive) while running records the item and raises PendingDeferred
+    so the caller does NOT delete."""
+    import ocman.cli as _cli
+    _running_some(monkeypatch)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    item = _cli._make_pend_item("session-delete", "ses_x", args={"session_ids": ["ses_x"]})
+    with pytest.raises(_cli.PendingDeferred):
+        _cli.check_opencode_process_lock(False, 0, action="delete session ses_x",
+                                         pend_item=item, pend=True)
+    assert len(_cli.load_pending()) == 1
+
+
+def test_pending_guard_unchanged_without_pend_item(temp_db, monkeypatch):
+    """Anti-regression: a caller that passes NO pend_item keeps the exact prior behavior
+    (refuse while running, non-interactive) and records nothing."""
+    import ocman.cli as _cli
+    _running_some(monkeypatch)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    with pytest.raises(RecoveryError):
+        _cli.require_safe_to_mutate("rebase database paths", interactive=False)
+    assert _cli.load_pending() == []
+
+
+def test_pending_banner_prints_notice(temp_db, capsys, monkeypatch):
+    """PA-05: `ocman pending list` shows a queued item; the storage feeds the run-time banner."""
+    import ocman.cli as _cli
+    _cli.add_pending_item(_cli._make_pend_item("db-clean", "", args={"days": 30}))
+    _cli.cli_pending("list")
+    out = capsys.readouterr().out
+    assert "Pending actions (1)" in out and "clean the database" in out
+
+
+def test_pending_run_refuses_while_running(temp_db, monkeypatch):
+    """PA-07: `pending run` refuses to drain while OpenCode is running (no override)."""
+    import ocman.cli as _cli
+    _cli.add_pending_item(_cli._make_pend_item("db-clean", "", args={"days": 30}))
+    _running_some(monkeypatch)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: False)
+    with pytest.raises(SystemExit):
+        _cli.cli_pending("run", assume_yes=True)
+    assert len(_cli.load_pending()) == 1  # not drained
+
+
+def test_pending_run_skips_vanished_target(temp_db, monkeypatch, capsys):
+    """PA-07: a queued session-delete whose target no longer exists is skipped and removed."""
+    import ocman.cli as _cli
+    _cli.add_pending_item(_cli._make_pend_item("session-delete", "ses_gone",
+                                               args={"session_ids": ["ses_gone"]}))
+    _running_none(monkeypatch)
+    _cli.cli_pending("run", assume_yes=True)
+    out = capsys.readouterr().out
+    assert "skipped" in out.lower()
+    assert _cli.load_pending() == []
+
+
+def test_pending_clear_all(temp_db, monkeypatch):
+    """PA-06: `pending clear` (with -y) empties the list."""
+    import ocman.cli as _cli
+    _cli.add_pending_item(_cli._make_pend_item("db-clean", "", args={"days": 30}))
+    _cli.cli_pending("clear", assume_yes=True)
+    assert _cli.load_pending() == []
+
+
 @pytest.mark.real_process_detection
 def test_import_is_guarded_when_running(temp_db, tmp_path, monkeypatch):
     """Coverage: a newly-guarded mutator (session import) refuses while OpenCode runs."""

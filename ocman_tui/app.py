@@ -1341,6 +1341,15 @@ class OrsessionApp(App):
                                 yield Static("h = hours, d = days, w = weeks, mo = months, y = years",
                                              id="log-prune-legend", classes="info-label")
 
+                    # PA-08: pending deferred-action list (added via --pend / [p] while OpenCode ran).
+                    with TabPane("Pending", id="tab-pending"):
+                        with Vertical(classes="panel-card"):
+                            yield Label("PENDING ACTIONS", classes="panel-card-title")
+                            yield Static("", id="pending-list-view", classes="info-value")
+                            yield Static("Run them from the CLI with 'ocman pending run' "
+                                         "(each is re-confirmed), or 'ocman pending clear' to discard.",
+                                         classes="info-label")
+
                     # Configuration Settings moved to the ^g Config overlay (ConfigOverlay).
         with Horizontal(id="footer-bar"):
             # B2-01: Space (Select) and ^q (Quit) are clickable buttons like the rest.
@@ -1375,6 +1384,7 @@ class OrsessionApp(App):
         self.query_one("#sidebar", SidebarWidget).load_data()
         self.populate_compaction_models()
         self.load_audit_trail()
+        self.load_pending_view()
         # Config fields now live in the ^g Config overlay; ConfigOverlay.on_mount loads them
         # when the overlay opens (config_loaded flips to True then). Not loaded at app mount.
         # Refresh the Database Admin metrics once the full tree is mounted. The widget's own
@@ -1441,6 +1451,29 @@ class OrsessionApp(App):
         lines.append(f"  - Accumulated Cost:  ${cost:.4f}")
         lines.append(f"  - Disk Space Saved:  {human_size_local(space_saved)}")
         return "\n".join(lines)
+
+    def load_pending_view(self) -> None:
+        """PA-08: render the pending-actions list (and its count) into the Pending tab."""
+        import ocman
+        try:
+            items = ocman.load_pending()
+        except Exception:
+            items = []
+        try:
+            view = self.query_one("#pending-list-view", Static)
+        except Exception:
+            return
+        if not items:
+            view.update("No pending actions.")
+            return
+        lines = [f"{len(items)} pending action(s):", ""]
+        for i, it in enumerate(items, 1):
+            try:
+                summary = ocman.cli._pending_item_summary(it)
+            except Exception:
+                summary = f"{it.get('action', '?')}: {it.get('target', '?')}"
+            lines.append(f"  {i}. {summary}")
+        view.update("\n".join(lines))
 
     def load_audit_trail(self) -> None:
         """B5-07: render each run as a collapsible entry (▶ collapsed / ▼ expanded on click)."""

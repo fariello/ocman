@@ -32,6 +32,20 @@ Deferred stretch goal (not yet built): forked/shared-spend de-duplication (attri
 shared ancestor tokens once across a fork tree rather than double-counting). Promote to
 its own IPD if wanted.
 
+## Pending-actions manifest: extend beyond the delete-family (FUTURE)
+
+Shipped (2026-07-26): `--pend` / interactive `[p]` add-to-pending for the delete-family
+(`session delete`, `project delete`, `db clean`, `db clean-orphans`) when OpenCode is running;
+`ocman pending list/run/clear` with re-resolve + re-preview + re-confirm at drain; an
+`[NOTIC] X items pending` reminder on every run; TUI banner + Pending tab. Manifest at
+`~/.local/share/opencode/ocman_pending.json`.
+
+Future candidates (same safety model, deferred from the initial IPD on the complexity axis):
+extend deferral to `rename`, `move`, `db rebase`, and `reclaim`. Each needs its own staleness
+semantics at drain (a rename/move target or a path-prefix rebase can conflict with intervening
+edits). Also deferred: an opt-in auto-drain when no OpenCode is running (functionality axis:
+auto-running deferred deletes is a surprise-destruction risk). Promote to its own IPD if wanted.
+
 ## `OCMAN_CONFIG_PATH` environment override: TO CONSIDER
 
 The README once documented `OCMAN_CONFIG_PATH` as an environment variable that "overrides

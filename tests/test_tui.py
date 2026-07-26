@@ -1901,6 +1901,25 @@ async def test_tui_expanded_toggle_next_to_transcript_title(tui_db):
 
 
 @pytest.mark.anyio
+async def test_tui_pending_tab_shows_items(tui_db):
+    """PA-08: the Pending tab lists items from the manifest (empty message when none)."""
+    from textual.widgets import Static
+    import ocman
+    app = OrsessionApp()
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app.query_one("TabbedContent").active = "tab-pending"
+        await pilot.pause()
+        view = app.query_one("#pending-list-view", Static)
+        assert "No pending actions" in str(view.render())
+        # add one and reload
+        ocman.add_pending_item(ocman.cli._make_pend_item("db-clean", "", args={"days": 30}))
+        app.load_pending_view()
+        await pilot.pause()
+        assert "clean the database" in str(view.render())
+
+
+@pytest.mark.anyio
 async def test_tui_format_controls_labeled_borderless(tui_db):
     """FORMAT CONTROLS fields are borderless (no box) with a plain .field-caption Label above each,
     and the inputs keep their ids/values. (Replaces the old bordered border_title design.)"""
