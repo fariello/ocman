@@ -18,6 +18,11 @@ Verify:
   honesty rule (paste the actual runner output), path-scoped commit and never-push, and the
   lifecycle move.
 
+For an agent-executable plan, it must carry BOTH a top execution checklist AND an end
+verification/cross-check checklist that maps 1:1 with concrete per-item evidence; a weak or
+absent verification checklist (one that could let an agent claim completion without doing every
+step) is an UNDER-SCOPE finding.
+
 The plan must be executable by another qualified agent or developer without
 inventing architecture.
 

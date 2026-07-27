@@ -1,6 +1,7 @@
 # AGENTS
 
-<!-- AGENT-WORKFLOWS:BEGIN -->
+<!-- aw:block -->
+<!-- aw:pointer -->
 ## Agent workflows
 
 This repository includes reusable agent workflows under `.agents/workflows/`. They are invoked on demand and are NOT always-loaded context. See `.agents/workflows/index.md` for the list and how to run each (native `/commands` in OpenCode/Claude Code, or "read and execute <body path>" in any other agent).
@@ -31,8 +32,11 @@ When you execute a task or plan here you MUST: commit ONLY files you changed, pa
 A deterministic leak-sanitizer ships with this toolkit. Before you hand-judge whether a public artifact (tracked files, the built package, git history) contains maintainer or machine identifying info (home paths, usernames, hostnames, private repo names, session ids), RUN it and consume its output rather than eyeballing: `aw sanitize --agent` (alias of `aw check-local-leaks --agent`; without the CLI, `python3 -m agent_workflows check-local-leaks . --agent`). It prints one tab-separated `location\trule\tseverity` record per finding on stdout and exits nonzero on a `fail`. This holds even when no pre-commit hook or CI check is installed in the repo.
 
 ### Ask self-contained questions
-When you ask a human a decision through an interactive prompt, put the ENTIRE question set (the plain-language context needed to decide, the question, and the answer options) INSIDE the prompt itself, so a human answering from the prompt can decide from the prompt alone; never strand the required context in surrounding chat. Extra prose may precede a prompt, but for only ONE question at a time and only as a supplement (see the agent-workflows Guiding Principles, "Ask self-contained questions" (P12); ocman's own product principles are in `GUIDING_PRINCIPLES.md`).
-<!-- AGENT-WORKFLOWS:END -->
+When you ask a human a decision through an interactive prompt, put the ENTIRE question set (the plain-language context needed to decide, the question, and the answer options) INSIDE the prompt itself, so a human answering from the prompt can decide from the prompt alone; never strand the required context in surrounding chat. Extra prose may precede a prompt, but for only ONE question at a time and only as a supplement. Compose the context as a compact, decision-ready synthesis: keep it screen-sized, do NOT repeat or preview the choices the tool already renders, and omit chronology/filenames/quotes unless essential (see GUIDING_PRINCIPLES P12).
+
+### Authoring and executing IPDs
+When you author or execute an Implementation Plan Document (IPD), you MUST follow the canonical IPD spec under `.agents/docs/specs/` (the `ipd-spec` doc), including its mandatory `## Detailed Implementation Checklist (TODO)` and the completion rule: do NOT claim done or move a plan to `.agents/plans/executed/` until every checklist item is checked AND independently verified (tests run, actual output pasted), else STOP and report.
+<!-- /aw:block -->
 
 ## Plan / IPD lifecycle
 

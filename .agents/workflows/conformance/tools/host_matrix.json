@@ -1,0 +1,151 @@
+{
+  "hosts": {
+    "opencode": {
+      "display_name": "OpenCode",
+      "t1_policy": {
+        "supported": false,
+        "mechanism": "out-of-repo absolute import not resolved by default",
+        "notes": "Requires native skill or in-repo fallback"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".config/opencode/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "opencode debug context",
+        "opencode list-skills"
+      ],
+      "command_template": "opencode run --cwd {target_repo} \"Execute probe instruction in {tier_fixture}\""
+    },
+    "claude_code": {
+      "display_name": "Claude Code",
+      "t1_policy": {
+        "supported": true,
+        "mechanism": "supports absolute file import via @path or project config",
+        "notes": "Resolves out-of-repo pointer with permission prompt"
+      },
+      "t2_layout": {
+        "preferred_path": ".claude/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".claude/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "claude doctor",
+        "claude config list"
+      ],
+      "command_template": "claude --cwd {target_repo} -p \"Execute probe instruction in {tier_fixture}\""
+    },
+    "codex": {
+      "display_name": "Codex CLI",
+      "t1_policy": {
+        "supported": false,
+        "mechanism": "refuses out-of-repo absolute import without flag",
+        "notes": "Strict workspace boundary"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".codex/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "codex status",
+        "codex inspect-context"
+      ],
+      "command_template": "codex exec --repo {target_repo} \"Execute probe instruction in {tier_fixture}\""
+    },
+    "copilot": {
+      "display_name": "GitHub / VS Code Copilot",
+      "t1_policy": {
+        "supported": false,
+        "mechanism": "refuses absolute file reference outside workspace root",
+        "notes": "Workspace isolation enforced"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".config/github-copilot/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "github-copilot-cli status",
+        "github-copilot-cli list-instructions"
+      ],
+      "command_template": "github-copilot-cli run --dir {target_repo} \"Execute probe instruction in {tier_fixture}\""
+    },
+    "cursor": {
+      "display_name": "Cursor",
+      "t1_policy": {
+        "supported": false,
+        "mechanism": "unproven out-of-repo resolution",
+        "notes": "Requires workspace local file"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".cursor/rules/{skill_name}.mdc",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "cursor --status",
+        "cursor --dump-context"
+      ],
+      "command_template": "cursor --workspace {target_repo} --prompt \"Execute probe instruction in {tier_fixture}\""
+    },
+    "antigravity": {
+      "display_name": "Antigravity CLI (AGY)",
+      "t1_policy": {
+        "supported": true,
+        "mechanism": "resolves out-of-repo path with user consent",
+        "notes": "Supports external pointer via skill reference"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".gemini/antigravity-cli/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "agy status",
+        "agy list-skills"
+      ],
+      "command_template": "agy run --cwd {target_repo} \"Execute probe instruction in {tier_fixture}\""
+    },
+    "gemini_cli": {
+      "display_name": "Gemini CLI",
+      "t1_policy": {
+        "supported": true,
+        "mechanism": "resolves external files with consent prompt",
+        "notes": "CLI mode supports external paths"
+      },
+      "t2_layout": {
+        "preferred_path": ".agents/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "t3_global": {
+        "global_path": ".gemini/skills/{skill_name}/SKILL.md",
+        "supported": true
+      },
+      "diagnostic_commands": [
+        "gemini status",
+        "gemini dump-config"
+      ],
+      "command_template": "gemini --dir {target_repo} --exec \"Execute probe instruction in {tier_fixture}\""
+    }
+  }
+}

@@ -36,7 +36,8 @@ Do not require the user to run each section manually. Execute the full sequence 
 
 Perform a robust repository and code review that improves release readiness while minimizing the risk of unintended damage.
 
-The subject is the **target project**, not this framework. Exclude `release-review/` (the runbook) and `workflow-artifacts/` (run records) from the review scope, and never modify `release-review/` during a run; see the review scope exclusions in `00-run-protocol.md`. (You still create and commit `workflow-artifacts/release-review/<RUN_ID>/` as the run's output.)
+The subject is the **target project**, not this framework. Exclude `release-review/` (the runbook) and `workflow-artifacts/` (run records) from the review scope, and never modify `release-review/` during a run; see the review scope exclusions in `00-run-protocol.md`. (You still create `workflow-artifacts/release-review/<RUN_ID>/` as local-only working material, but do not commit it.)
+
 
 Maximize correctness, security, privacy, memory/resource safety, tests, documentation accuracy, schema validation, compatibility, packaging, CI readiness, maintainability, clear traceability, and clear final reporting. A central goal is to make the released project as **intuitive and self-documenting** as reasonably possible, so users can learn it as they go without reading a manual or taking a course.
 
@@ -139,7 +140,7 @@ At the start:
 3. Record the initial branch, head commit, remotes, and working tree status.
 4. Create a run ID using local time in this format: `YYYYMMDD-HHMMSS`.
 5. Create `workflow-artifacts/release-review/<RUN_ID>/`.
-6. Ensure `workflow-artifacts/` is NOT git-ignored; remove any stale `workflow-artifacts/` ignore line so the run artifacts can be tracked as committed deliverables.
+6. Ensure `workflow-artifacts/` is git-ignored so run artifacts remain local-only working material and do not leak environment paths, usernames, or session details.
 7. Create the required run artifacts defined in `00-run-protocol.md`.
 8. Create `workflow-artifacts/release-review/<RUN_ID>/02-execution-plan.md` after enough initial inspection to understand the project type.
 9. Use TodoWrite if running in OpenCode and the tool is available.
@@ -154,7 +155,8 @@ Do not create a TodoWrite item for every file inspected or every tiny edit. The 
 
 ## Local commits and remote pushes
 
-Use local commits for meaningful tracked repository changes when safe and possible. Commit only files changed by this run. Do not accidentally include unrelated pre-existing user changes. The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are committed deliverables by default; commit them with the run (keep them local only if the user explicitly asks for local-only artifacts).
+Use local commits for meaningful tracked repository changes when safe and possible. Commit only files changed by this run. Do not accidentally include unrelated pre-existing user changes. The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are local-only working material by default; do NOT commit or force-add them.
+
 
 Apply the Fix Bar (see `00-run-protocol.md`): fix findings by default and defer only when the Remediation Risk of the fix itself is Medium-High or higher; severity is for reporting, not for deciding; never silently drop a finding.
 

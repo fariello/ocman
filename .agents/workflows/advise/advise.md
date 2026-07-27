@@ -71,8 +71,9 @@ workflow-artifacts/advise-<persona>/<RUN_ID>/
 - the improvements agreed (and any applied edits, with the consent noted);
 - open follow-ups the author still owes.
 
-This turns a conversation into a durable, committed deliverable, consistent with assess
+This turns a conversation into a durable local-only working record, consistent with assess
 and verify. It is not an IPD and does not gate anything; it is a record of the session.
+
 
 ## Scope and guardrails
 

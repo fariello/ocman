@@ -10,7 +10,8 @@
 
 Understand the repository as it exists now before recommending or making changes. Reconcile actual implementation, tests, documentation, build files, packaging, release artifacts, and recent changes.
 
-This is primarily a review and discovery section. Do not modify tracked project files except for required run setup, such as removing a stale `workflow-artifacts/` line from `.gitignore` so the run artifacts can be tracked.
+This is primarily a review and discovery section. Do not modify tracked project files except for required run setup, such as ensuring `workflow-artifacts/` is gitignored.
+
 
 ## Standing constraints for this section
 
@@ -41,7 +42,8 @@ After the discovery above and BEFORE starting the audit (and before any parallel
 
 ## Allowed actions
 
-Allowed: inspect files, run non-destructive discovery commands, create and update run artifacts, remove a stale `workflow-artifacts/` line from `.gitignore` if present (run artifacts are committed deliverables), and make a local setup commit of the initialized run artifacts (and any `.gitignore` change) when safe.
+Allowed: inspect files, run non-destructive discovery commands, create and update local run artifacts, and ensure `workflow-artifacts/` is gitignored.
+
 
 Not allowed: product code changes, test changes, documentation changes except run artifacts, deleting files, or moving files.
 

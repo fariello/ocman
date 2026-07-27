@@ -1,0 +1,1148 @@
+{
+  "files": {
+    ".agents/workflows/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "71261fa7f7f0ddc3e92fb8fd37f99873388e5a64cc41ae359c81119e71a71657"
+    },
+    ".agents/workflows/VERSION": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "206620a657f1ccc8af72b866fdcef20e641c48f39ce27f338ce8313949c63e53"
+    },
+    ".agents/workflows/advise/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "3b0c17e729ae3ab4ed1f8a2f093649b1d279b5ee91ffa6dfb3ec88b4d9d7094b"
+    },
+    ".agents/workflows/advise/advise.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0ea68a8058bffc85ff049f1fe281e0581ddcf101d8316405dc307c74b36084fa"
+    },
+    ".agents/workflows/advise/personas/architect.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8d9ffe3723d1fe01429e4283622e9e79f5e173f4c0bf85c95764051dac6e17cb"
+    },
+    ".agents/workflows/advise/personas/domain-expert.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "a18eea752a0b2810f04d918e5fc1453ca07504f30dc8ede2783c610f378d8eb3"
+    },
+    ".agents/workflows/advise/personas/naive-user.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "266ac3dfe4984cea074a3b73287a2cf65287a99e7d8a0f7fb0548b93595c6551"
+    },
+    ".agents/workflows/advise/personas/red-teamer.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c31c0669030e0f1d8414fe8ed8375905873ed01babda15ecd161c4697e39f9d8"
+    },
+    ".agents/workflows/advise/personas/skeptic.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d565c26deaebf25060039e67bcaf85d331a8837811a8057f10d461569b137ddc"
+    },
+    ".agents/workflows/advise/personas/spec-editor.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c7d7ce39792754d5d80267ca333ed20b22e0ced61a242bddead0a4d3bd63f099"
+    },
+    ".agents/workflows/advise/personas/staff-engineer.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "1c6608a93051e05a927bd9aed5c9a2f3d6709bfff122c8243402ad92c66b6c5a"
+    },
+    ".agents/workflows/assess-all/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0d926f601f5f3438b7aa55c9b4beebe08e03c78b9effb4dc3a52619efdbf7ffc"
+    },
+    ".agents/workflows/assess-all/assess-all.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "699ea201015adcb5fcbc34fe0f13c330a15a619230e6738fc3679558d427b716"
+    },
+    ".agents/workflows/assess/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "f534b373b51f60555900cf7be9d759343bdd9bbbf825e205bb0f2f18a2051050"
+    },
+    ".agents/workflows/assess/assess.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "1f4bd0f04f6cff204434cf169ce64a16a1f2fd8225e6a65bd5c04c368b6e566f"
+    },
+    ".agents/workflows/assess/lenses/accessibility.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "a7c58914afa706d81f6be802cc50ee9f18aac763c5016a6434120e07c85ab48d"
+    },
+    ".agents/workflows/assess/lenses/api-design.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "49371eff958e29737959d7127778d6c61413cc1e5d27a5e915ec72a1e56b9ca4"
+    },
+    ".agents/workflows/assess/lenses/architecture.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8e8363490db776923317ed695c17ebd067def59573f13f9f1043827f24b42de0"
+    },
+    ".agents/workflows/assess/lenses/bugs.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0ce7937ef2c8648a5030ff85387fc3d7f0abb15c20bfc7d10694c6c73177850d"
+    },
+    ".agents/workflows/assess/lenses/compatibility.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "7e3b8c924d5f888964e069f1927294a28db0b47a96a56b9304e8e2939730be46"
+    },
+    ".agents/workflows/assess/lenses/compliance-readiness.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "7e2ea3b0277114eaca96532f1c0861df5c3cf134df423033cb2c08d8bb1406f7"
+    },
+    ".agents/workflows/assess/lenses/compliance.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "bf2103230efbc6810d35b2e559fa388c8820505e80e6344ad68b6f997330be2a"
+    },
+    ".agents/workflows/assess/lenses/data-exfiltration.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "42feb885f450351e790f694b839c080f4ed5339a1ea812c9ef06a87ae5f8e1e3"
+    },
+    ".agents/workflows/assess/lenses/data-modeling.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2977a79668b00cceee69a6c6ff647a106768671ea8726adc328845cded535dba"
+    },
+    ".agents/workflows/assess/lenses/documentation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "968a7e83dfe347b1f63a41d58196703b7f2e02e77ba0b8726acf4f2ec41f4ac2"
+    },
+    ".agents/workflows/assess/lenses/edge-cases.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4d8647b2403ddc2dd732295c279ba68df2e919440914bb00722d07225172d04e"
+    },
+    ".agents/workflows/assess/lenses/functionality.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8ce67f17318de35b7484ec78b41143f226fb61e46cb3b668d8d456e8dacc709a"
+    },
+    ".agents/workflows/assess/lenses/generalization.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4b454332c02380e5606015aad9f93edad71babb2a72a6a6ee68b602d46086605"
+    },
+    ".agents/workflows/assess/lenses/guiding-principles.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "3605fca2b0b2545fe935512f262e008d1804111313a97e59382bf8bb47668590"
+    },
+    ".agents/workflows/assess/lenses/intrusion-detection.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "46a4b870d754da16717d878ca76644fac4a86f2e07f0cfba2ce3f69758fc45d7"
+    },
+    ".agents/workflows/assess/lenses/local-leaks.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "b77d86370776773c171eb8f167054c8eb1fd65b0a99574ee34c30e0f583a85fc"
+    },
+    ".agents/workflows/assess/lenses/logging-audit.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "09316554e1b95e963e821f0f6891c39e164e3642a48ae45a21ba8825fbcb7e9d"
+    },
+    ".agents/workflows/assess/lenses/memory-resources.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4c2f7c5b82b2f6130fe4c0a10cbd779b6441cf5c2dee88b7c50d404e1fa83ab3"
+    },
+    ".agents/workflows/assess/lenses/performance.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0759720c205d056fd291c7db19d02b4e2d277523ca3de28f31f330fad3f57987"
+    },
+    ".agents/workflows/assess/lenses/privacy.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "5598b64fb51a73e2bc47cf9024854022cad78dde41e98aeb2b4baffd88d5f808"
+    },
+    ".agents/workflows/assess/lenses/prose.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "123e6ce2ae7941fee00a3b57b7a814d20c6b5763d3f67d2bebb71e920270b215"
+    },
+    ".agents/workflows/assess/lenses/ransomware-resilience.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c0bb983838ac1942f29343027b549de30cc6764ae95a178698ea5af8e8ffe210"
+    },
+    ".agents/workflows/assess/lenses/reliability.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8bf75ccad4afc2a8940d37f93084902808db4e6db923c3cc51e7f37081a1230d"
+    },
+    ".agents/workflows/assess/lenses/secrets.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "63402822bf980cef90fef94b1380585258a74496bc41912d793699f289fdbfea"
+    },
+    ".agents/workflows/assess/lenses/security.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "be5f6deb651603c1c719bdd5b783a596545bca09032bc5b22512579ce5f7f7e4"
+    },
+    ".agents/workflows/assess/lenses/self-documentation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4572bdbbe9f0e4dd3293498459f9c29310b0d81875bde81d4ac77464d7856554"
+    },
+    ".agents/workflows/assess/lenses/supply-chain.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4376ceed4a98814b469fa9f87fcfb0c1f490c9efca2f773d2580587658e9115a"
+    },
+    ".agents/workflows/assess/lenses/testing.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e8cd417a4921294bf91fdef1a84cda6b48651fadaec5fe8d7fb181e5e27e7994"
+    },
+    ".agents/workflows/assess/lenses/threat-model.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "671c6e2fc06f15d2e1c73f8f13cfe8d8d5a974b8774a2d6f16ea7404b0ede42c"
+    },
+    ".agents/workflows/assess/lenses/ui-ux.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "72c66acc2224db3e50c3b3b7598c883f66ecb53af2af623f57cf63961992ca21"
+    },
+    ".agents/workflows/assess/lenses/use-cases.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "917c37e184460d5193c552f9391e3fe794e4c80cfee65135d2dacbd2c11ae7c4"
+    },
+    ".agents/workflows/assess/references/prose-style.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c86c8b3888dc1954b6adc1752cbf0c20000a044681576f522f7a295e9342c7dc"
+    },
+    ".agents/workflows/assess/templates/closing-report.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "1b8ab53981274fbab29a1831bb9b6664729649b895cd23455889ded5c8328616"
+    },
+    ".agents/workflows/assess/templates/findings.csv": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "569619cd05b78db7647f2767bd50873872301c14130c9ded1f42f29e3fe77857"
+    },
+    ".agents/workflows/assess/templates/ipd.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "fa8aa1d5f6ed0d8fe7b89a7a92e8b76abd263bf09b1243cd1fdb8ab7ad622cbf"
+    },
+    ".agents/workflows/assess/templates/orchestrator-ipd.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2f14227dd93c1baa13b58ded8b7764308c5989736f53f924ebe8395b3436be30"
+    },
+    ".agents/workflows/assess/templates/run-report.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "3b044c40e5d6862a6a72225710ed1dd3b76d1369631923b64bbaf2c90b69127a"
+    },
+    ".agents/workflows/assess/tools/scan_secrets.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "02cc267880c908454784f7d7abb5afafb9185d477a82fd47c40ddbae2e6e37e7"
+    },
+    ".agents/workflows/benchmark/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "97faafcc16af9a08964e268a30b819515e7ff9b1cb6e2b43afc470cf5429ed55"
+    },
+    ".agents/workflows/benchmark/benchmark.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "ff665659fb6c3ebe4a68d4a20d061c83867971aa8ac2db54eee170440a67117b"
+    },
+    ".agents/workflows/benchmark/tools/bench_env.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "194e1eaab9f8762d365d9137a1e03bb9047783905563b6b34ed89f0b851761a4"
+    },
+    ".agents/workflows/conformance/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "f616e5dd673cf2b286eb76b368b73909c6e2498ff573fd3212608c7cb92282a5"
+    },
+    ".agents/workflows/conformance/operator-protocol.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8cfd3926b7e5c55e331b1e4c512ccd2c7ee0eb0bc5a72c2a97c80c03869826e4"
+    },
+    ".agents/workflows/conformance/tools/conformance_harness.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "b24a81e36614520857c92a8b97a9236db14b60a8526710b04ccf5001b750e755"
+    },
+    ".agents/workflows/conformance/tools/host_matrix.json": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4d576aca0d4752049eef350fa40a58a16ab9362c40880663d786e047fb9c25c1"
+    },
+    ".agents/workflows/getting-started/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d6a6b0066491ffee1e5249dc4aa2104550e9ca8d3b92c456e6ad9c11bb1d3a0c"
+    },
+    ".agents/workflows/getting-started/getting-started.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2aa8becce5fc0f42b722e916bb520408f0dc16f5c0906f689514b0bc9576c316"
+    },
+    ".agents/workflows/handoff/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "f542747483e5ba349436fe6a7dabc07341414810973837c7facc44a6d25933a0"
+    },
+    ".agents/workflows/handoff/handoff.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "499564b61d342f1a1d7b3c4a5cb3d86c6a94237dfcfb29aaceb0830c1b28f72d"
+    },
+    ".agents/workflows/incident/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "1771a703ee821a394232e9733c524d73b04f6329ca814297464f0ebd8ad1f5fd"
+    },
+    ".agents/workflows/incident/incident.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "5b202c5a69f50db49a35665cefabbfc0b92991be41af86cd32403cea16f1dc53"
+    },
+    ".agents/workflows/index.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "9f0a7eca5a0b2d9797ee5ccdb8784607713bc272ce5841a06012ada4ca3a225d"
+    },
+    ".agents/workflows/list-workflows/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "fe8f6c1b44e7d15e9b21651c292a632726818557bb49b96c3237ac87b35671df"
+    },
+    ".agents/workflows/list-workflows/list-workflows.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "cc6aaecccbf3958b8274a5d2893b862279e68efadea64192561477f9f5f5fc5d"
+    },
+    ".agents/workflows/migrate/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "74fd2391d3fc6cda9347bcd90735e438c70d03307cb229ee2798fe6e9e9bb784"
+    },
+    ".agents/workflows/migrate/migrate.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2bfd2c804e509356793735b2d51c6c1d3b9af363f34e31ad86540e5b1eaf81cc"
+    },
+    ".agents/workflows/plan-review-long/01-discover-and-snapshot.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e6a19c9ee776b272227b8213b4f109c8e56944384abb377a5886b4d640f60413"
+    },
+    ".agents/workflows/plan-review-long/02-review-and-revise.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e7b95cae19be5c7f4a1ed5060abd2f7a6ac6c87dcbc01dbc6d5fdd968b5acacc"
+    },
+    ".agents/workflows/plan-review-long/03-resolve-and-finalize.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0dd128c95ad8cef558af714f91a15ad1ded8900318f0ae5d2c6eb3ab262b8f2a"
+    },
+    ".agents/workflows/plan-review-long/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "501cedee3c2b4961e216ca184483160f5df97f00eedad640b49af1f1de3e0116"
+    },
+    ".agents/workflows/plan-review-long/plan-review-long.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "abee459b7584b2eb98679e63477a2195adde30868db8df71f9c8f5b80b726ac5"
+    },
+    ".agents/workflows/plan-review-long/report-template.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d8cdece9cf3ae21758af22290e797cef7228a43672670004695d97674be83fdb"
+    },
+    ".agents/workflows/plan-review-long/review-rubric.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "94228606763215f509c2401f5feaa7cf19ae506643899751a084a930afa100b2"
+    },
+    ".agents/workflows/plan-review/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "a0f38bd3001c924c25538ed3206547cd52d89b71cd8d19d36c69a7c057a8ed94"
+    },
+    ".agents/workflows/plan-review/plan-review.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8b7b6bada7910d53c4a3decfb5c56df00169331ec72d4dc1cc4c0040eace5071"
+    },
+    ".agents/workflows/release-notes/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2a590290eaedbf98e44b5b01baae05eeb1e431e5d23fb99cf2fee0fe9f2cfdcd"
+    },
+    ".agents/workflows/release-notes/release-notes.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "b8dce70747d7087ae1fd0a01bbfd96fd529b365cf8be118d35f324881aff5ec7"
+    },
+    ".agents/workflows/release-review/00-run-protocol.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "298c5ee3c9a396c8a70d069bf760080a751c21cf8af3aee5875347df0fe1febd"
+    },
+    ".agents/workflows/release-review/01-current-state.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "b632b3635844fa34355f3a22e0f784aa5b22cb145c296a9f97d83cb60397569a"
+    },
+    ".agents/workflows/release-review/02-quality-security-edge-cases.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "ef6bff9596d915379e7a97283e6ba6ab5826bd082e36a7ae7b146331e6b61463"
+    },
+    ".agents/workflows/release-review/03-tests-regression.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "ac2af622add5dbd4dd94e32b352474225e7910e104da2e4b0efba41ba298fa68"
+    },
+    ".agents/workflows/release-review/04-docs-specs-examples.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "a34cd0933ef900fe997fa027c3090555ac0b8fdb42c4d669197a651cb305d1cd"
+    },
+    ".agents/workflows/release-review/05-feature-usability-maintainability.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c38fec1620926bd374aa6fc86d8e9ecf9786a10fc77ad7c7ef399a5ce2920054"
+    },
+    ".agents/workflows/release-review/06-compatibility-packaging-release.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e0d193f9cb3c2075bc217e55cc2aab8df94155fe0724901ef58c4cc7b65127f2"
+    },
+    ".agents/workflows/release-review/07-implementation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d297b15338f681242d2880f189b634181422b22f6bbd270a53337006787f7b6b"
+    },
+    ".agents/workflows/release-review/08-final-ship-review.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "54926ba12d6caacb49ac620c7710228cbdb58db0bbf3c4e9f0d0a4303a0f2913"
+    },
+    ".agents/workflows/release-review/09-release-execution.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "f76c9ed151ee1098dd5037bc862b3c65c186b69bef786e2187d4ef4ac100ca76"
+    },
+    ".agents/workflows/release-review/MANIFEST.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "04e55f6c31c745c2431b11b5b8819c640f2ba843ed389048ecbaf9eab233c700"
+    },
+    ".agents/workflows/release-review/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "39a5a7453da920118eaa1ad9519f6f550e733ed011dfd797edc110bd1a8aa41d"
+    },
+    ".agents/workflows/release-review/fix-decision-policy.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "ed97359acccdc32df6afbf0f675e85a0793d0ff7bf2a0cd7abdd04e9cf253d81"
+    },
+    ".agents/workflows/release-review/reference.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0837c7587d589316a05735ab48031db16df1782bac8d37b2e2b83f495ff617f3"
+    },
+    ".agents/workflows/release-review/templates/action-register.csv": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c3e3ded8d575fbc6cfd60e770825587e670b01469a29ccb8a7cdebca195bb213"
+    },
+    ".agents/workflows/release-review/templates/audit-lane-report.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d1e6199b52641e55c5c8864c49b03995e594d587d9854cc6418497f827b99c9f"
+    },
+    ".agents/workflows/release-review/templates/cold-start-orientation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "efcfa2a42af5799dab83f919ea7481cf343a85e913dd565c87465626b8983d16"
+    },
+    ".agents/workflows/release-review/templates/execution-plan.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "86d7783e7a742e957baeffabefd359ecf8c4cf8f263234ec593821d4c6b5cce6"
+    },
+    ".agents/workflows/release-review/templates/final-bug-security-audit.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c61743dc88cc96325587ee376e1f7e99dd546086ed21bda16bca595589e08d22"
+    },
+    ".agents/workflows/release-review/templates/final-response.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "90aeeaba5ecd1e2fb2892f2b85b8fbc54cb7757801945fc4e7071d75c190c8de"
+    },
+    ".agents/workflows/release-review/templates/finding-register.csv": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0ef91dde018c43f02fddb9acbb1179d3422ebc14281d90440f104c1576bad328"
+    },
+    ".agents/workflows/release-review/templates/guiding-principles-assessment.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e276874dd4403be1ce4e6d736c8d93ef3a0c4287372c3def5ee99e3f4f70bbf1"
+    },
+    ".agents/workflows/release-review/templates/implementation-plan.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2c3900c7f7d8cab36bc65c9494cfaf84bccfa69ac14f44cbd73dc1d15de58aba"
+    },
+    ".agents/workflows/release-review/templates/per-phase-report.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2f3e7845623e045da03857bb21540b48cd1132ddd50a87139dc390e6f76e730b"
+    },
+    ".agents/workflows/release-review/templates/persona-review.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "217118a05dba650044b73f57ba187f1bdc6f9247e8ea471051ee4a322f4853ef"
+    },
+    ".agents/workflows/release-review/templates/schema-validation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e69856406d689db9131a2b8fa730e2560fd873867dd14a1c1178d36f3b5668c1"
+    },
+    ".agents/workflows/release-review/templates/section-summary.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "97d42bcbfe48f9cf879929c56da01391e25496fb9cd759c7521a713fc8cad18d"
+    },
+    ".agents/workflows/release-review/templates/todo-reconciliation.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "cc97f61c50674a4555d4229b4b2be7d7fee61e433b469f39be8597494f22e8aa"
+    },
+    ".agents/workflows/scaffold/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "690111d51a4d9ce8e4cd03e885af7ca091467ed85b22d5877565c8414b159184"
+    },
+    ".agents/workflows/scaffold/scaffold.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "dc7aa204be4351b3d95b4e7c6a79526fcbb0fa01be253b3c2ff407bd69675244"
+    },
+    ".agents/workflows/setup-repo/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "3e271bb768f4aa79c7300da6990bfdec301e4d7dfee8f8e4e1dbe1b8775f44f2"
+    },
+    ".agents/workflows/setup-repo/setup-repo.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "af894e73e1529541d72588a9e68362dc9b30fd203271e67754c122f7cde09d99"
+    },
+    ".agents/workflows/setup-repo/tools/normalize_plan_names.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "5788908bebbd92e0f5b9bb4ee6335940720195edf5fafbe1025fb5be43e97ee2"
+    },
+    ".agents/workflows/setup-repo/tools/setup_tools.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0aa91a3b0c2c9a62f8e93bfe7bd83d2d84de3d5650176fcf36416dd91f81df55"
+    },
+    ".agents/workflows/spec/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "42fd432c38d56c7840425cce4ab1e3adb0ba386c81d19f79d393f906c26f8b4c"
+    },
+    ".agents/workflows/spec/spec.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2fc7e336f6ac92b4231517f876dde76d682962cf23be047dab8909a5f98ed293"
+    },
+    ".agents/workflows/templates/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e66e64b66cbc30a062dafe6f95c973a234571b29d4ccb479a50012139862506a"
+    },
+    ".agents/workflows/templates/agents-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "7bc1cdde5ef768f1d05ca8979db8cca78c42cff25815537521b08cce8a41ab7f"
+    },
+    ".agents/workflows/templates/agents-docs-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "3f98b9da291d0f4d36f1bd51ff16f2f2d2095a94d2ebb49967cb48e65735488e"
+    },
+    ".agents/workflows/templates/agents-docs-prompts-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "fd42398aa72538674ae93f9561c9843e44a21996b8a85391cc8269f85ce015c7"
+    },
+    ".agents/workflows/templates/agents-docs-research-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "8195532e291883658d4ec00a144dd57297a405df504a14ca99ba3a9cadaaa527"
+    },
+    ".agents/workflows/templates/agents-docs-specs-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "c87a4e82e737915e72317be42de62a4d9c89789644d7a662a375d9dee15ed116"
+    },
+    ".agents/workflows/templates/agents-docs-walkthroughs-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "89f46473b8d10ac2c61ab918e5c37393ca9df59dbb18e18fb0cec74c0985c591"
+    },
+    ".agents/workflows/templates/plans-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "699c8011b74b3e926628de0d6254b7f04cd79df9c24e26a7106f7a10d146be66"
+    },
+    ".agents/workflows/templates/plans-executed-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4363b9dd6495303e5318ea2fd57c3298d6f8fa8b8d5b58a0d2fe13e40abdcae6"
+    },
+    ".agents/workflows/templates/plans-not-executed-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "14b7f4d54275c493a6aa128e432d6e13992fd340a118a63fae29cfd48b30139c"
+    },
+    ".agents/workflows/templates/plans-pending-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "cfb522997535c18dd2b58f6d9545e7e708f573711f1ed4e399e61717ce1a3530"
+    },
+    ".agents/workflows/templates/plans-reusable-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "0c08d2455e0153576e50b2ca5316da79a92ed119be5206a9fff23581070c8072"
+    },
+    ".agents/workflows/templates/plans-superseded-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "e9f1bf9985522e67c1e0d0b6f9a904374367bf9d3360ab1b19c3250725075624"
+    },
+    ".agents/workflows/templates/prompts-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2aed56e8602ecff3c667ac1ffae5e55bf891775ba991547c3955ed33452c68bc"
+    },
+    ".agents/workflows/templates/prompts-executed-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "1912574247587ccd751f59c5c9bc3a6284e5276227112287379a61d6c0f17599"
+    },
+    ".agents/workflows/templates/prompts-not-executed-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2bcf328f7a2d83fd56ebb9d5f96b6652c2064b97f50588915f152f096e105db4"
+    },
+    ".agents/workflows/templates/prompts-pending-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "9ed29fb9fba14ae3c47b220fdb835a6a3049059a13fae4aaf569967ac4dcbc96"
+    },
+    ".agents/workflows/templates/prompts-reusable-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "615774e9e96d8ec5a703ebfc5b5407c4f20d4f10e06a58927b68e422b328a0af"
+    },
+    ".agents/workflows/templates/prompts-superseded-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "d6e57601b5ba18a7e8e67f8cfe24338e1e4526b1ec8932ff3a8417a79368e9e0"
+    },
+    ".agents/workflows/templates/shim-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "76e05fe3fccc7fc59ef4916e902cf68e1b7acb06483a5a055a7c626dcdb65bc7"
+    },
+    ".agents/workflows/templates/workflow-artifacts-README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "7a07617d481973c96bf163442b91f155e2ccce777d86fb4f899195ad25db6e21"
+    },
+    ".agents/workflows/verify-execution/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "2971d3a0caff6452fbe03c9de54eece574d055401dafd64de01eb6c9a205c5f0"
+    },
+    ".agents/workflows/verify-execution/verify-execution.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "74d30076b814e2b3bb3303852ca2c4e5ce255f87fe4cf84605298cbf6ee7da4f"
+    },
+    ".agents/workflows/verify/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "4331314f819cb0e4f1c6634e0c16f3c8b558e68725434bfe48beb685c337dcad"
+    },
+    ".agents/workflows/verify/tools/run_checks.py": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "5a7fd3ad59ca09100a0906900044f78f200bb62a625f51bab659143c7ceb51e1"
+    },
+    ".agents/workflows/verify/verify.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "87eff1b71cc097c11b32510cfcb710e957eb95f4cf06be8766dc3089960f6605"
+    },
+    ".agents/workflows/whatnext/README.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "84e4b9a86203a53a67eae815bae2490dd66aa978f73d6eaa55f03b77b7dbf9e8"
+    },
+    ".agents/workflows/whatnext/whatnext.md": {
+      "host": "",
+      "kind": "file",
+      "logical_id": "",
+      "sha256": "110b15a1453ef42ed35ac24278782a052dace8e9845fd11bb4f03e60efe8b510"
+    },
+    ".claude/commands/README.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "README",
+      "sha256": "76e05fe3fccc7fc59ef4916e902cf68e1b7acb06483a5a055a7c626dcdb65bc7"
+    },
+    ".claude/commands/advise.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "advise",
+      "sha256": "24bdc478d28e43c0c45a5b26f25ae8de145c58cbe12c4c6b4b07c99357578ab6"
+    },
+    ".claude/commands/assess-all.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "assess-all",
+      "sha256": "1b099c3c615a4a2b7f49831a75edfc046a31a3d1d533c01a51ddf5abf3006c54"
+    },
+    ".claude/commands/assess.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "assess",
+      "sha256": "5c02827144cafcf7d314195ef5cd8871cbe5e7cdfec3cd791f028b11bf01c4b6"
+    },
+    ".claude/commands/benchmark.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "benchmark",
+      "sha256": "d1ec66f5ca6230e8993fddc2d5b465dc7e17a06c611d245a1892eff3a1bd665f"
+    },
+    ".claude/commands/getting-started.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "getting-started",
+      "sha256": "80569ef9043e3ccec5938e2a378241a6d90353e9cfb010080adeb2f93f5d7eab"
+    },
+    ".claude/commands/handoff.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "handoff",
+      "sha256": "afda1e7ec11e3723539262495f6a22754e6c5aa58e20dabe9dad521fca41e4aa"
+    },
+    ".claude/commands/incident.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "incident",
+      "sha256": "9c934b56e47bc3afc5c9ae969769c279d253ccb768c74decc5b9aaf90870cff3"
+    },
+    ".claude/commands/list-workflows.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "list-workflows",
+      "sha256": "29a7bc8ed301943420d9e76484b0877ff917a7e9458c1dd216a2925ff9ec4250"
+    },
+    ".claude/commands/migrate.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "migrate",
+      "sha256": "aa76aae638af68c8f48a8baffc2b23cc39af3260d1effdf3bc94a3d37f6a4d30"
+    },
+    ".claude/commands/plan-review-long.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "plan-review-long",
+      "sha256": "f8057a713d3a0a848e3c26ad6446b5a0fe509a88419ea9a570c4a13a9a9e2350"
+    },
+    ".claude/commands/plan-review.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "plan-review",
+      "sha256": "dcbc74dd198032d332cc9f3576bc7867e187d1a9e92303cf8f71831322cc8a5f"
+    },
+    ".claude/commands/release-notes.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "release-notes",
+      "sha256": "d998e82e71baedea51c9cbd10dfe237472d454856a76fa0867f4461d244c88e3"
+    },
+    ".claude/commands/release-review-plan.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "release-review-plan",
+      "sha256": "fb6ca92a7271d34618304fc2da53d2b2fb8af3b58beb09cbd61e31a41ddc1cde"
+    },
+    ".claude/commands/release-review.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "release-review",
+      "sha256": "707d3660a74360f18ba0ee5fea0e1631f6b44ca992173027ed4bcc3b5896deab"
+    },
+    ".claude/commands/scaffold.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "scaffold",
+      "sha256": "c41469c9ecf0b40d3f1fbefab5ebcf9a996bfc8863d8c268db9705595805b91c"
+    },
+    ".claude/commands/setup-repo.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "setup-repo",
+      "sha256": "58bcfe5c618bc97447411872006bb27a3fc84c90500072c688d2ef29a5537c83"
+    },
+    ".claude/commands/spec.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "spec",
+      "sha256": "f7ddfc39a63f4d28e452ebf5f1efa9c3cd29005675ea524557f07131123151e6"
+    },
+    ".claude/commands/verify-execution.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "verify-execution",
+      "sha256": "7964995eeff7ed632f0e0cf85e3142288c6d9aa135e08ac97c6954504e8be6c7"
+    },
+    ".claude/commands/verify.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "verify",
+      "sha256": "8438d815d7df0695699352af5b0e7d074f6d6bb6a135bc2c8bdc52585dfb0f96"
+    },
+    ".claude/commands/whatnext.md": {
+      "host": "claude",
+      "kind": "shim",
+      "logical_id": "whatnext",
+      "sha256": "81c0a8e68e44b9c61397ea9932563eb25c64fb8ddbdda00dc1072a422812694c"
+    },
+    ".gitignore#aw:untracked": {
+      "host": "",
+      "kind": "section",
+      "logical_id": "untracked",
+      "sha256": "137d080ab29afcd42276daa8154eca0658e22fc222847dcfe50e5f1182aa0bc2"
+    },
+    ".opencode/commands/README.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "README",
+      "sha256": "76e05fe3fccc7fc59ef4916e902cf68e1b7acb06483a5a055a7c626dcdb65bc7"
+    },
+    ".opencode/commands/advise.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "advise",
+      "sha256": "f375d12e8a4ccf6f52229a48364d9d2cda32086171eadbcb3a761cb692c63b0a"
+    },
+    ".opencode/commands/assess-all.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "assess-all",
+      "sha256": "f9e0234d01030091b5c506703fd7f293648e5150c3de769d233dc64faea5afba"
+    },
+    ".opencode/commands/assess.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "assess",
+      "sha256": "e5f394f84735914688232f1f3c3ad838a157134b595a8557012701e71a5aed6e"
+    },
+    ".opencode/commands/benchmark.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "benchmark",
+      "sha256": "a15a40b80e05547957a8378f66bb5b520ecf31c6fabf47d4da8ec48079fc1181"
+    },
+    ".opencode/commands/getting-started.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "getting-started",
+      "sha256": "cec30ab4b7e281a1164a71c5843f1b81ac3769a5d3c8fe488b953ca12ae94a19"
+    },
+    ".opencode/commands/handoff.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "handoff",
+      "sha256": "ca33b447631160d8bd15a799c6afc99495cd07822ae880fb8a428380338dca97"
+    },
+    ".opencode/commands/incident.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "incident",
+      "sha256": "ae1798cad71275019c59dbda7fee6896c9945493c0c59f2f392fb2f95cc4d120"
+    },
+    ".opencode/commands/list-workflows.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "list-workflows",
+      "sha256": "da33c1ad41b246afbb9c3ed0adab141682feb52733e63c7501e0cf2cca1d6927"
+    },
+    ".opencode/commands/migrate.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "migrate",
+      "sha256": "74ccc4f5ce0a7b3354dc92d753c8642f1798cb5647b97cd79549db966b672d5e"
+    },
+    ".opencode/commands/plan-review-long.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "plan-review-long",
+      "sha256": "95d9c0274185bad970d398c16677c18641b363abb9dccab026b79292a4444174"
+    },
+    ".opencode/commands/plan-review.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "plan-review",
+      "sha256": "5ae129a2ea32b7d736201eb767c7f6769945f585a3effd72a6d64607ff077bb4"
+    },
+    ".opencode/commands/release-notes.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "release-notes",
+      "sha256": "e42f38875e6b782c4ef51fa27ef10101cc704dd25119c494a3201a787b182ea5"
+    },
+    ".opencode/commands/release-review-plan.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "release-review-plan",
+      "sha256": "e97bdce9d6eac208d6e5e29891fd92e0f6eb2de367cbe40a5d3b29106cb4347f"
+    },
+    ".opencode/commands/release-review.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "release-review",
+      "sha256": "38b4f22abf9529cae50af3be30b6d8caf4c355c791d60687b4cda81481368ecc"
+    },
+    ".opencode/commands/scaffold.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "scaffold",
+      "sha256": "9a5006f5023c94e4fb96c46475af057a22a4f5bd1432bbea6068876a6a1d0e11"
+    },
+    ".opencode/commands/setup-repo.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "setup-repo",
+      "sha256": "e69886fb36eb93d9d48bdca59b39089a2bf1fb5e2f0344a62ca49e6f0043d901"
+    },
+    ".opencode/commands/spec.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "spec",
+      "sha256": "3ca9409ceb2701d725abce2bbb100dc2ddcd0ecb953a77a1b964292938ca38f1"
+    },
+    ".opencode/commands/verify-execution.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "verify-execution",
+      "sha256": "bb2f82d89b0d8dfad6292319f1fb26f82015794c3cae569a07659ef34a935ffa"
+    },
+    ".opencode/commands/verify.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "verify",
+      "sha256": "370a98caf07b024a72b1019c135b6ee6c218b4dee9cbfd394924dbf067ed692e"
+    },
+    ".opencode/commands/whatnext.md": {
+      "host": "opencode",
+      "kind": "shim",
+      "logical_id": "whatnext",
+      "sha256": "d93fd14d8bfaf58f6318735826e80d4f413a93821b452358534ac10a55352367"
+    },
+    "AGENTS.md#aw:pointer": {
+      "host": "",
+      "kind": "section",
+      "logical_id": "pointer",
+      "sha256": "e749639f1dc2dd285801891eb7bfa7567cd23fbc114b7db9ef69429e02c6f7c0"
+    }
+  },
+  "installed_version": "1.2.1",
+  "installer": "agent-workflows",
+  "managed_sections": {},
+  "schema_version": 1
+}

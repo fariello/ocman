@@ -22,7 +22,8 @@ The review operates on the **target project**. The framework's own files and its
 
 This is an exclusion from *review scope*, not from all action:
 
-1. You still **create, write, and commit** `workflow-artifacts/release-review/<RUN_ID>/` - that is the run's own output, not a review target.
+1. You still **create and write** `workflow-artifacts/release-review/<RUN_ID>/` - that is the run's own output, not a review target.
+
 2. You **may read** prior `workflow-artifacts/release-review/<RUN_ID>/` records as input (e.g. to see what an earlier run did), but do not generate findings about them.
 3. Do not count these directories when assessing project size, structure, test coverage, documentation, or cold-start orientation. A project's `README`, `ARCHITECTURE`, tests, etc. are the project's own, not the framework's.
 4. **Self-modification guard:** never edit the framework's own files during a run. If the runbook itself seems wrong, record it as a `Q`/`DEC` note in `05-decisions.md` for the user; do not change the instructions mid-run.
@@ -241,12 +242,12 @@ These reports are part of the deliverable. They give the user a readable, audita
 
 ## Commit-between-phases policy
 
-In addition to committing meaningful tracked product changes (see Commit policy below), commit at every section boundary so the run is recoverable and the per-phase narrative is preserved:
+Run records under `workflow-artifacts/` are LOCAL-ONLY working material (gitignored; see the Commit policy and `01-current-state.md`): do NOT commit or force-add them. The section-boundary commit discipline below therefore applies to the run's TRACKED PRODUCT changes, not to the run-record tree. Still WRITE each section's per-phase report and registers to `workflow-artifacts/` at the boundary (so the run is recoverable locally and the per-phase narrative is preserved on disk); you just do not commit them.
 
-1. After completing each section, commit that section's tracked product changes (if any) as a coherent unit referencing the section's action IDs.
-2. Commit the section's per-phase report and updated registers at the boundary too, since run artifacts are committed deliverables by default. Keep them local only if the user explicitly requested local-only artifacts for this run.
+1. After completing each section, commit that section's tracked PRODUCT changes (if any) as a coherent unit referencing the section's action IDs.
+2. Write (do NOT commit) the section's per-phase report and updated registers under `workflow-artifacts/` at the boundary; they stay local-only.
 3. Never bundle changes from two different sections into one commit unless they are genuinely one logical change.
-4. Record each commit in `07-commits.md` and at the section checkpoint in `08-checkpoints.md`.
+4. Record each PRODUCT commit in `07-commits.md` and note the section boundary in `08-checkpoints.md` (these registers are themselves local-only run records).
 
 ## Core behavior
 
@@ -256,7 +257,7 @@ Section 9 (release execution: pushing, tagging, publishing, deploying) is perfor
 
 There are two distinct plan artifacts; do not conflate them. `02-execution-plan.md` is the lightweight plan of *how the review itself will run*, created early in Section 1. `implementation-plan.md` is the consolidated plan of *what fixes to make*, created after Sections 1 through 6 and before Section 7.
 
-In planning-only mode, the agent still completes Sections 1 through 6 in full, including each section's per-phase report, register updates, checkpoints, and commits (run artifacts are committed deliverables). It creates `implementation-plan.md`, then stops before Section 7 implementation and presents the plan. Planning-only mode makes no product-code changes and no Section 7 commits.
+In planning-only mode, the agent still completes Sections 1 through 6 in full, WRITING each section's per-phase report, register updates, and checkpoints to `workflow-artifacts/` as local-only working material (not committed). It creates `implementation-plan.md`, then stops before Section 7 implementation and presents the plan. Planning-only mode makes no product-code changes and no commits.
 
 Proceed autonomously through the full review. Use judgment. Do not stop for minor uncertainty. Record assumptions and proceed conservatively.
 
@@ -281,7 +282,8 @@ no separate date level. Use a timestamp run ID:
 YYYYMMDD-HHMMSS
 ```
 
-The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are committed deliverables of the review, not throwaway local notes. Do NOT add `workflow-artifacts/` to `.gitignore`. If a prior run or a stale package added `workflow-artifacts/` to `.gitignore`, remove that ignore line so the artifacts can be tracked, and record the change. Only keep run artifacts local if the user explicitly asks for that on a given run.
+The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are local-only working material of the review, not committed deliverables. Do NOT commit or force-add `workflow-artifacts/`. Do NOT remove its ignore line from `.gitignore`. Keep run records local to avoid tracking environment paths, usernames, or session details in project history.
+
 
 Required artifacts:
 
@@ -422,11 +424,12 @@ Do not paste secrets or excessive logs. Summarize long outputs and save only rel
 
 ## Commit policy
 
-Use local commits for meaningful tracked repository changes when safe. The `workflow-artifacts/release-review/<RUN_ID>/` run artifacts are committed deliverables by default: commit them alongside the run so the per-phase reports, registers, plans, and final report become part of the project history. Keep them out of commits only if the user explicitly requests local-only artifacts for that run.
+Use local commits for meaningful tracked repository changes when safe. The `workflow-artifacts/release-review/<RUN_ID>/` run artifacts are local-only working material by default: do NOT commit them. Keep them out of commits so machine-specific paths, usernames, and session details are not tracked in project history.
 
 Before any commit, run `git status --short`, confirm the files to commit were changed by this run, avoid committing unrelated pre-existing changes, and run appropriate validation first or state why validation could not be run.
 
-Commit at logical checkpoints: after run setup (including the initialized `workflow-artifacts/release-review/<RUN_ID>/` artifacts), at each section boundary (per-phase report plus that section's product changes), after coherent implementation batches, after test/docs/CI updates when they form a reviewable unit, and after final validation cleanup. Keep run-artifact commits separate from product-code commits when practical so history stays readable.
+Commit at logical checkpoints: at each section boundary when product changes are made, after coherent implementation batches, after test/docs/CI updates when they form a reviewable unit, and after final validation cleanup. Never force-add or commit `workflow-artifacts/` run records.
+
 
 Use commit messages that reference action IDs. If changes cannot be separated from pre-existing user changes, do not commit. Record the blocker.
 

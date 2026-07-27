@@ -6,10 +6,21 @@ Establish review scope, project rules, evidence, and the pre-review plan state.
 
 ## 1. Build the scope ledger
 
-List every requested candidate plan and mark it:
+The ledger contains ONLY the plans explicitly named in the invocation, plus any
+that the project's own documented eligibility rules add. Do NOT enumerate other
+plans in the repository (e.g. everything in `pending/` or `executed/`) to build
+the ledger. A "candidate" is a ledger entry: an explicitly named target, or a
+plan a documented eligibility rule adds. A plan that was never a candidate is an
+"incidental file" and MUST NOT appear in the ledger or the final report.
+
+Mark each candidate:
 
 - `ELIGIBLE` - review it.
-- `NOT REVIEWED` - skip it and record the exact reason.
+- `NOT REVIEWED` - a candidate skipped, with the exact reason (missing,
+  unreadable, malformed beyond review, not a planning document, or wrong status
+  per project rules). NOT REVIEWED NEVER lists a plan that was never a candidate;
+  if the ledger is exactly the requested target(s) and none were skipped, the
+  final NOT REVIEWED section is `(none)`.
 
 Use project eligibility and status rules when they exist. Otherwise review an
 explicitly requested plan unless it is missing, unreadable, malformed beyond

@@ -163,8 +163,8 @@ sharing. The tool makes no network calls; sharing is always the user's explicit 
 
 ## Run record
 
-Create `workflow-artifacts/benchmark/<RUN_ID>/` (RUN_ID = local-time `YYYYMMDD-HHMMSS`), a
-committed deliverable. Write:
+Create `workflow-artifacts/benchmark/<RUN_ID>/` (RUN_ID = local-time `YYYYMMDD-HHMMSS`),
+local-only working material (gitignored; do NOT commit or force-add it). Write:
 
 - `environment.json` - the full `bench_env.py --format json` capture (the context).
 - `results.json` - per-benchmark, per-iteration timings/throughput/metrics, the iteration
@@ -175,7 +175,8 @@ committed deliverable. Write:
   flagged (e.g. "measured on an NFS working set; treat I/O numbers as indicative").
 - optionally a scrubbed copy for sharing (`report.scrubbed.md` / `environment.scrubbed.json`).
 
-Do not git-ignore `workflow-artifacts/`. Keep the record local only if the user asks.
+`workflow-artifacts/` is gitignored by default (local-only working material); do NOT commit or force-add it.
+
 
 ## Required report format (to the user)
 

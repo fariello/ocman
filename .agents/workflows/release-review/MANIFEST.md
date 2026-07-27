@@ -114,6 +114,7 @@ workflow-artifacts/release-review/<RUN_ID>/
   audit-lanes/               (optional parallel read-only audit lane reports)
 ```
 
-The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are committed deliverables of the review by default: the per-phase reports, registers, plans, and final report should be tracked and committed with the run so the project keeps a durable, auditable record. Do not git-ignore `workflow-artifacts/`. Keep artifacts local only if the user explicitly asks for local-only artifacts on a given run.
+The `workflow-artifacts/release-review/<RUN_ID>/` artifacts are local-only working material by default. Do NOT commit or force-add `workflow-artifacts/`. Keep `workflow-artifacts/` gitignored so machine-specific paths, usernames, and session details are not tracked in project history.
+
 
 The review applies the Fix Bar (see `00-run-protocol.md`): findings are fixed by default and deferred only when the Remediation Risk of the fix itself is Medium-High or higher (complexity, usability, security, or functionality). Severity is for reporting; Remediation Risk is for deciding.

@@ -44,11 +44,20 @@ Re-read this before each step and before the final report:
 Complete this before judging or editing a plan.
 
 ### 0.1 Build the review-scope ledger
-List every plan explicitly requested or selected by the project workflow.
+The ledger contains ONLY the plans explicitly named in the invocation, plus any
+that the project's own documented eligibility rules add. Do NOT enumerate other
+plans in the repository (e.g. everything in `pending/` or `executed/`) to build
+the ledger. A "candidate" is a ledger entry: an explicitly named target, or a
+plan a documented eligibility rule adds. A plan that was never a candidate is an
+"incidental file" and MUST NOT appear in the ledger or the final report.
 
-Classify each as:
+Classify each candidate as:
 - `ELIGIBLE` - review it.
-- `NOT REVIEWED` - skip it, with the exact reason.
+- `NOT REVIEWED` - a candidate skipped, with the exact reason (missing,
+  unreadable, malformed beyond review, not a planning document, or wrong status
+  per project rules). NOT REVIEWED NEVER lists a plan that was never a candidate.
+  If the ledger is exactly the requested target(s) and none were skipped, the
+  final NOT REVIEWED section is `(none)`.
 
 Use project eligibility and status rules when present. Otherwise review an
 explicitly requested plan unless it is missing, unreadable, malformed beyond
@@ -56,7 +65,7 @@ review, or not a planning document.
 
 A file referenced only as evidence is not in scope unless explicitly added.
 
-The final enumeration MUST contain every ledger item and no incidental file.
+The final enumeration MUST contain every ledger CANDIDATE and no incidental file.
 
 ### 0.2 Discover controlling instructions
 Read the applicable repository and directory-scoped instructions, guiding
@@ -213,6 +222,9 @@ Use plain language. Define acronyms and identifiers. Ask and wait before the
 final report. Do not guess or bury the recommendation. Present this whole six-part
 question set INSIDE the interactive prompt itself, so a human answering from the prompt
 can decide from the prompt alone (GUIDING_PRINCIPLES P12); do not strand it in chat.
+The "Options" item is satisfied by the interactive tool's rendered CHOICES: supply the
+options AS the tool's answer options, and do NOT also restate or preview them in the
+composed context prose (P12).
 
 After each answer:
 1. Record it in the owning plan.
@@ -244,6 +256,13 @@ For each reviewed plan confirm:
   the hard-MUST "paste the actual runner output" honesty rule, path-scoped commit and
   never-push, and the lifecycle move). If any element is missing, ADD it as an in-place
   revision and record it as a finding.
+- For an agent-EXECUTABLE plan (an IPD or similar with actionable steps), the CREATOR authored
+  BOTH the top execution checklist AND the end verification/cross-check checklist, and you (the
+  REVIEWER) have assessed both: the execution checklist covers every required action, decision,
+  deliverable, and validation; the verification checklist maps 1:1 to it and demands CONCRETE
+  per-item evidence; and it is specific enough to catch an agent claiming completion without
+  having done every step. A missing or weak checklist is an UNDER-SCOPE finding you ADD or
+  strengthen in place (like the execution-contract rule above).
 
 If the project uses `Status`, set it to `reviewed` unless its contract requires
 another review-complete value.
@@ -335,6 +354,9 @@ Verify the plan states:
 - An execution contract in the gate: resolved open questions, a scope fence, the hard-MUST
   honesty rule (paste the actual runner output), path-scoped commit and never-push, and the
   lifecycle move.
+- For an agent-executable plan: BOTH a top execution checklist AND an end verification/cross-check
+  checklist that maps 1:1 with concrete per-item evidence. A weak or absent verification checklist
+  (one that could let an agent claim completion without doing every step) is an UNDER-SCOPE finding.
 
 Another qualified agent or developer must be able to execute the plan without
 inventing missing architecture.
@@ -402,7 +424,7 @@ ELIGIBLE:
 - <plan file>
 
 NOT REVIEWED:
-- <plan file>: <reason>
+- <plan file>: <reason>   # skipped CANDIDATES only; `- (none)` if none were skipped. Never list a plan that was never a candidate.
 
 ### Findings
 | ID | Severity | Scope | Area | Evidence | Finding | Remediation Risk | Decision | Resolution |
@@ -433,7 +455,7 @@ REVIEWED:
   Required next step: <approval | decision | replan | other>.
 
 NOT REVIEWED:
-- `<plan file>`: <exact reason>.
+- `<plan file>`: <exact reason>.   # skipped CANDIDATES only; `- (none)` if none were skipped. Never enumerate plans that were never candidates (e.g. the executed/ dir).
 ```
 
 The `### Plans reviewed and not reviewed` section MUST be the literal final

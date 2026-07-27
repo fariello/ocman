@@ -73,7 +73,8 @@ workflow-artifacts/verify/<RUN_ID>/
   WHY (denied / unclassified / declined / timed-out / no-checks-found), and the honest
   bottom line.
 
-These are committed deliverables (evidence), like release-review's and assess's records.
+These are local-only working records (evidence), like release-review's and assess's records.
+
 
 ## Honesty requirement (non-negotiable)
 

@@ -31,7 +31,9 @@ For each question provide:
 
 Use plain language. Define acronyms and identifiers. Do not guess. Present this whole
 six-part question set INSIDE the interactive prompt itself, so a human can decide from the
-prompt alone (GUIDING_PRINCIPLES P12); do not strand it in chat.
+prompt alone (GUIDING_PRINCIPLES P12); do not strand it in chat. The "Options" item is
+satisfied by the interactive tool's rendered CHOICES: supply the options AS the tool's answer
+options, and do NOT also restate or preview them in the composed context prose (P12).
 
 After each answer:
 
@@ -58,7 +60,12 @@ For each reviewed plan confirm:
 - resolved decisions are written into the plan;
 - required spec and documentation work is included;
 - tests and validation cover affected invariants;
-- the plan does not claim implementation.
+- the plan does not claim implementation;
+- for an agent-executable plan, the CREATOR authored BOTH the top execution checklist AND the end
+  verification/cross-check checklist, and you (the REVIEWER) assessed both (execution covers every
+  action/decision/deliverable/validation; verification maps 1:1 with concrete per-item evidence and
+  is specific enough to catch a false completion claim). A missing/weak checklist is an UNDER-SCOPE
+  finding you add or strengthen in place.
 
 Apply the project's review-complete status. If it uses `Status`, set `reviewed`
 unless the contract requires another value.

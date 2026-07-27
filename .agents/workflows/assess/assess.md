@@ -134,10 +134,8 @@ Then read the selected lens file and adopt its focus, lead personas, and rubric.
    proposed N changes`.
 6. **Write the run record** to `workflow-artifacts/assess-<concern>/<RUN_ID>/` (see the
    next section) so the report and evidence are durable, not just shown in chat.
-7. **Commit** the IPD and the run record, and NEVER push (commit-only; no remote changes).
-   They are committed deliverables by default (the same policy as release-review; keep
-   local only if the user asks). Do not commit unrelated changes; run `git status --short`
-   first.
+7. **Commit** the IPD, and NEVER push (commit-only; no remote changes). The IPD is a committed proposal. The run record in `workflow-artifacts/` is local-only working material (gitignored by default; do not commit or force-add it). Do not commit unrelated changes; run `git status --short` first.
+
 8. **Report and stop.** Present the report (below) to the user, ending with the shared
    closing report (`templates/closing-report.md`): the artifact paths CREATED (the IPD and
    the run record), or - if the assessment proposed no IPD - that NONE was created and WHY,
@@ -181,9 +179,9 @@ Use a timestamp run ID (`YYYYMMDD-HHMMSS`); the workflow name is the concern
 | `evidence.md` | What was inspected (files/paths/commands run) so the assessment is reproducible; note any content that was truncated/sampled. |
 | `ipd-link.md` | The path to the IPD this run wrote, and a one-line summary, so the run record and the plan cross-reference each other. |
 
-The `workflow-artifacts/` directory is a committed deliverable and is out of review
-scope (never assess it as if it were the project). Do not git-ignore it. Keep the run
-record local only if the user explicitly asks for local-only artifacts.
+The `workflow-artifacts/` directory contains local-only working material and is out of review
+scope (never assess it as if it were the project). It is gitignored by default; do not commit or force-add it.
+
 
 Distinction: the **IPD** (in the pending-plans dir) is the living proposal that moves
 through the approval/execution lifecycle; the **run record** (in `workflow-artifacts/`)

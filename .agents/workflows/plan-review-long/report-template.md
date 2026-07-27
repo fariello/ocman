@@ -13,7 +13,7 @@ ELIGIBLE:
 - <plan file>
 
 NOT REVIEWED:
-- <plan file>: <reason>
+- <plan file>: <reason>   # skipped CANDIDATES only; `- (none)` if none were skipped. Never list a plan that was never a candidate.
 
 ### Findings
 
@@ -49,13 +49,13 @@ REVIEWED:
   Required next step: <human approval | decision | replan | other>.
 
 NOT REVIEWED:
-- `<plan file>`: <exact reason>.
+- `<plan file>`: <exact reason>.   # skipped CANDIDATES only; `- (none)` if none were skipped. Never enumerate plans that were never candidates (e.g. the executed/ dir).
 ```
 
 Rules:
 
 - One row per distinct root-cause finding.
 - Use only the listed Decision values.
-- Include every scope-ledger item.
+- Include every scope-ledger item. (The ledger holds only candidates - named targets + documented-eligibility additions - so this never means enumerating the whole pending/ or executed/ dir.)
 - The `### Plans reviewed and not reviewed` section is the final output.
 - Print nothing after it.
