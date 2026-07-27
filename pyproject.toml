@@ -49,7 +49,11 @@ exclude = [
     "opencode.json",
     "opencode.jsonc",
     ".agents/",
+    ".opencode/",
+    ".claude/",
     "workflow-artifacts/",
+    "tests/",
+    "dist/",
 ]
 
 # Coverage measurement (opt-in; not gated in CI). Run:

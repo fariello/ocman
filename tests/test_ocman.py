@@ -1138,6 +1138,36 @@ def test_pending_clear_all(temp_db, monkeypatch):
     assert _cli.load_pending() == []
 
 
+def test_pending_run_keeps_declined_item(temp_db, monkeypatch, capsys):
+    """PA-07 (drain declined branch): if a re-confirm is declined (the delete path raises
+    RecoveryError), the item is KEPT for a later attempt, not dropped."""
+    import ocman.cli as _cli
+    _cli.add_pending_item(_cli._make_pend_item("db-clean", "", args={"days": 30}))
+    _running_none(monkeypatch)
+    # Simulate the per-item re-confirm being declined inside the delete path.
+    def _decline(*a, **k):
+        raise RecoveryError("declined at re-confirm")
+    monkeypatch.setattr(_cli, "db_run_cleanup", _decline)
+    _cli.cli_pending("run", assume_yes=False)
+    out = capsys.readouterr().out.lower()
+    assert "keeping it pending" in out
+    assert len(_cli.load_pending()) == 1  # kept, not drained
+
+
+def test_pending_guard_p_choice_adds_to_list(temp_db, monkeypatch):
+    """PA-03 (interactive [p] branch): at a TTY, answering 'p' to the running-guard adds the item to
+    the pending list and returns the 'pended' sentinel (the caller then records-and-exits)."""
+    import ocman.cli as _cli
+    _running_some(monkeypatch)
+    monkeypatch.setattr("sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *a, **k: "p")
+    item = _cli._make_pend_item("session-delete", "ses_x", args={"session_ids": ["ses_x"]})
+    result = _cli.require_safe_to_mutate("delete session ses_x", interactive=True,
+                                         pend_item=item, pend=False)
+    assert result == "pended"
+    assert len(_cli.load_pending()) == 1
+
+
 @pytest.mark.real_process_detection
 def test_import_is_guarded_when_running(temp_db, tmp_path, monkeypatch):
     """Coverage: a newly-guarded mutator (session import) refuses while OpenCode runs."""
@@ -2707,7 +2737,7 @@ def test_fmt_int_and_fmt_cost():
 
 # OS-appropriate absolute home dir for the global-mapping tests (Windows:
 # drive-anchored so str(Path.cwd()) matches the stored session directory).
-_HOME_DIR = abs_path("/home/gfariello")
+_HOME_DIR = abs_path("/home/testuser")
 
 
 def _seed_global_and_project(temp_db):

@@ -25,7 +25,9 @@ A staged prompt produces RESULTS. Keep them apart:
 - Its RESULTS (the durable research/analysis you rely on) are filed under
   `.agents/docs/research/<topic>/` (see `.agents/docs/research/README.md`).
 
-This separation follows the filesystem-encoded-state principle (GUIDING_PRINCIPLES P5, DECISIONS D91):
+This separation follows the filesystem-encoded-state principle (the agent-workflows Guiding
+Principles, "Externalize state; do not trust memory" (P5); mirrored in ocman's own
+`GUIDING_PRINCIPLES.md` P5):
 the prompt's lifecycle is glanceable from its directory; the results are durable, path-cited artifacts.
 
 ## The lifecycle

@@ -60,15 +60,24 @@ This is a small behavior change but needs its own IPD + tests (config load order
 vs `--db`, and interaction with the test-suite rebinding). Promote to a code IPD if wanted;
 until then there is no env override for the config-file path.
 
-## workflow-artifacts leak sanitization: TO REMEDIATE
+## workflow-artifacts / maintainer-identity leak sanitization: PARTIALLY REMEDIATED
 
-`aw sanitize` reports about 8,472 findings inside `workflow-artifacts/` run records: home paths
-(`/home/<user>/...`), the maintainer username/handle, and some session ids. `workflow-artifacts/`
-is now gitignored (commit 50774d9) so future re-adds stay untracked, and these files are not in
-this repo's committed git history. Remaining work: confirm nothing sensitive from run records ever
-reached committed history (a full `aw sanitize` over tracked files + git history), and keep run
-records local only going forward. A framework-level fix was requested via a comms task to
-agent-workflows (flip the "committed deliverable" default, add the gitignore in setup-repo).
+`aw sanitize` reports home paths (`/home/<user>/...`), the maintainer username/handle, and some
+session ids inside `workflow-artifacts/` run records. `workflow-artifacts/` is now gitignored (commit
+50774d9) so future re-adds stay untracked.
+
+Done (release-review 2026-07-26): the WORKING TREE was scrubbed of the real home path: the
+`tests/test_ocman.py` `_HOME_DIR` constant and the 37 tracked `.agents/` docs/plans that contained it
+now use a neutral placeholder, and the sdist no longer ships `tests/` (see the packaging item below),
+so the PyPI artifacts are clean.
+
+Still open (operator action, NOT done in release-review): the prior release-review run committed its
+`workflow-artifacts/` records to git BEFORE the gitignore, so the real home path remains in this
+repo's COMMITTED GIT HISTORY (about 14 commits) even though those files were later removed from the
+tree. Purging it requires a history rewrite (`git filter-repo`/BFG), which rewrites shared history and
+breaks existing clones/forks, so it is a deliberate, separately-scheduled maintainer decision. A
+framework-level fix was also requested via a comms task to agent-workflows (flip the "committed
+deliverable" default, add the gitignore in setup-repo).
 
 ## Persistent TUI pending-actions banner: CONSIDER
 
@@ -77,8 +86,14 @@ tab in the TUI, but not as an always-visible count in the TUI chrome. Consider a
 banner or footer indicator showing the pending count, mirroring the CLI `[NOTIC] X items pending`
 reminder.
 
-## CI: bump Node 20 GitHub Actions: CONSIDER
+## CI: bump Node 20 GitHub Actions: DONE (2026-07-26)
 
-CI runs emit a deprecation warning that `actions/checkout@v4` and `actions/setup-python@v5` target
-Node 20 and are being forced onto Node 24. Bump those actions to versions that run on Node 24
-natively to silence the warning and stay current. Non-blocking; CI is green.
+Bumped `actions/checkout@v4` -> `@v5` and `actions/setup-python@v5` -> `@v6` (Node-24-native) to
+clear the deprecation warning. Was non-blocking; done during release-review.
+
+## Packaging: sdist hygiene: DONE (2026-07-26)
+
+The source distribution was shipping about 4.4MB of unrelated content: the local `.opencode/`
+runtime dir (1430 files, including a vendored `node_modules`), `.claude/`, and `tests/`. The sdist
+exclude list now also excludes `.opencode/`, `.claude/`, `tests/`, and `dist/`, so the tarball
+carries only ocman source. The wheel was already minimal (packages = ocman, ocman_tui).

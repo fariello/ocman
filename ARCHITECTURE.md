@@ -90,6 +90,15 @@ UI updates from those threads are marshalled back onto the Textual event loop wi
   `DEFAULT_CONFIG`. Precedence is Defaults < config file < CLI arguments.
 - **`ocman_history.json`**: an append-only sidecar ledger of cleanup/deletion/recovery runs,
   surfaced as per-run and grand-total activity logs.
+- **`ocman_pending.json`** (next to `ocman_history.json`): the pending-actions manifest for
+  destructive delete-family actions deferred while OpenCode is running. A schema-versioned object
+  (`{"schema": 1, "items": [...]}`); each item carries an `id`, an `action` from a fixed allowlist
+  (`session-delete`, `project-delete`, `db-clean`, `db-clean-orphans`), a `target`, a `snapshot`,
+  `args`, and provenance (`queued_at`, `queued_from_cwd`). Written atomically (temp file +
+  `os.replace`) and serialized across concurrent ocman processes with an `flock` lockfile. A
+  missing, empty, corrupt, or unknown-schema file loads as an empty list rather than crashing;
+  malformed items are dropped. On drain the manifest never runs blindly: each item is re-resolved
+  against the current database, re-previewed, and re-confirmed.
 
 ## Cross-cutting design patterns
 

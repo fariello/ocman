@@ -379,3 +379,47 @@ Both commands share one hardened signalling model:
 
 Full rationale: `.agents/plans/executed/20260720-2006-01-reconnect-ipd.md` and
 `.agents/plans/executed/20260720-2350-01-kill-ipd.md`.
+
+## 2026-07-26: defer destructive cleanups via a pending manifest (instead of only refusing)
+
+### Context
+
+OpenCode has no cross-process session lock (confirmed against the opencode repo), so mutating the
+shared SQLite database or its files while an instance is running can corrupt state. ocman already
+refused destructive delete-family actions (`session delete`, `project delete`, `db clean`,
+`db clean-orphans`) while OpenCode was running. Refusing is safe but forces the user to either kill
+every OpenCode or remember to re-run the action later, which is friction and a recipe for forgotten
+cleanups.
+
+### Decision
+
+Add an opt-in "add to pending list" path alongside refuse-or-force:
+
+- **Opt-in per caller.** The shared guard `require_safe_to_mutate(...)` gains a `pend_item`/`pend`
+  contract. Only the four deferrable delete-family callers pass a `pend_item`; the other five
+  mutation callers keep the exact prior refuse-or-force behavior and the historical `-> None`
+  contract. No blanket deferral of every mutation.
+- **Where.** At a TTY the running-guard offers `[p]` "add to the pending list"; non-interactively
+  `--pend` does the same. The action is recorded, NOT performed.
+- **Manifest.** `ocman_pending.json` next to the history ledger: schema-versioned, atomic write,
+  `flock`-serialized, corruption-tolerant (see ARCHITECTURE.md Data contracts).
+- **Never run blindly on drain.** `ocman pending run` refuses while OpenCode is still up (override
+  `--while-running`), then for each item re-resolves the target against the CURRENT database,
+  re-previews, and re-confirms before deleting. Vanished targets are skipped and dropped; declined
+  or errored items are kept for a later attempt. `list` shows the queue (flagging vanished targets);
+  `clear` discards.
+- **Reminder.** Every ocman run prints `[NOTIC] X item(s) pending` (suppressed for `--json` and the
+  `pending` command itself); the TUI shows the count and a Pending tab.
+
+### Rejected alternatives
+
+- Auto-drain the pending list as soon as no OpenCode is running: rejected on the functionality axis
+  as a surprise-destruction risk (a delete the user queued days ago should not fire silently); a
+  drain is always explicit and re-confirmed.
+- Defer every mutating action (rename, move, db rebase, reclaim) in the first cut: rejected on the
+  complexity axis; each needs its own staleness semantics at drain. Scoped to the delete-family
+  first; the rest are noted as future work in `TODO.md`.
+- Trust the recorded item verbatim at drain: rejected; a manifest is on-disk state that can go stale
+  or be edited, so the drain re-resolves and re-confirms rather than replaying blindly.
+
+Full rationale: `.agents/plans/executed/20260725-2325-01-pending-actions-ipd.md`.

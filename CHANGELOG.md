@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-07-21
+
 ### Added
 - **Pending-actions list for cleanups blocked while OpenCode is running.** When a delete-family
   action (`session delete`, `project delete`, `db clean`, `db clean-orphans`) is refused because
@@ -12,16 +14,6 @@
   re-previews, and re-confirms each action against the current database before deleting (vanished
   targets are skipped; declined items are kept). The TUI shows the count and a Pending tab. The
   manifest lives at `~/.local/share/opencode/ocman_pending.json`.
-
-### Changed
-- **CLI self-documentation.** `ocman filter` renamed to **`ocman focus`** ("narrow a recovery doc
-  to one topic"); `filter` still works as a hidden alias. Bare `ocman` with non-interactive stdin
-  now prints the session listing and exits 0 instead of prompting and crashing on EOF. `ocman db
-  info` against a missing database now fails loud (exit 1) with an actionable message. Added `-h`
-  examples to high-traffic subcommands, de-jargoned `db rebase` help, and added next-step hints to
-  empty-result messages.
-
-### Added
 - **`ocman kill` accepts a PID.** A bare all-digits argument to `ocman kill` is now treated as a
   process id and killed directly (rejected before any action if the PID is gone, owned by another
   user, or is not an opencode process); non-digit arguments remain a case-insensitive
@@ -29,10 +21,6 @@
 - **Enriched `kill` confirm/choose preview.** Before killing, `ocman kill` now shows PID, Kind,
   Uptime, Project, and the attributed Session (with provenance) per target, plus a Listener/Auth
   line when that instance serves a control server.
-
-## [1.3.0] - 2026-07-21
-
-### Added
 - **`ocman doctor` now checks for insecure/exposed opencode servers.** The routine read-only
   checkup gains a "Listening opencode servers" check: an unauthenticated control server is an
   ERROR, a network-exposed (non-loopback) bind is a WARN, authed-loopback/none is OK, with the
@@ -80,6 +68,12 @@
     empty match emits a well-formed empty payload and exits 0, so it stays scriptable).
 
 ### Changed
+- **CLI self-documentation.** `ocman filter` renamed to **`ocman focus`** ("narrow a recovery doc
+  to one topic"); `filter` still works as a hidden alias. Bare `ocman` with non-interactive stdin
+  now prints the session listing and exits 0 instead of prompting and crashing on EOF. `ocman db
+  info` against a missing database now fails loud (exit 1) with an actionable message. Added `-h`
+  examples to high-traffic subcommands, de-jargoned `db rebase` help, and added next-step hints to
+  empty-result messages.
 - **`ls <ARG>` now falls back to a session filter instead of erroring.** Previously,
   `list sessions <ARG>` where `<ARG>` did not resolve to a project printed "No matches
   found" and exited non-zero. Now it keeps the existing project-scope PRECEDENCE (if
