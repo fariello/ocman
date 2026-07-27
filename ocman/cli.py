@@ -6015,6 +6015,7 @@ def _legacy_defaults(config: dict) -> dict:
         "run_reconnect": False,
         "run_kill": False,
         "kill_pattern": None,
+        "no_tty": False,
         "all_users": False,
         "probe": False,
         "while_running": False,
@@ -6512,6 +6513,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Show what would be killed without acting.")
     sp.add_argument("-9", "--force", dest="force", action="store_true",
                     help="Escalate to SIGKILL if SIGTERM does not stop it.")
+    sp.add_argument("--no-tty", dest="no_tty", action="store_true",
+                    help="Target all own-user instances without a controlling terminal (batch reap).")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
 
     # 'ocman rename SPEC to "New title"' (top-level sugar for 'session rename').
@@ -7004,6 +7007,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["dry_run"] = bool(g("dry_run", False))
         out["force"] = bool(g("force", False))
         out["yes"] = bool(g("yes", False))
+        out["no_tty"] = bool(g("no_tty", False))
 
     elif group == "info":
         out["info"] = True
@@ -7964,12 +7968,25 @@ def detect_running_opencode_status(verbosity: int = 0, *, broad: bool = False,
     return (("some" if procs else "none"), procs)
 
 
+def _instance_tty(inst: dict) -> str:
+    """Return raw TTY string for a running instance dict (e.g. 'pts/3', '?', or '')."""
+    val = inst.get("tty")
+    if val is None:
+        return ""
+    return str(val).strip()
+
+
+def _is_detached(inst: dict) -> bool:
+    """Return True if the instance is not attached to a live controlling terminal."""
+    return _instance_tty(inst) in ("?", "??", "")
+
+
 def _render_running_opencode(procs: list[dict]) -> str:
     """Human-readable block describing running opencode processes for the lock error."""
     n = len(procs)
     lines = [f"{n} opencode process(es) are running:"]
     for p in procs:
-        tty = p["tty"] if p["tty"] not in ("?", "??", "") else "no tty"
+        tty = "no tty" if _is_detached(p) else _instance_tty(p)
         row = f"  PID {p['pid']}  tty {tty}  up {p['elapsed']}  started {p['started']}"
         if p.get("cwd"):
             row += f"  cwd {p['cwd']}"
@@ -12680,28 +12697,52 @@ def _kill_target_for_pid(pid: int, *, verbosity: int = 0) -> list[dict]:
 
 
 def cli_kill(*, pattern: str | None = None, assume_yes: bool = False,
-             dry_run: bool = False, force: bool = False, verbosity: int = 0) -> None:
+             dry_run: bool = False, force: bool = False, no_tty: bool = False,
+             verbosity: int = 0) -> None:
     """`ocman kill [PID|PATTERN]`: stop the opencode running in this dir, matching PATTERN, or with
     the given PID. WITHOUT relaunching. Own-user only, Linux-only. SIGTERM by default; --force adds
     SIGKILL. An all-digits argument is treated as a PID (not a substring filter).
     """
     interactive = sys.stdout.isatty()
     cwd = str(Path.cwd())
-    try:
-        # KB-01: a bare all-digits arg is a PID, not a PATTERN.
-        if pattern is not None and pattern.isdigit():
-            targets = _kill_target_for_pid(int(pattern), verbosity=verbosity)
-        else:
-            targets = _kill_targets(cwd, pattern, verbosity=verbosity)
-    except RunningDetectionError as e:
-        die(f"Cannot kill: {e} (kill is Linux-only).")
+    if no_tty:
+        if pattern is not None:
+            die("--no-tty selects by terminal state; do not also pass a PID or PATTERN.")
+        try:
+            instances = detect_running_instances(all_users=False, verbosity=verbosity)
+        except RunningDetectionError as e:
+            die(f"Cannot kill: {e} (kill is Linux-only).")
+        my_uid = os.getuid() if hasattr(os, "getuid") else None
+        targets = []
+        for it in instances:
+            pid = it.get("pid")
+            if my_uid is not None and pid is not None:
+                try:
+                    if os.stat(f"/proc/{pid}").st_uid != my_uid:
+                        continue
+                except OSError:
+                    continue
+            if _is_detached(it):
+                targets.append(it)
+    else:
+        try:
+            # KB-01: a bare all-digits arg is a PID, not a PATTERN.
+            if pattern is not None and pattern.isdigit():
+                targets = _kill_target_for_pid(int(pattern), verbosity=verbosity)
+            else:
+                targets = _kill_targets(cwd, pattern, verbosity=verbosity)
+        except RunningDetectionError as e:
+            die(f"Cannot kill: {e} (kill is Linux-only).")
 
     if not targets:
-        where = f"matching {pattern!r}" if pattern else f"running under {cwd}"
-        print(color_yellow(f"{info_prefix()} No opencode instance {where}."))
+        if no_tty:
+            print(color_yellow(f"{info_prefix()} No detached opencode instances (all are attached to a terminal)."))
+        else:
+            where = f"matching {pattern!r}" if pattern else f"running under {cwd}"
+            print(color_yellow(f"{info_prefix()} No opencode instance {where}."))
         return
 
-    if len(targets) == 1:
+    if no_tty or len(targets) == 1:
         to_kill = targets
     else:
         print(color_bold("Multiple opencode instances:"))
@@ -12838,14 +12879,13 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
     print(color_bold(f"Running OpenCode instances ({len(instances)}, {scope}):"))
     # The Session column is speculative (a TUI's -s ses_... argv can be stale), and it
     # makes the row very wide, so it is shown only with --long.
-    header = ["PID", "User", "Uptime", "Kind", "Listener", "Auth?", "Project"]
-    align = ["r", "l", "r", "l", "l", "l", "l"]
+    header = ["PID", "User", "TTY", "Uptime", "Kind", "Listener", "Auth?", "Project"]
+    align = ["r", "l", "l", "r", "l", "l", "l", "l"]
     if long_output:
         header.append("Session")
         align.append("l")
-    # Same table look as `ocman doctor`: round-header, tight padding, bold header
-    # (color-gated so NO_COLOR / non-TTY stays plain).
-    table = vistab.Vistab(style="round-header", padding=0, header=header)
+    # Compact borderless table (style='none') to save horizontal space.
+    table = vistab.Vistab(style="none", padding=0, header=header)
     table.set_color(_color_enabled())
     if _color_enabled():
         table.set_header_style(bold=True)
@@ -12855,7 +12895,8 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
             listener = f"{listener} (NON-LOOPBACK)"
         # Prefer the actual working directory (recognizable) over the project id-hash.
         proj = it.get("cwd") or it.get("project") or "?"
-        row = [str(it["pid"]), it.get("user", "?"), it["elapsed"], it["kind"],
+        tty_cell = "no tty" if _is_detached(it) else _instance_tty(it)
+        row = [str(it["pid"]), it.get("user", "?"), tty_cell, it["elapsed"], it["kind"],
                listener, _auth_cell(it["auth"]), proj]
         if long_output:
             row.append(_sess_str(it["session"]))
@@ -16351,6 +16392,7 @@ def _run_main() -> None:
             assume_yes=getattr(args, "yes", False),
             dry_run=getattr(args, "dry_run", False),
             force=getattr(args, "force", False),
+            no_tty=getattr(args, "no_tty", False),
             verbosity=verbosity,
         )
         return

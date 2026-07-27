@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+- **`list running`/`lr` surfaces controlling TTY and uses borderless layout.** `ocman list running` now displays a `TTY` column (showing e.g. `pts/3` or `no tty` when detached) right after `User`, and uses a borderless table layout to save horizontal space.
+- **`ocman kill --no-tty` reaps detached instances.** Adds a `--no-tty` flag to `ocman kill` that targets all own-user OpenCode instances without an active controlling terminal as a single batch (single preview + confirm, non-interactive friendly). Mutually exclusive with a PID or PATTERN positional.
+
 ## [1.3.0] - 2026-07-21
 
 ### Added

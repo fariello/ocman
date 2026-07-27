@@ -5501,6 +5501,134 @@ def test_kill_by_pid_dry_run_zero_side_effects(monkeypatch, capsys):
     assert "PID 321" in out
 
 
+def test_is_detached_and_instance_tty():
+    assert ocman.cli._instance_tty({"tty": "pts/3"}) == "pts/3"
+    assert ocman.cli._instance_tty({"tty": " ? "}) == "?"
+    assert ocman.cli._instance_tty({"tty": None}) == ""
+    assert ocman.cli._instance_tty({}) == ""
+
+    assert ocman.cli._is_detached({"tty": "?"}) is True
+    assert ocman.cli._is_detached({"tty": "??"}) is True
+    assert ocman.cli._is_detached({"tty": ""}) is True
+    assert ocman.cli._is_detached({"tty": None}) is True
+    assert ocman.cli._is_detached({"tty": "pts/0"}) is False
+
+
+@_linux_only
+def test_list_running_tty_column_and_borderless(monkeypatch, capsys):
+    inst1 = {"pid": 101, "user": "me", "tty": "pts/3", "elapsed": "10m", "kind": "tui",
+             "listeners": [], "exposed": False, "auth": "secured", "vulnerable": False,
+             "cwd": "/p1", "project": "proj1", "session": {}}
+    inst2 = {"pid": 102, "user": "me", "tty": "?", "elapsed": "5m", "kind": "tui",
+             "listeners": [], "exposed": False, "auth": "secured", "vulnerable": False,
+             "cwd": "/p2", "project": "proj2", "session": {}}
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst1, inst2])
+    ocman.cli.cli_list_running()
+    out = capsys.readouterr().out
+    assert "TTY" in out
+    pid_idx = out.index("PID")
+    user_idx = out.index("User")
+    tty_idx = out.index("TTY")
+    assert pid_idx < user_idx < tty_idx
+    assert "pts/3" in out
+    assert "no tty" in out
+    for glyph in ("│", "╭", "╞", "─", "┬", "╮", "╰", "┴", "╯"):
+        assert glyph not in out
+    lines = [line for line in out.splitlines() if line.startswith("PID") or line.strip().startswith("101")]
+    assert len(lines) >= 2
+    for line in lines:
+        assert line == line.lstrip()
+
+
+@_linux_only
+def test_kill_no_tty_batch_kills_detached(monkeypatch, capsys):
+    inst_att = {"pid": 201, "user": "me", "tty": "pts/2", "elapsed": "1h", "kind": "tui",
+                "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
+    inst_det1 = {"pid": 202, "user": "me", "tty": "?", "elapsed": "2h", "kind": "tui",
+                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p2", "project": "p2", "session": {}}
+    inst_det2 = {"pid": 203, "user": "me", "tty": "", "elapsed": "3h", "kind": "tui",
+                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p3", "project": "p3", "session": {}}
+    calls = []
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_att, inst_det1, inst_det2])
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
+
+    ocman.cli.cli_kill(no_tty=True, assume_yes=True)
+    out = capsys.readouterr().out
+    assert calls == [202, 203]
+    assert "Kill which?" not in out
+    assert "Killed: 202, 203" in out
+
+
+@_linux_only
+def test_kill_no_tty_non_interactive_bypasses_chooser(monkeypatch, capsys):
+    inst_det1 = {"pid": 301, "user": "me", "tty": "?", "elapsed": "2h", "kind": "tui",
+                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
+    inst_det2 = {"pid": 302, "user": "me", "tty": "?", "elapsed": "3h", "kind": "tui",
+                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p2", "project": "p2", "session": {}}
+    calls = []
+    monkeypatch.setattr(ocman.cli.sys.stdout, "isatty", lambda: False)
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_det1, inst_det2])
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
+
+    ocman.cli.cli_kill(no_tty=True, assume_yes=True)
+    out = capsys.readouterr().out
+    assert calls == [301, 302]
+    assert "no TTY to choose" not in out
+
+
+@_linux_only
+def test_kill_no_tty_dry_run_zero_signals(monkeypatch, capsys):
+    inst_det = {"pid": 401, "user": "me", "tty": "?", "elapsed": "2h", "kind": "tui",
+                "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
+    calls = []
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_det])
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
+
+    ocman.cli.cli_kill(no_tty=True, dry_run=True)
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "PID 401" in out
+
+
+@_linux_only
+def test_kill_no_tty_mutually_exclusive_with_pattern(capsys):
+    with pytest.raises(SystemExit):
+        ocman.cli.cli_kill(pattern="123", no_tty=True)
+    err = capsys.readouterr().err
+    assert "--no-tty selects by terminal state; do not also pass a PID or PATTERN." in err
+
+
+@_linux_only
+def test_kill_no_tty_zero_match_calm_message(monkeypatch, capsys):
+    inst_att = {"pid": 501, "user": "me", "tty": "pts/1", "elapsed": "1h", "kind": "tui",
+                "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
+    calls = []
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_att])
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
+
+    ocman.cli.cli_kill(no_tty=True)
+    out = capsys.readouterr().out
+    assert calls == []
+    assert "No detached opencode instances (all are attached to a terminal)." in out
+
+
+def test_kill_parser_and_normalize_no_tty():
+    parser = ocman.cli.build_parser()
+    args = parser.parse_args(["kill", "--no-tty"])
+    norm = ocman.cli._normalize(args, dict(ocman.DEFAULT_CONFIG))
+    assert norm.run_kill is True
+    assert norm.no_tty is True
+    assert norm.kill_pattern is None
+
+
 # --- doctor: listening opencode servers security check -----------------------
 
 def _fake_server(pid=1, listeners=None, vulnerable=False, exposed=False):
