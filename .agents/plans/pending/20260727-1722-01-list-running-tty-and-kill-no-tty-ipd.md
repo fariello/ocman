@@ -154,7 +154,9 @@
 - No em/en dash in authored prose.
 
 ## Gate / execution contract (MUST, per AGENTS.md)
-Create a step-granular TodoWrite checklist (one per NT-*) BEFORE coding.
+Work the `## Detailed Implementation Checklist (TODO)` below top to bottom (mirror it in a
+TodoWrite list while coding); a plan may claim completion only when every execution box AND its
+matching `## Verification checklist` row are checked with concrete evidence.
 - Open questions: none (all design decisions, the table-style request, the `--no-tty` batch
   semantics, and the docs-sync scope are resolved above).
 - Scope fence: `ocman/cli.py` (`_instance_tty`/`_is_detached` helpers, `cli_list_running`
@@ -170,6 +172,80 @@ Create a step-granular TodoWrite checklist (one per NT-*) BEFORE coding.
   Execution record.
 - Release: rides the in-flight line; covered by the eventual delta release-review. No tag / no
   release here.
+
+## Detailed Implementation Checklist (TODO)
+Execute top to bottom. Every box MUST be checked AND independently verified (see the
+Verification checklist) before this plan may claim completion or move to `executed/`. Do NOT
+check a box on intent; check it only when the action is actually done.
+
+- [ ] C1 (NT-01) Add `_instance_tty(inst) -> str` (raw tty or `""`) and `_is_detached(inst) -> bool`
+  (`True` iff `_instance_tty(inst).strip()` in `("?", "??", "")`) at module scope near the running
+  helpers; both used by the list column AND the kill filter (single source of truth).
+- [ ] C2 (NT-02) In `cli_list_running`, insert a `"TTY"` column (left-aligned) into `header`/`align`
+  right after `User` -> `["PID","User","TTY","Uptime","Kind","Listener","Auth?","Project"]`; cell =
+  `_instance_tty(it)` shown as `"no tty"` when detached else the raw `pts/N`; `--long` still appends
+  `Session` last; `--json` path unchanged (no new field).
+- [ ] C3 (NT-03) Switch that table from `style="round-header"` to `style="none"` (keep `padding=0`
+  and the color-gated bold header); leave the `--long` hint line and the security banner as-is; do
+  NOT reintroduce a border (recorded UX trade-off).
+- [ ] C4 (NT-08) Add `--no-tty` (`store_true`) to the `kill` subparser; set
+  `out["no_tty"] = bool(g("no_tty", False))` in `_normalize`'s `group == "kill"` block; add
+  `no_tty=getattr(args, "no_tty", False)` to the `run_kill` dispatch; add a `no_tty: bool = False`
+  parameter to `cli_kill`.
+- [ ] C5 (NT-05) In `cli_kill`, if `no_tty` AND a positional `pattern` is present, `die(...)` with
+  the mutual-exclusion message BEFORE any detection/preview.
+- [ ] C6 (NT-04) When `no_tty` is set (and no positional), resolve targets = own-user
+  (`os.stat("/proc/<pid>").st_uid == getuid()`) instances from `detect_running_instances(all_users=False)`
+  that satisfy `_is_detached(it)`.
+- [ ] C7 (NT-04a) BYPASS the numbered chooser for the `--no-tty` selection: set `to_kill = targets`
+  directly (like the pre-selected "all" case) so 2+ detached instances go straight to the single
+  batch preview + one `confirm_destructive` gate and work non-interactively (`sys.stdout.isatty()`
+  False must NOT `die` with "no TTY to choose"). `-y`, `--dry-run`, `-9/--force` compose normally.
+- [ ] C8 (NT-06) When `--no-tty` matches nothing, print the calm "No detached opencode instances
+  (all are attached to a terminal)." line and return; detection unavailability still surfaces via
+  the existing `RunningDetectionError` -> Linux-only translation.
+- [ ] C9 (NT-07) Confirm NO change to the no-arg (cwd), PID, and PATTERN selection paths, their
+  numbered chooser, the kill loop, or the reuse/`_pid_is_gone`/`_reuse_guard_ok` guards, and none
+  to `reconnect` or the cross-user posture.
+- [ ] C10 (NT-09) Docs sync: README `list running`/`lr` row (README.md:438) mentions the TTY column;
+  README `kill` row (README.md:444) documents `--no-tty` (reap all own-user instances no longer
+  attached to a terminal; batch confirm; Linux-only); a `CHANGELOG.md` `[Unreleased]` "Added" entry
+  covers both; `kill` and `list running` `--help`/help text updated. No `DECISIONS.md` entry.
+- [ ] C11 (tests) Add the tests enumerated in the Validation plan (NT-02, NT-03, NT-04/04a incl. the
+  non-interactive case, NT-04b, NT-05, NT-06, NT-07 incl. `_is_detached` unit test, NT-08).
+- [ ] C12 Run `PYTHONPATH=. pytest -q` and PASTE the ACTUAL runner output into the Execution record.
+- [ ] C13 No em/en dash introduced in authored prose (cli help/error text, README, CHANGELOG, this
+  plan). Run the leak sanitizer (`aw sanitize --agent`) over changed tracked files.
+
+## Verification checklist (cross-check; concrete evidence per item)
+Each row maps 1:1 to the execution checklist above and is satisfied ONLY by the concrete evidence
+named. Do not mark this plan complete until every row has its evidence pasted or cited in the
+Execution record.
+
+- [ ] V1 (C1) Cite the `_instance_tty`/`_is_detached` definitions by `cli.py:<line>`; confirm BOTH
+  the list column (C2) and the kill filter (C6) call the SAME helper (grep count == 2+ call sites).
+- [ ] V2 (C2) Paste captured `cli_list_running` human output showing a `TTY` header after `User`, one
+  row with `pts/N` and one with `no tty`; confirm `--json` output has no new key vs today.
+- [ ] V3 (C3) Paste the rendered table showing NO box glyphs (`│`, `╭`, `╞`) and NO leading
+  whitespace before `PID`; header still bold when color is enabled.
+- [ ] V4 (C4/NT-08) Paste the NT-08 test proving `["kill","--no-tty"]` yields `no_tty=True` reaching
+  `cli_kill` (recorded kwarg or dispatch assertion), test PASSED.
+- [ ] V5 (C5/NT-05) Paste the test: `--no-tty` + positional -> `SystemExit`, zero detection/kills.
+- [ ] V6 (C6+C7/NT-04/04a) Paste the test: 2 detached + 1 attached -> both detached PIDs killed in
+  ONE batch, attached untouched, and the numbered "Kill which? [1-N" prompt is ABSENT; PLUS the
+  non-interactive variant (isatty False, `-y`) kills all without the "no TTY to choose" `die`.
+- [ ] V7 (C7/NT-04b) Paste the `--no-tty --dry-run` test: targets previewed, ZERO signals sent.
+- [ ] V8 (C8/NT-06) Paste the all-attached test: calm "No detached opencode instances" message, zero
+  kills, clean exit.
+- [ ] V9 (C9/NT-07) Paste the regression test: a PATTERN multi-match still shows the numbered
+  chooser and a bare-PID kill still routes through `_kill_target_for_pid`; `_is_detached` unit test
+  classifies `""`/`"?"`/`"??"` detached and `"pts/0"` attached.
+- [ ] V10 (C10/NT-09) Quote the edited README `list running` and `kill` rows and the CHANGELOG
+  `[Unreleased]` entry showing the TTY column and `--no-tty`; confirm `--help` text updated.
+- [ ] V11 (C12) Paste the FULL `pytest -q` summary line (e.g. `N passed, M skipped`); the new tests
+  are included and green. No skips masking a new test.
+- [ ] V12 (C13) Paste `aw sanitize --agent` result (clean) for changed tracked files and confirm no
+  em/en dash was added.
 
 ## Deferred / open
 - None. (Dead-device-node detection, `ls`/session TTY, and `reconnect --no-tty` are explicit
