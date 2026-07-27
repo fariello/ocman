@@ -8,23 +8,37 @@
   captured per process (cli.py:7960) and flows into every enriched instance dict via the
   `**p` spread (cli.py:8246), but it is surfaced only in the mutation-guard error block
   (`_render_running_opencode`, cli.py:7972); `list running` and `kill` ignore it.
-- Scope: `ocman/cli.py` only, plus `tests/test_ocman.py`. Specifically:
+- Scope: `ocman/cli.py`, `tests/test_ocman.py`, `README.md`, `CHANGELOG.md`. Specifically:
   `cli_list_running` (add a TTY column + switch the table style), a small shared
-  `_instance_tty` / `_is_detached` helper, `_kill_targets` / `cli_kill` (new `--no-tty`
-  selection), and the `kill` subparser (new `--no-tty` flag). No DB change, no dependency, no
-  signal-handling change, no change to detection (`detect_running_instances` already carries
-  `tty`).
-- Status: PROPOSED (not yet executed)
+  `_instance_tty` / `_is_detached` helper, `cli_kill` (new `--no-tty` batch selection), the
+  `kill` subparser (new `--no-tty` flag), the `kill` normalization block
+  (`_normalize`, cli.py:7001-7006 must emit `no_tty`) and the `run_kill` dispatch
+  (cli.py:16348-16356 must pass `no_tty=`), and docs sync: the two affected README command-table
+  rows (`list running`, `kill`) plus a `CHANGELOG.md` `[Unreleased]` entry, and the `kill`/`list
+  running` `--help` text. No DB change, no dependency, no signal-handling change, no change to
+  detection (`detect_running_instances` already carries `tty`). No `DECISIONS.md` entry: `--no-tty`
+  reuses the existing confirm + PID-reuse-guard posture and introduces no new safety model
+  (decided with maintainer 2026-07-27).
+- Status: reviewed (not yet executed; awaiting human approval)
 - Target version: rides the current in-flight line (final promotion decided at release-review).
-- Approval: awaiting plan-review + maintainer approval
+- Approval: plan-review complete 2026-07-27; awaiting maintainer approval
 - Author: its_direct/pt3-claude-opus-4.8-1m-us
 
 ## Workflow history
 - 2026-07-27 (its_direct/pt3-claude-opus-4.8-1m-us): maintainer asked for a TTY indication in
   the listing and a way to kill just the instances no longer attached to an active terminal.
-  Three design decisions resolved interactively (see Design decisions). The maintainer
+  Three initial design decisions resolved interactively (see Design decisions). The maintainer
   additionally asked that the running-instances table NOT be indented and to use vistab
   `style='none'` to save horizontal terminal space.
+- 2026-07-27 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): two decisions resolved with the
+  maintainer during review: (1) `ocman kill --no-tty` treats the WHOLE detached set as one batch
+  (single preview + single confirm, works non-interactively), NOT the per-item numbered chooser
+  (see NT-04a); (2) include docs sync (README rows + CHANGELOG `[Unreleased]` + `--help`), no
+  DECISIONS.md entry.
+- 2026-07-27 /plan-review (its_direct/pt3-claude-opus-4.8-1m-us): APPROVE WITH REVISIONS APPLIED;
+  PR-001..PR-004 all FIXED (docs-sync scope added NT-09; end-to-end flag wiring added NT-08;
+  batch-reap semantics added NT-04a; `style='none'` header-rule trade-off recorded). Readiness:
+  GO - PENDING HUMAN APPROVAL.
 
 ## Evidence
 - `ps -o tty` value is captured at cli.py:7906 (fields include `tty`), parsed at cli.py:7932,
@@ -59,13 +73,26 @@
   there would mostly be blank/misleading. Session listing is UNCHANGED.
 - How kill selects detached instances: RESOLVED = a new `--no-tty` FLAG on `ocman kill`, not a
   reserved pattern keyword (a keyword would collide with substring PATTERN matching). `--no-tty`
-  selects ALL own-user opencode instances whose controlling terminal is none. It composes with
-  `-y/--yes`, `--dry-run`, `-9/--force`. It is mutually exclusive with a positional PID|PATTERN
-  (see NT-05).
+  selects ALL own-user opencode instances whose controlling terminal is none, as a single BATCH
+  (see the `--no-tty` multi-target decision below). It composes with `-y/--yes`, `--dry-run`,
+  `-9/--force`. It is mutually exclusive with a positional PID|PATTERN (see NT-05).
 - What counts as "no active TTY": RESOLVED = the `ps -o tty` value is `?` / `??` / empty. This
   reuses the exact normalization already in `_render_running_opencode` and the data already
   captured; no extra `/proc/<pid>/fd` probing. Detecting a TTY that once existed but whose
   `/dev/pts/N` was since removed is an explicit non-goal.
+- `--no-tty` multi-target behavior: RESOLVED (plan-review 2026-07-27) = BATCH. When `--no-tty`
+  matches 2+ detached instances it selects the WHOLE set (single preview listing all, single
+  `confirm_destructive` gate), NOT the existing per-item numbered chooser. Rationale: the feature's
+  purpose is "kill all the detached ones in one shot" and it must work non-interactively (a
+  redirected/scripted reap); the numbered chooser (cli.py:12704-12731) would force a manual pick
+  and `die` with "no TTY to choose" when stdout is not a terminal, defeating the intent. Safety is
+  unchanged: one confirm by default (`-y` skips, `--dry-run` previews) and the per-signal
+  PID-reuse guard still runs. The PID and PATTERN paths keep their existing chooser behavior.
+- Table `style='none'` UX trade-off: ACCEPTED (maintainer-requested). `style='none'` is borderless
+  and drops the header underline/rule that `round-header` drew (verified via
+  `vistab.print_styles_list()`). This is a deliberate space-saving choice by the maintainer, not a
+  regression to "fix" back; the bold header (color-gated) is retained. Recorded so the executor
+  does not reintroduce a border.
 
 ## Requirements
 
@@ -74,10 +101,13 @@
 | NT-01 | Single source of truth for "detached" | Add module-scope helpers near the existing running helpers: `_instance_tty(inst) -> str` returns the raw tty or `""`; `_is_detached(inst) -> bool` is `True` iff `_instance_tty(inst)` is in `("?", "??", "")` (after `.strip()`). Reuse this everywhere (list column + kill filter) so the rule cannot drift. | normalization at cli.py:7972; tty on dict cli.py:8246 |
 | NT-02 | `list running`/`lr` shows a TTY column | In `cli_list_running`, insert a `"TTY"` column (left-aligned) into `header`/`align`, placed after `User` (`["PID","User","TTY","Uptime","Kind","Listener","Auth?","Project"]`). Cell value = `_instance_tty(it)` normalized to `"no tty"` when detached (same string as the guard block), else the raw `pts/N`. `--long` still appends `Session` last. `--json` is UNCHANGED (the raw `tty` key already rides on each instance dict via detection; no new JSON field is added). | table build cli.py:12841-12864; json emit cli.py:12822-12826 |
 | NT-03 | The running-instances table is borderless / not indented | Switch `cli_list_running`'s table from `style="round-header"` to `style="none"` (keep `padding=0`, keep the color-gated bold header via `set_header_style`). Rows already carry no leading-space indent, so no other change is needed to satisfy "not indented." The `--long` hidden-Session hint line (cli.py:12865-12867) and the security banner block are UNCHANGED. | style list confirmed via vistab.print_styles_list(); build cli.py:12848-12851 |
-| NT-04 | `ocman kill --no-tty` selects all own-user detached opencode instances | Add `--no-tty` to the `kill` subparser (store_true). In `cli_kill`, when `--no-tty` is set, resolve targets by enumerating `detect_running_instances(all_users=False)`, keeping own-user PIDs (authoritative `os.stat("/proc/<pid>").st_uid == getuid()`) that satisfy `_is_detached(it)`. Reuse the EXISTING multi-target confirm/choose/kill loop and guards verbatim (`_kill_pid_gracefully`, `_reuse_guard_ok`, `_pid_is_gone`); `-y`, `--dry-run`, `-9/--force` behave exactly as for other selections. | `_kill_targets` own-user filter cli.py:12622-12634; kill loop cli.py:12704-12774 |
+| NT-04 | `ocman kill --no-tty` selects all own-user detached opencode instances | Add `--no-tty` to the `kill` subparser (store_true). In `cli_kill`, when `--no-tty` is set, resolve targets by enumerating `detect_running_instances(all_users=False)`, keeping own-user PIDs (authoritative `os.stat("/proc/<pid>").st_uid == getuid()`) that satisfy `_is_detached(it)`. Then send them straight to the EXISTING preview + `confirm_destructive` + kill loop and guards (`_kill_pid_gracefully`, `_reuse_guard_ok`, `_pid_is_gone`); `-y`, `--dry-run`, `-9/--force` behave exactly as for other selections. | own-user filter cli.py:12622-12634; kill loop cli.py:12734-12774 |
+| NT-04a | `--no-tty` kills the WHOLE detached set as a batch (no per-item chooser) | `--no-tty` must BYPASS the multi-target numbered chooser (cli.py:12704-12731) and set `to_kill = targets` directly, so 2+ detached instances are shown in the single batch preview and killed after ONE confirm. This is required for the "reap them all" intent and to work non-interactively (the chooser `die`s with "no TTY to choose" when stdout is not a terminal). Implement by branching on the `--no-tty` selection before the `len(targets) == 1 / else` block (e.g. treat `--no-tty` like the pre-selected "all" case). One confirm still gates it (`-y` skips, `--dry-run` previews); the per-signal reuse guard is unchanged. | chooser to bypass cli.py:12704-12731; batch preview+confirm cli.py:12734-12758 |
 | NT-05 | `--no-tty` is mutually exclusive with a positional PID\|PATTERN | If `--no-tty` is given AND a positional `pattern` is present, `die(...)` with a clear message ("`--no-tty` selects by terminal state; do not also pass a PID or PATTERN.") BEFORE any detection/preview. `--no-tty` alone (no positional) is the intended form; it does NOT fall through to the cwd-scoped `_reconnect_candidates` path. | cli_kill entry cli.py:12688-12695 |
 | NT-06 | Zero-match `--no-tty` is a calm, explicit message (not an all-clear-looking blank) | When `--no-tty` matches nothing, print an informational line naming the criterion, e.g. `f"{info_prefix()} No detached opencode instances (all are attached to a terminal)."` and return without killing. Detection unavailability still raises `RunningDetectionError` and is translated by the existing `except` to the Linux-only message. | no-targets branch cli.py:12699-12702; RunningDetectionError xlate cli.py:12696-12697 |
-| NT-07 | No behavior change to existing selection paths, signalling, guards, flags, dry-run, or exit codes | Only ADD the `--no-tty` branch at target resolution and the mutual-exclusion guard; the no-arg (cwd), PID, and PATTERN paths, the confirm/choose/kill loop, and all reuse guards are untouched. The `reconnect` command and cross-user posture are untouched. | cli_kill loop + guards cli.py:12704-12774 unchanged |
+| NT-07 | No behavior change to existing selection paths, signalling, guards, flags, dry-run, or exit codes | Only ADD the `--no-tty` branch at target resolution, the batch bypass, and the mutual-exclusion guard; the no-arg (cwd), PID, and PATTERN paths, their numbered chooser, and all reuse guards are untouched. The `reconnect` command and cross-user posture are untouched. | cli_kill loop + guards cli.py:12704-12774 unchanged |
+| NT-08 | The `--no-tty` flag is wired end-to-end (parser -> normalize -> dispatch -> handler) | Add `--no-tty` (`store_true`) to the `kill` subparser; in `_normalize`'s `group == "kill"` block set `out["no_tty"] = bool(g("no_tty", False))`; in the `run_kill` dispatch pass `no_tty=getattr(args, "no_tty", False)` into `cli_kill`, and add a `no_tty: bool = False` parameter to `cli_kill`. Without all four the flag is parsed but never reaches the handler. | subparser cli.py:6506-6515; normalize cli.py:7001-7006; dispatch cli.py:16348-16356; cli_kill signature cli.py:12682-12683 |
+| NT-09 | Docs stay honest (P8) | Update: (a) README command-table row for `list running`/`lr` (README.md:438) to mention the TTY column; (b) README row for `ocman kill` (README.md:444) to document `--no-tty` (reap all own-user instances no longer attached to a terminal; batch confirm; Linux-only); (c) a `CHANGELOG.md` `[Unreleased]` "Added" entry for both the TTY column and `kill --no-tty`; (d) the `kill` and `list running` subparser `--help`/help text. No DECISIONS.md entry (no new safety model). | README.md:438,444; CHANGELOG.md `[Unreleased]`; subparser help cli.py:6506-6515, list-running parser cli.py:6578 |
 
 ## Non-goals
 - No TTY column or TTY filter on `ocman ls` / `session list` (sessions are DB rows, not live
@@ -99,27 +129,42 @@
   - NT-03: `cli_list_running` output contains NO box-border glyphs (assert absence of `│`/`╭`
     round-header borders) and rows are not indented (no leading whitespace before `PID`), i.e.
     the `style='none'` switch took effect.
-  - NT-04a: two detached instances (`tty` in `?`/none) + one attached (`pts/2`) -> `--no-tty`
-    targets exactly the two detached PIDs; with `-y` both are killed, the attached one is not.
+  - NT-04/04a: two detached instances (`tty` in `?`/none) + one attached (`pts/2`) -> `--no-tty`
+    targets exactly the two detached PIDs and kills BOTH in one batch (no numbered chooser
+    prompt); with `-y` both are killed, the attached one is not. Assert the numbered
+    "Kill which? [1-N" prompt does NOT appear.
+  - NT-04a non-interactive: with stdout NOT a TTY (monkeypatch `sys.stdout.isatty` -> False) and
+    `-y`, `--no-tty` still kills all detached targets and does NOT `die` with "no TTY to choose"
+    (proves the chooser is bypassed).
   - NT-04b: `--no-tty --dry-run` prints the two detached targets and sends ZERO signals.
   - NT-05: `--no-tty` together with a positional (PID or PATTERN) -> SystemExit with the
     mutual-exclusion message, zero detection/kills.
   - NT-06: `--no-tty` with all instances attached -> calm "No detached opencode instances..."
     message, zero kills, clean exit.
   - NT-07: an existing PATTERN kill and a bare-PID kill still resolve through their current
-    paths unchanged (regression guard); `_is_detached` correctly classifies `""`, `"?"`, `"??"`
-    as detached and `"pts/0"` as attached (unit test of the helper).
+    paths unchanged (regression guard, incl. the PATTERN multi-match numbered chooser still
+    prompting); `_is_detached` correctly classifies `""`, `"?"`, `"??"` as detached and `"pts/0"`
+    as attached (unit test of the helper).
+  - NT-08: parse `["kill", "--no-tty"]` through the real parser + `_normalize` and assert
+    `no_tty` is True on the namespace and reaches `cli_kill` (e.g. monkeypatch `cli_kill` to
+    record its `no_tty` kwarg, or assert via the dispatch path).
+  - NT-09 (docs): a light assertion or manual check that README rows and the CHANGELOG
+    `[Unreleased]` entry mention the TTY column and `--no-tty` (no runtime test required; verify
+    by reading the edited files and noting it in the execution record).
 - No em/en dash in authored prose.
 
 ## Gate / execution contract (MUST, per AGENTS.md)
 Create a step-granular TodoWrite checklist (one per NT-*) BEFORE coding.
-- Open questions: none (all three design decisions + the table-style request are resolved above).
+- Open questions: none (all design decisions, the table-style request, the `--no-tty` batch
+  semantics, and the docs-sync scope are resolved above).
 - Scope fence: `ocman/cli.py` (`_instance_tty`/`_is_detached` helpers, `cli_list_running`
-  column + style, `cli_kill` `--no-tty` selection + mutual-exclusion guard, `kill` subparser
-  flag) and `tests/test_ocman.py`. Nothing else.
+  column + style, `cli_kill` `--no-tty` batch selection + batch-bypass + mutual-exclusion guard,
+  `kill` subparser flag, `_normalize` `no_tty`, `run_kill` dispatch), `tests/test_ocman.py`,
+  `README.md` (rows for `list running` and `kill`), and `CHANGELOG.md` (`[Unreleased]`). Nothing
+  else (no `DECISIONS.md`, no TUI, no `reconnect`).
 - Honesty rule: paste the ACTUAL pytest output; do not claim a hand-run of the TUI (this is a
   CLI change, testable headlessly).
-- Commits: path-scoped (`git commit -m msg -- ocman/cli.py tests/test_ocman.py <this ipd>`),
+- Commits: path-scoped (`git commit -m msg -- ocman/cli.py tests/test_ocman.py README.md CHANGELOG.md <this ipd>`),
   never `git add -A`/`-a`, never push.
 - Lifecycle: on completion + green tests, `git mv` this file pending/ -> executed/ and append an
   Execution record.
