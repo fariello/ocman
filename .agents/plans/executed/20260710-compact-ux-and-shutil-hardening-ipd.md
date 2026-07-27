@@ -19,7 +19,7 @@ editing (line numbers drift).
 The user reported an `UnboundLocalError: cannot access local variable 'shutil'`
 (both at the batch-cleanup `finally` and during single-session compaction) and a
 non-graceful `KeyboardInterrupt` traceback on Ctrl-C. All three tracebacks
-referenced `/home/gfariello/venv/.../site-packages/ocman.py`, a STALE COPY that
+referenced `/home/user/venv/.../site-packages/ocman.py`, a STALE COPY that
 shadows the editable install. Verified against the current repo:
 
 - `main()` imports `shutil` at the top (`ocman.py:10525`), before any

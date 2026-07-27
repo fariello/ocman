@@ -95,7 +95,7 @@ features last).
 
 ## Required tests / validation
 
-- Run the full suite after each step: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q`
+- Run the full suite after each step: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q`
   and paste the real runner output (per AGENTS.md).
 - Per-step tests are named in the table above; emphasize characterization: human
   output must be unchanged when the new flags are absent (F1, F6, F8 especially).
@@ -148,7 +148,7 @@ Execution contract (binding on whoever executes):
   Deferred): `backup restore`/`history clear` dry-run, shell completion, `resume`/`open`,
   and `ocman spend` forked-spend dedupe. Do not expand scope without a new plan.
 - **Honesty (hard MUST):** when reporting tests, paste the ACTUAL runner output
-  (`PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q`). Never claim a pass you did
+  (`PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q`). Never claim a pass you did
   not run.
 - **Commit discipline:** commit ONLY the files you changed, path-scoped
   (`git commit -m msg -- <paths>`); never `git add -A`/`-a`, never push, never tag.

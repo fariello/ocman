@@ -112,7 +112,7 @@ teaching-error and discoverability polish.
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output.
 - Concrete automated tests to ADD (PR-003), not just manual checks:
   - SD-01: a test asserting no user-facing `--show-models` / `--list-projects` string remains
     in `ocman/cli.py` (grep-style assertion over the source, or assert the two specific error

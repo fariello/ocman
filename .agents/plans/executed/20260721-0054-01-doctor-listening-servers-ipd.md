@@ -149,7 +149,7 @@ Nearly all detection already exists and is battle-tested (it powers `lr`); this 
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
 - Unit (`check_listening_servers`, monkeypatch `detect_running_instances` to return fake
   instances, mirroring the dict shape used by `test_list_running_filter_...`): vulnerable ->
   ERROR + remediation text in detail; exposed-but-authed -> WARN; authed loopback only -> OK;

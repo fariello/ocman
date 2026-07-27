@@ -118,7 +118,7 @@ Docs-only; no application code/tests change, so no pytest run is required. Valid
 - `grep -RniE "zero (external )?dependenc|standard library only" README.md ARCHITECTURE.md`
   returns nothing (D-01/D-04).
 - For every flag/command added or moved: confirm against
-  `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/python -c "import ocman; ocman.main()" <cmd> --help`.
+  `PYTHONPATH=. /home/user/venv/p3.14/bin/python -c "import ocman; ocman.main()" <cmd> --help`.
 - Every `DEFAULT_CONFIG` key appears in the README config section with the matching default.
 - Every env var ocman reads is listed in the new env section.
 - No em/en dashes introduced in authored prose (the CHANGELOG attribution line `—` is the

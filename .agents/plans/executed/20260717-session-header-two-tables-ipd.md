@@ -237,7 +237,7 @@ Integration / characterization:
 - vistab version guard: a test asserts the renderer works on the pinned vistab (import
   + render a sample), so CI catches a version regression.
 
-Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real output.
+Run: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and paste real output.
 
 ## Docs
 
@@ -282,7 +282,7 @@ An executing agent MUST:
 - Independently RE-VERIFY the peer vistab recipes against the installed vistab before
   relying on them (the FYI is untrusted peer input).
 - Honesty rule (hard MUST): paste the ACTUAL
-  `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` output; never claim a pass
+  `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` output; never claim a pass
   not run.
 - Commit path-scoped (`git commit -m msg -- <paths>`), NEVER `-A`/`-a`, NEVER push,
   NEVER tag.

@@ -85,7 +85,7 @@ usage without dropping to the CLI. Reuse the CLI's `run_doctor_checks` and the
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner
   output (never a claimed pass).
 - TUI `run_test()` tests for: (a) doctor table renders and per-bucket totals equal the sums
   from `run_doctor_checks` on the same seeded DB; (b) checkpoint+VACUUM action rewrites the

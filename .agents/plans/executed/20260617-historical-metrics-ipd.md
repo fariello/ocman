@@ -52,7 +52,7 @@ We will implement a **Sidecar JSON Ledger** located at:
 
 ### Component 1: `ocman.py` (Core Library)
 
-#### [MODIFY] [ocman.py](file:///home/gfariello/VC/ocman/ocman.py)
+#### [MODIFY] [ocman.py](file:///home/user/VC/ocman/ocman.py)
 
 1.  **Define History Path and Helper Functions**:
     - Add `OPENCODE_HISTORY_PATH = Path.home() / ".local" / "share" / "opencode" / "ocman_history.json"`.
@@ -86,7 +86,7 @@ We will implement a **Sidecar JSON Ledger** located at:
 
 ### Component 2: Automated Tests (`tests/`)
 
-#### [MODIFY] [test_ocman.py](file:///home/gfariello/VC/ocman/tests/test_ocman.py)
+#### [MODIFY] [test_ocman.py](file:///home/user/VC/ocman/tests/test_ocman.py)
 - Create unit tests for historical logging:
   - Mock history JSON file path.
   - Assert that calling `db_delete_session_recursive()` correctly updates the history ledger.

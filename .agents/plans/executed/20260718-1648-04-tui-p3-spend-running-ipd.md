@@ -89,7 +89,7 @@ instances. Both are read-only/observe-only.
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output
   (never a claimed pass).
 - PR-003 anti-regression: assert `spend --json` output is byte-identical before/after the
   Step 1 refactor (the JSON is a public serialized format).

@@ -117,7 +117,7 @@ Finish the testing-rigor work deferred from `20260721-0111-01`:
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output (must stay
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output (must stay
   462+ passed, 2 skipped, plus the new tests).
 - TF-02: a LOCAL STRESS LOOP (e.g. the storage + models TUI tests run 20x) shows zero
   `WorkerFailed`/`NoMatches` failures (the checkable criterion, mirroring S1's approach).

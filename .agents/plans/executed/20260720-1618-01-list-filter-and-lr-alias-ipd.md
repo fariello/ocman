@@ -115,7 +115,7 @@ Matching mirrors the existing case-insensitive idiom used across the file:
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
 - New tests: `preprocess_argv` `lr` rewrite; `lp <pattern>` narrows (dir + name); `ls <realproject>`
   unchanged (back-compat) AND `ls <substring>` filters (title/dir/project) instead of exiting;
   `lr <pattern>` narrows by cwd/project and by session info WITHOUT `--long`; `--json` reflects

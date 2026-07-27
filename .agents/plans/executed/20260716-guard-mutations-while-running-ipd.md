@@ -217,7 +217,7 @@ NOT leave a raw `input()` firing under Textual.
   (or the TUI scope is explicitly deferred; assert whichever was chosen).
 - Backward-compat: existing callers of `detect_running_opencode` keep working after
   the three-state signal is added.
-- Full suite green: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` (paste
+- Full suite green: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` (paste
   real output).
 
 ## Spec / documentation sync

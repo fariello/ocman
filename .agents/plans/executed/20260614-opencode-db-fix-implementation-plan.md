@@ -14,7 +14,7 @@ Consolidate all database cleanup functionality into the main Python CLI tool (`o
 
 ### OpenCode Session Recovery CLI
 
-#### [MODIFY] [opencode_recover_session.py](file:///home/gfariello/VC/opencode-recover/opencode_recover_session.py)
+#### [MODIFY] [opencode_recover_session.py](file:///home/user/VC/opencode-recover/opencode_recover_session.py)
 - **Add new CLI arguments**:
   - `--clean`: Run the age-based session cleanup workflow.
   - `--days <N>`: Retention window in days (default: 5).
@@ -37,7 +37,7 @@ Consolidate all database cleanup functionality into the main Python CLI tool (`o
     - Run `VACUUM;` to reclaim disk space.
     - Output post-cleanup metrics and clear rollback instructions.
 
-#### [DELETE] [clean_opencode.sh](file:///home/gfariello/VC/opencode-recover/clean_opencode.sh)
+#### [DELETE] [clean_opencode.sh](file:///home/user/VC/opencode-recover/clean_opencode.sh)
 - Remove the redundant shell cleanup script from the repository.
 
 ## Verification Plan

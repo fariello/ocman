@@ -117,7 +117,7 @@ capability.
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE ACTUAL output.
 - New tests: `db_rename_session` (RETURNS the old title; persists the new title; missing id
   raises `RecoveryError`; other rows untouched; title passed as a bound `?` param, e.g. a title
   containing a quote or `;` is stored verbatim, proving no string interpolation);

@@ -96,7 +96,7 @@ days), and split oversized sessions into parts (`--chunk`) instead of only trunc
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output
   (never a claimed pass).
 - TUI `run_test()` tests: (a) multi-select set reflects 2 chosen sessions; (b) batch delete
   after confirm removes both in one pass; (c) batch delete with extracts checked writes

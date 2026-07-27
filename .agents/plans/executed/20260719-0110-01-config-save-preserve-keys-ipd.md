@@ -71,7 +71,7 @@ their change the next time the TUI saves.
 
 ## Required tests / validation
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and PASTE THE ACTUAL runner output.
 - New regression test (preserve-unmanaged-key) + a reset-still-resets assertion.
 
 ## Spec / documentation sync

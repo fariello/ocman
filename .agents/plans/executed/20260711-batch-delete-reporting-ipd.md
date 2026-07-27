@@ -26,7 +26,7 @@ drift; re-verify before editing.
 
 ## Motivation (from a real run)
 
-`ocman session delete /home/gfariello/VC/uri-ai-info` expands to the project's
+`ocman session delete /home/user/VC/uri-ai-info` expands to the project's
 sessions and loops `db_delete_session_recursive` once per session (the batch loop
 is at `ocman/cli.py:11304-11312`; the caller first prints ONE
 `DestructivePreview` + single typed confirm at `11284-11301`).

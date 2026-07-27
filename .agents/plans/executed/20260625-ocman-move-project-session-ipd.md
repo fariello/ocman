@@ -29,7 +29,7 @@ This document details the design and implementation plan for adding:
 
 ### Configuration and DB Engines (`ocman.py`)
 
-#### [MODIFY] [ocman.py](file:///home/gfariello/VC/ocman/ocman.py)
+#### [MODIFY] [ocman.py](file:///home/user/VC/ocman/ocman.py)
 
 1. **Database Migration Logic**:
    - Create a `db_move_project_metadata(project_id: str, old_worktree: str, new_worktree: str) -> None` function.
@@ -66,7 +66,7 @@ This document details the design and implementation plan for adding:
 
 ### TUI Integration (`ocman_tui/`)
 
-#### [MODIFY] [app.py](file:///home/gfariello/VC/ocman/ocman_tui/app.py)
+#### [MODIFY] [app.py](file:///home/user/VC/ocman/ocman_tui/app.py)
 
 1. **Specialized Modal Dialog**:
    - Create `MoveProjectModal(ModalScreen)`:
@@ -75,7 +75,7 @@ This document details the design and implementation plan for adding:
      - Calls backend move functions inside a worker thread to keep TUI responsive.
      - Reloads TUI project lists upon completion.
 
-#### [MODIFY] [database.py](file:///home/gfariello/VC/ocman/ocman_tui/widgets/database.py)
+#### [MODIFY] [database.py](file:///home/user/VC/ocman/ocman_tui/widgets/database.py)
 
 - Add a `Move/Update Path` button (`#btn-move-project`) next to the project actions section.
 - Trigger `MoveProjectModal` when clicked.

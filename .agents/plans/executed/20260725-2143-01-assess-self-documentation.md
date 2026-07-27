@@ -30,7 +30,7 @@ signal correctly rather than relying on external docs.
 - Contributor contract: AGENTS.md + CONTRIBUTING.md.
 - Stack: Python 3.10+ argparse CLI (`ocman/cli.py`, ~17k lines) + Textual TUI; version 1.3.0.
 - Test stack: pytest (`tests/test_ocman.py`, `tests/test_tui.py`); Linux venv at
-  `/home/gfariello/venv/p3.14/`; run `PYTHONPATH=. pytest -q`.
+  `/home/user/venv/p3.14/`; run `PYTHONPATH=. pytest -q`.
 - Review-scope exclusion honored: `.agents/workflows/` and `workflow-artifacts/` NOT assessed as
   the product.
 

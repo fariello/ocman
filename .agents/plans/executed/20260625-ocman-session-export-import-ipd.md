@@ -31,7 +31,7 @@ Contains metadata about the export format, system of origin, and structural outl
   "source_project": {
     "id": "proj_abc123",
     "name": "ocman",
-    "worktree": "/home/gfariello/VC/ocman"
+    "worktree": "/home/user/VC/ocman"
   }
 }
 ```
@@ -47,7 +47,7 @@ Contains all SQL table rows related to the sessions in `all_session_ids`. To pre
       "title": "Initial workspace analysis",
       "time_created": 1782390123000,
       "time_updated": 1782390456000,
-      "directory": "/home/gfariello/VC/ocman/opencode-recovery",
+      "directory": "/home/user/VC/ocman/opencode-recovery",
       "cost": 0.0452,
       "tokens_input": 12050,
       "tokens_output": 4050,

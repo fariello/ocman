@@ -265,7 +265,7 @@ Integration:
   export; sanity that the flag is rejected there if the parser would otherwise accept
   an unknown flag).
 
-Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real output.
+Run: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and paste real output.
 
 ## Docs
 
@@ -306,7 +306,7 @@ An executing agent MUST:
 - Scope fence: touch only the recover/compact/config/filename subsystems named above
   and their tests + the four docs (README, ARCHITECTURE, CHANGELOG, CONFIG_TEMPLATE).
   Do NOT modify the export code path. No unrelated refactors.
-- Honesty rule (hard MUST): paste the ACTUAL `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q`
+- Honesty rule (hard MUST): paste the ACTUAL `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q`
   output; never claim a pass not run.
 - Commit path-scoped (`git commit -m msg -- <paths>`), NEVER `-A`/`-a`, NEVER push,
   NEVER tag.

@@ -61,7 +61,7 @@ projects).
 
 ## Validation (as executed)
 
-- `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` -> 293 passed, 2 skipped.
+- `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` -> 293 passed, 2 skipped.
 - Direct dispatch check: `ls` -> `list_sessions=True`, `lp` -> `list_projects=True`,
   `ls myproj` carries the project arg; real `lp` invocation rendered the projects
   list.

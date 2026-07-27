@@ -93,7 +93,7 @@ This IPD proposes the parity work as ordered, reviewable phases. It does not exe
   approved -> executed.
 - Contributor contract: AGENTS.md (path-scoped commits, never push, paste REAL pytest
   output). This IPD touches TUI code when executed, so each executed phase MUST run the
-  suite (`PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q`) and paste the result.
+  suite (`PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q`) and paste the result.
 - Stack: `ocman/cli.py` (CLI + all core logic; the TUI imports from it via
   `ocman_tui/core.py`) and `ocman_tui/` (Textual App: 6-tab `TabbedContent`, a
   single-select sidebar `Tree`, worker-thread pattern for long ops, `ModalScreen`
@@ -218,7 +218,7 @@ is safety-first, then high-value, then breadth.
 
 ## Required tests / validation
 
-- Per phase: run `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste the
+- Per phase: run `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and paste the
   real output. Add TUI-level tests where feasible (Textual `run_test()` harness) for the
   new modals/actions, and unit tests for any new non-UI helper.
 - Behavior parity check: for each wired feature, confirm the TUI produces the same result

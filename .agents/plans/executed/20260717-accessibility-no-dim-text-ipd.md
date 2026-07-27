@@ -142,7 +142,7 @@ not reduce legibility.
   (`grep` of `tests/` found none), so the regression surface is small; still, re-run
   the whole suite. Human-visible WORDING of notes/disclaimers is unchanged (only the
   styling changes).
-- Full suite green: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` (paste
+- Full suite green: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` (paste
   real output).
 - TUI: a smoke check that the sidebar renders without the `dim` style (manual or a
   widget test if feasible).

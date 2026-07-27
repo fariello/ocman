@@ -480,7 +480,7 @@ gate has something to read. The tests below rely on this fixture:
 - snapshots: default run never deletes snapshot dirs; `--force-snapshots PATH` requires
   the distinct typed confirm; `-y` does NOT bypass it.
 
-Run: `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` and paste real output.
+Run: `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` and paste real output.
 
 ## Docs
 - README: new `doctor` / `reclaim` command reference rows + a "Health checkup and
@@ -542,7 +542,7 @@ An executing agent MUST:
   `--force-snapshots` + its distinct confirm; apply `cli_clean_backups`-grade path safety
   to `--backups-dir` / `--force-snapshots` (PR-006).
 - Honesty rule (hard MUST): paste the ACTUAL
-  `PYTHONPATH=. /home/gfariello/venv/p3.14/bin/pytest -q` output; never claim a pass not
+  `PYTHONPATH=. /home/user/venv/p3.14/bin/pytest -q` output; never claim a pass not
   run.
 - Commit path-scoped (`git commit -m msg -- <paths>`), NEVER `-A`/`-a`, NEVER push,
   NEVER tag.

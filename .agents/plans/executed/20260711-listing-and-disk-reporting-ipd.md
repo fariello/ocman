@@ -24,7 +24,7 @@ Deferred to its own IPD: the actual `ocman checkpoint` command
 
 Improves the no-project navigation screen, the multi-project `list sessions`
 format, and the `disk` / `list projects` per-project reporting, based on a real
-session run from `/home/gfariello`. Groups five related UX items (issues #1-#5)
+session run from `/home/user`. Groups five related UX items (issues #1-#5)
 plus an optional WAL-checkpoint capability. No code is changed by this plan;
 execute only after review.
 
@@ -34,9 +34,9 @@ editing.
 
 ---
 
-## Motivation (from a real run in `$HOME = /home/gfariello`)
+## Motivation (from a real run in `$HOME = /home/user`)
 
-1. `ocman list sessions` from `/home/gfariello` did NOT print the agreed
+1. `ocman list sessions` from `/home/user` did NOT print the agreed
    "SHOWING ALL PROJECTS ..." notice.
 2. Home-dir sessions are filed under the global (`/`) project but keep their real
    `session.directory`, which is confusing and undocumented in the UI.
@@ -54,7 +54,7 @@ editing.
 - **#1 missing notice.** The "SHOWING ALL PROJECTS" footer is printed only in the
   `_no_project_match` else-branch (`ocman/cli.py:11125-11132`, gated by
   `_no_project_match` set at `11089-11098`). But running `list sessions` from
-  `/home/gfariello` calls `db_list_sessions_under_dir(cwd)` (`4064-4124`), which
+  `/home/user` calls `db_list_sessions_under_dir(cwd)` (`4064-4124`), which
   RETURNS rows (home-dir sessions filed under global `/` keep their real
   `session.directory`), so `_dir_scope = cwd` is set and rendering takes the
   `if _dir_scope:` branch (`11090-11093`) instead. The footer lives on a branch

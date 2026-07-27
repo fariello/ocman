@@ -29,7 +29,7 @@ This document details the design and implementation plan for adding:
 
 ### Configuration Engine (`ocman.py`)
 
-#### [MODIFY] [ocman.py](file:///home/gfariello/VC/ocman/ocman.py)
+#### [MODIFY] [ocman.py](file:///home/user/VC/ocman/ocman.py)
 
 1. **Config Helper Functions**:
    - `load_ocman_config()`: Checks for `~/.config/opencode/ocman.toml`. If found, reads and parses its key-value pairs line-by-line (using `#` to skip comments). Resolves path keys (e.g. `db_path`) by expanding `~` to the home directory.
@@ -64,7 +64,7 @@ This document details the design and implementation plan for adding:
 
 ### TUI Integration (`ocman_tui/`)
 
-#### [MODIFY] [app.py](file:///home/gfariello/VC/ocman/ocman_tui/app.py)
+#### [MODIFY] [app.py](file:///home/user/VC/ocman/ocman_tui/app.py)
 
 1. **Configuration Settings Tab**:
    - Add `TabPane("Configuration Settings", id="tab-config")` into `TabbedContent`.
@@ -77,7 +77,7 @@ This document details the design and implementation plan for adding:
    - Launch background threads for backup/restore operations in the main app (`_do_backup_worker` / `_do_restore_worker`) to keep the UI responsive.
    - Refresh the sidebar tree view and database metrics upon successful restore.
 
-#### [MODIFY] [database.py](file:///home/gfariello/VC/ocman/ocman_tui/widgets/database.py)
+#### [MODIFY] [database.py](file:///home/user/VC/ocman/ocman_tui/widgets/database.py)
 
 - Update the layout of `DatabaseAdminWidget` to include a new **BACKUP & RESTORE** section in the operations card or as a separate card.
 - Add buttons `Create Backup` (`#btn-create-backup`) and `Restore Backup` (`#btn-restore-backup`).
