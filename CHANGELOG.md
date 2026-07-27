@@ -82,6 +82,11 @@
   directory, and project. This is additive: every previously-working `ls <project>`
   invocation behaves identically; only the previously-fatal case becomes a useful filter.
 
+### Fixed
+- **TUI: the `^q Quit` footer button now actually quits.** Clicking the Quit button in the footer
+  bar was inert (the keyboard `ctrl+q` binding worked, but the clickable button did nothing); it now
+  stops the app the same way, saving config and cleaning up temp files on the way out.
+
 ## [1.2.0] - 2026-07-20
 
 ### Changed

@@ -1891,7 +1891,11 @@ class OrsessionApp(App):
             self.action_toggle_select()
             return
         elif event.button.id == "foot-quit":
-            self.action_quit()
+            # self.exit() (sync) not App.action_quit() (a coroutine): on_button_pressed is a sync
+            # handler, so an un-awaited action_quit() coroutine would never run and the click would
+            # do nothing (the ctrl+q BINDING works because Textual awaits the dispatched action).
+            # exit() stops the app and still fires on_unmount() (auto-save + temp cleanup).
+            self.exit()
             return
         elif event.button.id == "foot-sidebar":
             self.action_toggle_sidebar()

@@ -1368,6 +1368,20 @@ async def test_tui_footer_bar_buttons_present(tui_db):
 
 
 @pytest.mark.anyio
+async def test_tui_footer_quit_button_exits(tui_db):
+    """Regression: clicking the '^q Quit' footer button must actually stop the app. The handler
+    must call self.exit() (sync), not the un-awaited App.action_quit() coroutine, which silently
+    did nothing from the sync on_button_pressed handler."""
+    app = OrsessionApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app.is_running
+        await pilot.click("#foot-quit")
+        await pilot.pause()
+        assert not app.is_running, "clicking #foot-quit did not stop the app"
+
+
+@pytest.mark.anyio
 async def test_tui_sidebar_pane_toggle_hides_search(tui_db):
     """Toggling the sidebar hides the whole pane (search box + tree + results), not just the
     tree, and the footer glyph flips checked/unchecked (TF-15)."""
