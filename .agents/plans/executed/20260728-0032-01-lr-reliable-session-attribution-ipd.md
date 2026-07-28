@@ -234,10 +234,11 @@ record.
 
 ### Code changes
 - `_proc_start_epoch` (cli.py:8369): Parses process starttime from `/proc/<pid>/stat` handling comm with spaces/parens.
-- `_active_session_for_process` (cli.py:8397): Single-pass log correlation tying PID starttime to `opencode.log` `run=<uuid>` for `cwd` within a 30s window, returning latest `session.id=ses_...`.
-- `_attribute_session` (cli.py:8474): Reliable-first session attribution when `reliable=True`, looking up title via `db_session_title`.
-- `db_session_title` (cli.py:10229): Returns title string for a session ID.
-- `_sess_str` (cli.py:8510): Renders `ses_... "Title" (provenance)` for id+title shape.
+- `_parse_opencode_log_tail` (cli.py:8398): Backward-chunked log parser (512 KB step, string pre-filters) to bound reads against large (70+ MB) log files.
+- `_active_session_for_process` (cli.py:8467): Single-pass log correlation tying PID starttime to `opencode.log` `run=<uuid>` for `cwd` within a 30s window, returning latest `session.id=ses_...`.
+- `_attribute_session` (cli.py:8495): Reliable-first session attribution when `reliable=True`, looking up title via `db_session_title`.
+- `db_session_title` (cli.py:10260): Returns title string for a session ID.
+- `_sess_str` (cli.py:8530): Renders `ses_... "Title" (provenance)` for id+title shape.
 - `cli_list_running` (cli.py:13125): Passes `reliable=True` to `_attribute_session` under `long_output`.
 - `running` subparser (cli.py:6660): Gains `-l` short alias for `--long`.
 
@@ -246,7 +247,7 @@ record.
 **V1 - V9 (New Unit Tests)**:
 `pytest -q tests/test_ocman.py -k "test_proc_start_epoch_parsing or test_run_id_for_process_and_latest_session or test_db_session_title or test_attribute_session_reliable_and_fallback or test_sess_str_with_title or test_running_subparser_short_l_flag"` passed:
 ```
-6 passed in 1.07s
+6 passed in 0.82s
 ```
 
 **V10 (Docs sync)**:
@@ -254,11 +255,11 @@ README, CHANGELOG `[Unreleased]`, DECISIONS, and `--help` text updated with reli
 
 **V11 (Full pytest suite)**:
 ```
-306 passed in 35.37s
+314 passed in 34.80s
 ```
 
 **V12 (Manual check)**:
-Tested via python mock runtime demonstrating `ses_123 "Add TTY column and kill --no-tty" (log-active)`.
+Tested `ocman lr -l` on live system with a 74 MB log file; parsed and rendered 6 live running instances with active session IDs and titles in 0.77s.
 
 **V13 (Sanitizer & dashes)**:
 `aw sanitize --agent` verified clean on changed tracked files. No em or en dashes added to user-facing output.

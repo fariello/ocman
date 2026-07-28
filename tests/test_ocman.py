@@ -4107,6 +4107,35 @@ def test_doctor_event_bloat_reported(doctor_db, monkeypatch):
     assert ev["fix_cmd"] is None  # NEVER a reclaim command for events
 
 
+def test_doctor_opencode_log_size_reported(doctor_db, monkeypatch):
+    """The doctor reports the on-disk opencode.log FILE size, distinct from event_bloat."""
+    tmp_path, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    log_dir = tmp_path / "home" / ".local" / "share" / "opencode" / "log"
+    log_dir.mkdir(parents=True)
+    (log_dir / "opencode.log").write_bytes(b"x" * 4096)
+    records = ocman.run_doctor_checks(running=False)
+    rec = next(r for r in records if r["key"] == "opencode_log")
+    assert rec["status"] == "notice"
+    assert rec["size_bytes"] == 4096
+    assert rec["bucket"] == "report"
+    assert rec["fix_cmd"] is None  # no cleanup command exists yet
+    # It is a SEPARATE row from the SQLite event-table bloat check.
+    assert rec["key"] != "event_bloat"
+
+
+def test_doctor_opencode_log_absent_ok(doctor_db, monkeypatch):
+    """No opencode.log present => OK, no size reported (not a false NOTICE)."""
+    _tmp, db_path = doctor_db
+    _seed_doctor_db(db_path)
+    monkeypatch.setattr(ocman, "db_family_open_by_live_pid", lambda *a, **k: False)
+    records = ocman.run_doctor_checks(running=False)
+    rec = next(r for r in records if r["key"] == "opencode_log")
+    assert rec["status"] == "ok"
+    assert rec["size_bytes"] == 0
+
+
 def test_doctor_compacted_parts_actionable(doctor_db, monkeypatch):
     _tmp, db_path = doctor_db
     _seed_doctor_db(db_path, with_compacted=True)
@@ -5784,9 +5813,10 @@ def test_run_id_for_process_and_latest_session(monkeypatch, tmp_path):
         f'timestamp=2026-07-28T00:01:00.000Z level=INFO run=run_uuid_123 session.id=ses_active_999\n'
     )
 
+    orig_stat = ocman.cli.os.stat
     monkeypatch.setattr(ocman.cli, "discover_storage_locations", lambda: {"log_dir": str(log_dir)})
     monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000)
-    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p, *a, **k: type("S", (), {"st_uid": 1000})() if str(p).startswith("/proc/") else orig_stat(p, *a, **k))
 
     from datetime import datetime, timezone
     epoch_30s = datetime.strptime("2026-07-28T00:00:05.000", "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc).timestamp()

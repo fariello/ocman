@@ -8395,13 +8395,82 @@ def _proc_start_epoch(pid: int) -> float | None:
         return None
 
 
+def _parse_opencode_log_tail(log_file: Path, oldest_start_epoch: float | None = None, max_bytes: int = 10 * 1024 * 1024) -> tuple[list, dict]:
+    """Parse opencode.log from tail backwards in chunks until oldest_start_epoch is covered.
+
+    Returns (run_inits, latest_session_per_run), where:
+      run_inits: list of (log_epoch, run_id, directory)
+      latest_session_per_run: dict mapping run_id -> ses_id
+    """
+    if not log_file.exists():
+        return [], {}
+
+    file_size = log_file.stat().st_size
+    if file_size == 0:
+        return [], {}
+
+    chunk_size = 512 * 1024  # 512 KB per step
+    read_bytes = min(file_size, chunk_size if oldest_start_epoch else 2 * 1024 * 1024)
+
+    import re
+    from datetime import datetime, timezone
+
+    init_re = re.compile(
+        r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\b(?:creating instance|bootstrapping)\b.*?\bdirectory=([^\s]+)"
+    )
+    init_re2 = re.compile(
+        r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\bdirectory=([^\s]+).*?\b(?:creating instance|bootstrapping)\b"
+    )
+    sess_re = re.compile(r"\brun=([A-Za-z0-9_-]+).*?\bsession\.id=(ses_[A-Za-z0-9_-]+)")
+
+    while True:
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            if file_size > read_bytes:
+                f.seek(file_size - read_bytes)
+                f.readline()  # discard partial first line
+
+            run_inits = []
+            latest_session_per_run = {}
+            earliest_log_epoch = None
+
+            for line in f:
+                if "session.id=" in line:
+                    m = sess_re.search(line)
+                    if m:
+                        latest_session_per_run[m.group(1)] = m.group(2)
+                elif "creating instance" in line or "bootstrapping" in line:
+                    m = init_re.search(line) or init_re2.search(line)
+                    if m:
+                        ts_str, r_id, dir_val = m.group(1), m.group(2), m.group(3)
+                        try:
+                            ts_clean = ts_str.rstrip("Z")
+                            if "." in ts_clean:
+                                dt = datetime.strptime(ts_clean[:23], "%Y-%m-%dT%H:%M:%S.%f")
+                            else:
+                                dt = datetime.strptime(ts_clean[:19], "%Y-%m-%dT%H:%M:%S")
+                            log_epoch = dt.replace(tzinfo=timezone.utc).timestamp()
+                            if earliest_log_epoch is None or log_epoch < earliest_log_epoch:
+                                earliest_log_epoch = log_epoch
+                            run_inits.append((log_epoch, r_id, dir_val))
+                        except Exception:
+                            pass
+
+        if oldest_start_epoch is None or read_bytes >= file_size or read_bytes >= max_bytes:
+            break
+        if earliest_log_epoch is not None and earliest_log_epoch <= oldest_start_epoch:
+            break
+        read_bytes = min(file_size, read_bytes + chunk_size)
+
+    return run_inits, latest_session_per_run
+
+
 def _active_session_for_process(pid: int, cwd: str, *, verbosity: int = 0) -> str | None:
     """Return the ses_... ID that process PID most recently logged activity in, or None.
 
     Correlates PID start time (via _proc_start_epoch) with opencode.log 'creating instance' /
     'bootstrapping' entries for cwd within a 30s window to identify run=<uuid>, then finds
-    the last logged session.id=ses_... for that run. Single-pass log reading; pure read-only;
-    never raises.
+    the last logged session.id=ses_... for that run. Uses backward-chunked log reading;
+    pure read-only; never raises.
     """
     if not pid or not cwd:
         return None
@@ -8423,46 +8492,16 @@ def _active_session_for_process(pid: int, cwd: str, *, verbosity: int = 0) -> st
         if not log_file.exists():
             return None
 
-        candidate_runs = []
-        latest_session_per_run = {}
-
-        import re
-        from datetime import datetime, timezone
-
-        run_init_re = re.compile(
-            r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\b(creating instance|bootstrapping)\b.*?\bdirectory=([^\s]+)"
-        )
-        run_init_re2 = re.compile(
-            r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\bdirectory=([^\s]+).*?\b(creating instance|bootstrapping)\b"
-        )
-        sess_re = re.compile(r"\brun=([A-Za-z0-9_-]+).*?\bsession\.id=(ses_[A-Za-z0-9_-]+)")
-
+        run_inits, latest_session_per_run = _parse_opencode_log_tail(log_file, start_epoch)
         norm_cwd = str(Path(cwd).resolve())
 
-        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
-            for line in f:
-                m_sess = sess_re.search(line)
-                if m_sess:
-                    r_id, s_id = m_sess.group(1), m_sess.group(2)
-                    latest_session_per_run[r_id] = s_id
-
-                m_init = run_init_re.search(line) or run_init_re2.search(line)
-                if m_init:
-                    ts_str, r_id, _, dir_val = m_init.groups()
-                    dir_norm = str(Path(dir_val).resolve()) if dir_val != "/" else "/"
-                    if dir_norm == norm_cwd or dir_val == cwd:
-                        try:
-                            ts_clean = ts_str.rstrip("Z")
-                            if "." in ts_clean:
-                                dt = datetime.strptime(ts_clean[:23], "%Y-%m-%dT%H:%M:%S.%f")
-                            else:
-                                dt = datetime.strptime(ts_clean[:19], "%Y-%m-%dT%H:%M:%S")
-                            log_epoch = dt.replace(tzinfo=timezone.utc).timestamp()
-                            diff = abs(log_epoch - start_epoch)
-                            if diff <= 30.0:
-                                candidate_runs.append((diff, r_id))
-                        except Exception:
-                            pass
+        candidate_runs = []
+        for log_epoch, r_id, dir_val in run_inits:
+            dir_norm = str(Path(dir_val).resolve()) if dir_val != "/" else "/"
+            if dir_norm == norm_cwd or dir_val == cwd:
+                diff = abs(log_epoch - start_epoch)
+                if diff <= 30.0:
+                    candidate_runs.append((diff, r_id))
 
         if not candidate_runs:
             return None
@@ -15368,6 +15407,34 @@ def check_snapshots(loc: dict) -> dict:
         bucket="report")
 
 
+def check_opencode_log(loc: dict) -> dict:
+    """Check (opencode_log): size of OpenCode's append-only text log; report-only.
+
+    Distinct from the "Event log bloat" check, which measures the SQLite ``event`` TABLE
+    inside the database. This measures the on-disk text log file
+    ``<data_dir>/log/opencode.log``, which OpenCode appends to and never rotates, so it can
+    grow large over time. ocman does not delete or truncate it today (it is also the source
+    of `ocman lr -l` reliable session attribution), so this row is purely informational.
+    """
+    log_dir = loc.get("log_dir")
+    if log_dir is None:
+        return _check_record("opencode_log", "OpenCode log file", DOCTOR_OK,
+                             detail="no log dir.")
+    log_file = Path(log_dir) / "opencode.log"
+    if not log_file.exists():
+        return _check_record("opencode_log", "OpenCode log file", DOCTOR_OK,
+                             detail="no opencode.log.")
+    size = get_file_size_local(log_file)
+    return _check_record(
+        "opencode_log", "OpenCode log file", DOCTOR_NOTICE,
+        size_bytes=size,
+        detail=(f"OpenCode's text log {log_file} is {human_size_local(size)}. OpenCode "
+                f"appends to it and never rotates it, so it grows unbounded. This is the "
+                f"on-disk log FILE, not the 'Event log bloat' row above (that is the "
+                f"database `event` table). ocman does not truncate it today."),
+        fix_cmd=None, bucket="report")
+
+
 def check_listening_servers(*, all_users: bool = False, probe: bool = False) -> dict:
     """Check (security): running opencode control servers and whether they are exposed/unsecured.
 
@@ -15509,6 +15576,7 @@ def run_doctor_checks(loc: dict | None = None, *, retention_days: float | None =
     records.append(_step("scanning for leftover temp WAL databases", lambda: check_temp_wal(loc)))
     records.append(_step("scanning /tmp for leftover .so libraries", lambda: check_temp_so(loc)))
     records.append(_step("sizing the snapshot store", lambda: check_snapshots(loc)))
+    records.append(_step("sizing the OpenCode log file", lambda: check_opencode_log(loc)))
     # Security: listening opencode control servers. Always runs (cheap ps/ss; a signal you
     # always want). The optional HTTP auth probe runs ONLY under --deep AND never under --fast
     # (fast wins), so `doctor --fast` performs no network calls.
