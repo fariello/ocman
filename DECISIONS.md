@@ -423,3 +423,17 @@ Add an opt-in "add to pending list" path alongside refuse-or-force:
   or be edited, so the drain re-resolves and re-confirms rather than replaying blindly.
 
 Full rationale: `.agents/plans/executed/20260725-2325-01-pending-actions-ipd.md`.
+
+## 2026-07-28: Reliable log-correlated session attribution for `ocman lr -l`/`--long`
+
+### Context
+
+`ocman list running`/`lr --long` previously surfaced a Session column derived from a best-guess (`_attribute_session`): an argv `-s <id>` hint or the cwd's sessions (one-to-many). For running processes, correlating `/proc/<pid>` start time with `opencode.log` `run=<uuid>` entries for `cwd` within a 30s window and reading the latest `session.id=ses_...` yields the exact active session ID and title (`log-active`).
+
+### Decision
+
+- **Reliable-first behind `--long`/`-l`.** Correlate `/proc/<pid>` start time to `opencode.log` `run=<uuid>` entries for `cwd` within a 30s window and read the latest `session.id=ses_...` line to surface the reliable active session ID and title (`log-active`), with fallback to the argv/cwd guess.
+- **`--json` unchanged.** The `--json` output retains the existing best-guess dict with provenance. Point-in-time active sessions are mutable; machine snapshots must not imply a stable 1:1.
+- **Documented caveat.** If a user switches sessions in the TUI via `/sessions` but has not yet taken an action in the new session, the log reflects the last active session until the first interaction.
+
+Full rationale: `.agents/plans/executed/20260728-0032-01-lr-reliable-session-attribution-ipd.md`.

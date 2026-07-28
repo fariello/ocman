@@ -2513,7 +2513,7 @@ def test_render_session_header_full_and_brief(monkeypatch):
     stats = {"msgs": 10, "interactions": 3, "parts": 40, "has_interactions": True}
     full = render_session_header(row, stats, index=2)
     assert "2. Session ID: ses_abc" in full and "Name: My Session" in full
-    assert "Start" in full and "Last active" in full and "Duration" in full
+    assert "Start" in full and "Last Active" in full and "Duration" in full
     assert "Messages" in full and "Interactions" in full and "DB Parts" in full and "Cost" in full
     # index omitted when None
     assert "Session ID: ses_abc" in render_session_header(row, stats, index=None)
@@ -2682,7 +2682,7 @@ def test_list_sessions_approximate_stats(temp_db, capsys):
     assert "Session ID:" in captured.out and "Name:" in captured.out
     assert "Messages" in captured.out and "Interactions" in captured.out
     assert "DB Parts" in captured.out
-    assert "Start" in captured.out and "Last active" in captured.out
+    assert "Start" in captured.out and "Last Active" in captured.out
     assert "Note: ~msgs, ~interactions, and ~parts are cheap DB-derived approximate counts." in captured.out
 
 
@@ -2772,7 +2772,7 @@ def test_global_mapping_notice_on_dir_scope(temp_db, capsys, monkeypatch):
     assert "global (/) project" in out
     assert "ocman list sessions in /" in out
     # Two-table header fields present; cost shows in the Cost cell.
-    assert "Start" in out and "Last active" in out
+    assert "Start" in out and "Last Active" in out
     assert "$0.42" in out
 
 
@@ -5501,7 +5501,7 @@ def test_kill_by_pid_dry_run_zero_side_effects(monkeypatch, capsys):
     assert "PID 321" in out
 
 
-def test_is_detached_and_instance_tty():
+def test_is_detached_and_instance_tty(monkeypatch):
     assert ocman.cli._instance_tty({"tty": "pts/3"}) == "pts/3"
     assert ocman.cli._instance_tty({"tty": " ? "}) == "?"
     assert ocman.cli._instance_tty({"tty": None}) == ""
@@ -5511,6 +5511,11 @@ def test_is_detached_and_instance_tty():
     assert ocman.cli._is_detached({"tty": "??"}) is True
     assert ocman.cli._is_detached({"tty": ""}) is True
     assert ocman.cli._is_detached({"tty": None}) is True
+
+    monkeypatch.setattr(ocman.cli.os.path, "exists", lambda p: True)
+    monkeypatch.setattr(ocman.cli.os, "open", lambda *a, **k: 99)
+    monkeypatch.setattr(ocman.cli.os, "tcgetpgrp", lambda fd: 1234)
+    monkeypatch.setattr(ocman.cli.os, "close", lambda fd: None)
     assert ocman.cli._is_detached({"tty": "pts/0"}) is False
 
 
@@ -5523,6 +5528,7 @@ def test_list_running_tty_column_and_borderless(monkeypatch, capsys):
              "listeners": [], "exposed": False, "auth": "secured", "vulnerable": False,
              "cwd": "/p2", "project": "proj2", "session": {}}
     monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst1, inst2])
+    monkeypatch.setattr(ocman.cli, "_is_detached", lambda it: it.get("tty") == "?")
     ocman.cli.cli_list_running()
     out = capsys.readouterr().out
     assert "TTY" in out
@@ -5550,6 +5556,7 @@ def test_kill_no_tty_batch_kills_detached(monkeypatch, capsys):
                  "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p3", "project": "p3", "session": {}}
     calls = []
     monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_att, inst_det1, inst_det2])
+    monkeypatch.setattr(ocman.cli, "_is_detached", lambda it: it.get("tty") in ("?", ""))
     monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
     monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
@@ -5610,6 +5617,7 @@ def test_kill_no_tty_zero_match_calm_message(monkeypatch, capsys):
                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
     calls = []
     monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst_att])
+    monkeypatch.setattr(ocman.cli, "_is_detached", lambda it: it.get("tty") in ("?", ""))
     monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.setattr(ocman.cli.os, "stat", lambda path: type("S", (), {"st_uid": 1000})())
     monkeypatch.setattr(ocman.cli, "_kill_pid_gracefully", lambda pid, **k: calls.append(pid) or True)
@@ -5743,3 +5751,95 @@ def test_db_delete_project_recursive_post_commit_metrics_failure_still_deletes(
     cur.execute("SELECT COUNT(*) FROM session WHERE id='sess1'")
     assert cur.fetchone()[0] == 0
     conn.close()
+
+
+def test_proc_start_epoch_parsing(monkeypatch, tmp_path):
+    import ocman.cli
+    stat_content = b"1234 (open (code) proc) S 1 1234 1234 0 -1 4194304 100 0 0 0 10 20 0 0 20 0 1 0 5000 100000 1000 18446744073709551615 1 1 0 0 0 0 0 0 1"
+    uptime_content = "10000.00 20000.00\n"
+
+    def mock_open(path, *args, **kwargs):
+        if str(path).endswith("/uptime"):
+            return type("F", (), {"read": lambda self: uptime_content, "__enter__": lambda self: self, "__exit__": lambda *a: None})()
+        if "/stat" in str(path):
+            return type("F", (), {"read": lambda self: stat_content, "__enter__": lambda self: self, "__exit__": lambda *a: None})()
+        raise FileNotFoundError(path)
+
+    monkeypatch.setattr("builtins.open", mock_open)
+    epoch = ocman.cli._proc_start_epoch(1234)
+    assert epoch is not None
+    assert isinstance(epoch, float)
+
+
+def test_run_id_for_process_and_latest_session(monkeypatch, tmp_path):
+    import ocman.cli, time
+    log_dir = tmp_path / "log"
+    log_dir.mkdir(parents=True)
+    log_file = log_dir / "opencode.log"
+
+    start_ts = "2026-07-28T00:00:00.000Z"
+    log_file.write_text(
+        f'timestamp={start_ts} level=INFO run=run_uuid_123 message="creating instance" directory=/my/project\n'
+        f'timestamp=2026-07-28T00:00:05.000Z level=INFO run=run_uuid_123 session.id=ses_first_111\n'
+        f'timestamp=2026-07-28T00:01:00.000Z level=INFO run=run_uuid_123 session.id=ses_active_999\n'
+    )
+
+    monkeypatch.setattr(ocman.cli, "discover_storage_locations", lambda: {"log_dir": str(log_dir)})
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(ocman.cli.os, "stat", lambda p: type("S", (), {"st_uid": 1000})())
+
+    from datetime import datetime, timezone
+    epoch_30s = datetime.strptime("2026-07-28T00:00:05.000", "%Y-%m-%dT%H:%M:%S.%f").replace(tzinfo=timezone.utc).timestamp()
+    monkeypatch.setattr(ocman.cli, "_proc_start_epoch", lambda pid: epoch_30s)
+
+    sid = ocman.cli._active_session_for_process(8888, "/my/project")
+    assert sid == "ses_active_999"
+
+
+def test_db_session_title(temp_db, monkeypatch):
+    import ocman.cli, sqlite3
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/path', 'P1')")
+    cur.execute("INSERT INTO session (id, project_id, title) VALUES ('ses_t1', 'p1', 'My Session Title')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(ocman.cli, "OPENCODE_DB_PATH", temp_db)
+    assert ocman.cli.db_session_title("ses_t1") == "My Session Title"
+    assert ocman.cli.db_session_title("ses_test_missing") is None
+
+
+def test_attribute_session_reliable_and_fallback(monkeypatch):
+    import ocman.cli
+    monkeypatch.setattr(ocman.cli, "_active_session_for_process", lambda pid, cwd: "ses_rel_1" if pid == 100 else None)
+    monkeypatch.setattr(ocman.cli, "db_session_title", lambda sid: "Reliable Title" if sid == "ses_rel_1" else None)
+    monkeypatch.setattr(ocman.cli, "db_find_session", lambda sid: ("ses_rel_1", "/cwd", "p1") if sid == "ses_rel_1" else None)
+
+    res_rel = ocman.cli._attribute_session({"pid": 100, "cwd": "/cwd"}, reliable=True)
+    assert res_rel["id"] == "ses_rel_1"
+    assert res_rel["title"] == "Reliable Title"
+    assert res_rel["provenance"] == "log-active"
+
+    res_fallback = ocman.cli._attribute_session({"pid": 200, "cwd": "/cwd"}, reliable=True)
+    assert res_fallback["provenance"] in ("directory (one-to-many)", "unknown")
+
+
+def test_sess_str_with_title():
+    import ocman.cli
+    s_title = {"id": "ses_123", "title": "Add TTY column and kill --no-tty", "provenance": "log-active"}
+    out = ocman.cli._sess_str(s_title)
+    assert out == 'ses_123 "Add TTY column and kill --no-tty" (log-active)'
+
+    s_long = {"id": "ses_123", "title": "A" * 50, "provenance": "log-active"}
+    out_long = ocman.cli._sess_str(s_long)
+    assert 'ses_123 "' in out_long
+    assert "..." in out_long
+
+
+def test_running_subparser_short_l_flag():
+    import ocman.cli
+    parser = ocman.cli.build_parser()
+    args = parser.parse_args(["running", "-l"])
+    assert args.running_long is True
+

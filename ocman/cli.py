@@ -4713,6 +4713,25 @@ def _fmt_duration(created_ms, updated_ms) -> str:
     return f"{days}d {hms}" if days else hms
 
 
+def _fmt_time_since(epoch_ms) -> str:
+    """Human duration since last activity (now - epoch_ms). Format: <d>d HH:MM:SS."""
+    if not epoch_ms:
+        return "-"
+    try:
+        import time
+        now_s = time.time()
+        start_s = int(epoch_ms) / 1000.0
+        diff_s = int(now_s - start_s)
+        if diff_s < 0:
+            return "0d 00:00:00"
+        days, rem = divmod(diff_s, 86400)
+        h, rem = divmod(rem, 3600)
+        m, s = divmod(rem, 60)
+        return f"{days}d {h:02d}:{m:02d}:{s:02d}"
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "-"
+
+
 def _display_worktree(worktree: str) -> str:
     """
     Human-friendly label for a project worktree.
@@ -4736,7 +4755,7 @@ def _session_stats_for(row: dict, stats: dict | None) -> dict:
 
 def render_session_header(row: dict, stats: dict | None = None, *,
                           index: int | None = None, compact: bool = False,
-                          indent: str = "  ") -> str:
+                          indent: str = "") -> str:
     """The ONE canonical per-session block used by every session-listing surface.
 
     ``row`` is a db_list_sessions dict; ``stats`` is that session's
@@ -4749,7 +4768,7 @@ def render_session_header(row: dict, stats: dict | None = None, *,
     sid = row.get("id", "")
     title = row.get("title") or "(untitled)"
     prefix = "⤷ " if row.get("parent_id") else ""
-    num = f"{index}. " if index is not None else ""
+    num = f"{index}." if index is not None else ""
     has_inter = st.get("has_interactions", False)
     inter_str = fmt_int(st.get("interactions", 0)) if has_inter else "n/a"
 
@@ -4761,42 +4780,38 @@ def render_session_header(row: dict, stats: dict | None = None, *,
         line2 = f"{indent}     ID: {sid}  Updated: {_fmt_ts(row.get('updated'))}  {stats_str}"
         return f"{line1}\n{line2}"
 
-    # Full form: identity line + two tables.
-    ident = f"{indent}{num}Session ID: {color_bold(sid)}   Name: {color_bold(f'{prefix}{title}')}"
-
-    # Color/style is gated on ocman's own NO_COLOR/FORCE_COLOR/TTY rule; when off,
-    # set_color(False) makes vistab emit a plain (ANSI-free) table. Header styling is
-    # high-contrast (bold bright-white on blue), never faint/dim (accessibility rule).
     color_on = _color_enabled()
 
-    def _styled(tbl):
-        tbl.set_color(color_on)
-        if color_on:
-            tbl.set_header_style(bold=True)  # bold header, no background
-        return tbl
+    table = vistab.Vistab(style="none", padding=0)
+    table.set_cols_dtype(['t'] * 7)
+    table.set_color(color_on)
 
-    t1 = _styled(vistab.Vistab(style="round-header", padding=0,
-                               header=["Start", "Last active", "Duration",
-                                       "Tokens In", "Tok Out", "Tok Cache"]))
-    t1.add_row([
-        _fmt_ts(row.get("created")), _fmt_ts(row.get("updated")),
-        _fmt_duration(row.get("created"), row.get("updated")),
-        fmt_int(row.get("tokens_input")), fmt_int(row.get("tokens_output")),
-        fmt_int(row.get("tokens_cache_read")),
-    ])
-    t1.set_cols_align(["l", "l", "r", "r", "r", "r"])
+    # 1. number, Session ID: <SES_ID> (colspan=3), Name: <NAME> (colspan=3) [with SES_ID and NAME in bold]
+    table.add_row([num, f"Session ID: {color_bold(sid)}", "", "", f"Name: {color_bold(prefix + title)}", "", ""])
+    table.set_cell_span(0, 1, 3)
+    table.set_cell_span(0, 4, 3)
 
-    t2 = _styled(vistab.Vistab(style="round-header", padding=0,
-                               header=["Messages", "Interactions", "DB Parts", "Cost"]))
-    t2.add_row([
-        fmt_int(st.get("msgs", 0)), inter_str,
-        fmt_int(st.get("parts", 0)), fmt_cost(row.get("cost")),
-    ])
-    t2.set_cols_align(["r", "r", "r", "r"])
+    # 2. nothing, Last Active, Start Time, Duration, Tok In, Tok Out, Tok Cache
+    table.add_row(["", "Last Active", "Start Time", "Duration", "Tok In", "Tok Out", "Tok Cache"])
 
-    tbl_indent = indent + "  "  # small 2-space indent under the identity line
-    body = "\n".join(tbl_indent + ln for ln in (t1.draw() + "\n" + t2.draw()).splitlines())
-    return f"{ident}\n{body}"
+    # 3. nothing, <LAST_DATETIME>, <START_TIME>, <DURATION>, <NUM_TOKENS_IN>, <NUM_TOKENS_OUT>, <NUM_TOKENS_CACHE>
+    table.add_row(["", _fmt_ts(row.get("updated")), _fmt_ts(row.get("created")),
+                   _fmt_duration(row.get("created"), row.get("updated")),
+                   fmt_int(row.get("tokens_input")), fmt_int(row.get("tokens_output")),
+                   fmt_int(row.get("tokens_cache_read"))])
+
+    # 4. nothing, Last Active, Messages, Interactions, DB Parts, Cost
+    table.add_row(["", "Last Active", "Messages", "Interactions", "DB Parts", "Cost", ""])
+
+    # 5. nothing, <LAST_DURATION>, <NUM_MESSAGES>, <NUM_INTERACTIONS>, <NUM_DB_PARTS>, <COST>
+    table.add_row(["", _fmt_time_since(row.get("updated")), fmt_int(st.get("msgs", 0)),
+                   inter_str, fmt_int(st.get("parts", 0)), fmt_cost(row.get("cost")), ""])
+
+    table.set_cols_align(["l", "l", "r", "r", "r", "r", "r"])
+
+    if indent:
+        return "\n".join(indent + ln for ln in table.draw().splitlines())
+    return table.draw()
 
 
 def render_session_list(rows: list[dict], stats_map: dict | None = None, *,
@@ -4811,14 +4826,70 @@ def render_session_list(rows: list[dict], stats_map: dict | None = None, *,
     stats_map = stats_map or {}
     out: list[str] = []
     current_project = object()  # sentinel so the first row always prints a header
+
+    if compact:
+        for offset, row in enumerate(rows):
+            idx = enumerate_from + offset
+            proj = _display_worktree(row.get("project_dir"))
+            if proj != current_project:
+                out.append(f"Project: {proj}")
+                current_project = proj
+            out.append(render_session_header(
+                row, stats_map.get(row.get("id")), index=idx, compact=compact))
+        return "\n".join(out)
+
+    table = None
+    row_idx = 0
+
     for offset, row in enumerate(rows):
         idx = enumerate_from + offset
         proj = _display_worktree(row.get("project_dir"))
         if proj != current_project:
+            if table is not None:
+                out.append(table.draw())
+                out.append("")
             out.append(f"Project: {proj}")
             current_project = proj
-        out.append(render_session_header(
-            row, stats_map.get(row.get("id")), index=idx, compact=compact))
+            table = vistab.Vistab(style="none", padding=0)
+            table.set_cols_dtype(['t'] * 7)
+            table.set_cols_align(['l', 'l', 'r', 'r', 'r', 'r', 'r'])
+            table.set_color(_color_enabled())
+            row_idx = 0
+
+        st = _session_stats_for(row, stats_map.get(row.get("id")))
+        sid = row.get("id", "")
+        title = row.get("title") or "(untitled)"
+        prefix = "⤷ " if row.get("parent_id") else ""
+        num = f"{idx}."
+        has_inter = st.get("has_interactions", False)
+        inter_str = fmt_int(st.get("interactions", 0)) if has_inter else "n/a"
+
+        # 1. number, Session ID: <SES_ID> (colspan=3), Name: <NAME> (colspan=3) [with SES_ID and NAME in bold]
+        table.add_row([num, f"Session ID: {color_bold(sid)}", "", "", f"Name: {color_bold(prefix + title)}", "", ""])
+        table.set_cell_span(row_idx, 1, 3)
+        table.set_cell_span(row_idx, 4, 3)
+
+        # 2. nothing, Last Active, Start Time, Duration, Tok In, Tok Out, Tok Cache
+        table.add_row(["", "Last Active", "Start Time", "Duration", "Tok In", "Tok Out", "Tok Cache"])
+
+        # 3. nothing, <LAST_DATETIME>, <START_TIME>, <DURATION>, <NUM_TOKENS_IN>, <NUM_TOKENS_OUT>, <NUM_TOKENS_CACHE>
+        table.add_row(["", _fmt_ts(row.get("updated")), _fmt_ts(row.get("created")),
+                       _fmt_duration(row.get("created"), row.get("updated")),
+                       fmt_int(row.get("tokens_input")), fmt_int(row.get("tokens_output")),
+                       fmt_int(row.get("tokens_cache_read"))])
+
+        # 4. nothing, Last Active, Messages, Interactions, DB Parts, Cost
+        table.add_row(["", "Last Active", "Messages", "Interactions", "DB Parts", "Cost", ""])
+
+        # 5. nothing, <LAST_DURATION>, <NUM_MESSAGES>, <NUM_INTERACTIONS>, <NUM_DB_PARTS>, <COST>
+        table.add_row(["", _fmt_time_since(row.get("updated")), fmt_int(st.get("msgs", 0)),
+                       inter_str, fmt_int(st.get("parts", 0)), fmt_cost(row.get("cost")), ""])
+
+        row_idx += 5
+
+    if table is not None:
+        out.append(table.draw())
+
     return "\n".join(out)
 
 
@@ -6586,8 +6657,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Include all users' instances (auth shown as 'unknown' without root).")
     sp.add_argument("--probe", action="store_true",
                     help="Confirm auth via a read-only GET /app on your OWN loopback listeners.")
-    sp.add_argument("--long", dest="running_long", action="store_true",
-                    help="Show the extra (best-guess, possibly stale) Session column.")
+    sp.add_argument("-l", "--long", dest="running_long", action="store_true",
+                    help="Show the extra Session column with reliable active session ID and title.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
     # ---- doctor / reclaim (storage checkup + guarded cleanup) --------------
     sp = new_sub("doctor", help="Read-only storage checkup (DB/WAL, orphans, temp, snapshots).")
@@ -7977,8 +8048,36 @@ def _instance_tty(inst: dict) -> str:
 
 
 def _is_detached(inst: dict) -> bool:
-    """Return True if the instance is not attached to a live controlling terminal."""
-    return _instance_tty(inst) in ("?", "??", "")
+    """Return True if the instance is not attached to an active, live controlling terminal.
+
+    Performs thorough platform-specific checks:
+    - Linux / macOS: Checks for '?', '??', empty, device node existence under /dev/, and
+      attempts a non-blocking open. If the PTY master closed (e.g. SSH session dropped when
+      laptop lid closed), opening /dev/pts/N or /dev/ttysN raises EIO (Input/output error),
+      ENXIO, or ENOENT, marking the TTY as detached / dead.
+      Note: tcgetpgrp is avoided because POSIX raises ENOTTY when called from a different
+      session, which caused false positives for active processes in other terminals.
+    - Windows: Checks if the process TTY indicator is 'detached', 'none', or '?'.
+    """
+    tty = _instance_tty(inst)
+    if not tty or tty in ("?", "??"):
+        return True
+
+    if sys.platform == "win32":
+        return tty.lower() in ("detached", "none", "?")
+
+    dev_path = tty if tty.startswith("/dev/") else f"/dev/{tty}"
+    if not os.path.exists(dev_path):
+        return True
+
+    try:
+        fd = os.open(dev_path, os.O_RDWR | os.O_NOCTTY | os.O_NONBLOCK)
+        os.close(fd)
+        return False
+    except OSError as e:
+        if e.errno in (errno.EIO, errno.ENXIO, errno.ENOENT):
+            return True
+        return False
 
 
 def _render_running_opencode(procs: list[dict]) -> str:
@@ -8267,22 +8366,155 @@ def detect_running_instances(*, all_users: bool = False, probe: bool = False,
     return out
 
 
-def _attribute_session(p: dict) -> dict:
+def _proc_start_epoch(pid: int) -> float | None:
+    """Read process starttime in seconds since epoch from /proc/<pid>/stat and /proc/uptime.
+
+    Uses rfind(b")") on raw stat bytes to handle process names (comm) with spaces/parens.
+    Returns None on missing /proc, permission errors, or parse failures.
+    """
+    try:
+        with open("/proc/uptime", "r") as f:
+            uptime_sec = float(f.read().split()[0])
+        boot_epoch = time.time() - uptime_sec
+
+        with open(f"/proc/{pid}/stat", "rb") as f:
+            data = f.read()
+
+        rparen = data.rfind(b")")
+        if rparen == -1:
+            return None
+        tail = data[rparen + 1:].split()
+        if len(tail) < 20:
+            return None
+
+        starttime_ticks = int(tail[19])
+        hz = getattr(os, "sysconf", lambda k: 100)("SC_CLK_TCK") or 100
+        starttime_sec = starttime_ticks / float(hz)
+        return boot_epoch + starttime_sec
+    except Exception:
+        return None
+
+
+def _active_session_for_process(pid: int, cwd: str, *, verbosity: int = 0) -> str | None:
+    """Return the ses_... ID that process PID most recently logged activity in, or None.
+
+    Correlates PID start time (via _proc_start_epoch) with opencode.log 'creating instance' /
+    'bootstrapping' entries for cwd within a 30s window to identify run=<uuid>, then finds
+    the last logged session.id=ses_... for that run. Single-pass log reading; pure read-only;
+    never raises.
+    """
+    if not pid or not cwd:
+        return None
+
+    try:
+        st = os.stat(f"/proc/{pid}")
+        if st.st_uid != os.getuid():
+            return None
+    except Exception:
+        return None
+
+    start_epoch = _proc_start_epoch(pid)
+    if start_epoch is None:
+        return None
+
+    try:
+        loc = discover_storage_locations()
+        log_file = Path(loc["log_dir"]) / "opencode.log"
+        if not log_file.exists():
+            return None
+
+        candidate_runs = []
+        latest_session_per_run = {}
+
+        import re
+        from datetime import datetime, timezone
+
+        run_init_re = re.compile(
+            r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\b(creating instance|bootstrapping)\b.*?\bdirectory=([^\s]+)"
+        )
+        run_init_re2 = re.compile(
+            r"timestamp=([^\s]+).*?\brun=([A-Za-z0-9_-]+).*?\bdirectory=([^\s]+).*?\b(creating instance|bootstrapping)\b"
+        )
+        sess_re = re.compile(r"\brun=([A-Za-z0-9_-]+).*?\bsession\.id=(ses_[A-Za-z0-9_-]+)")
+
+        norm_cwd = str(Path(cwd).resolve())
+
+        with open(log_file, "r", encoding="utf-8", errors="replace") as f:
+            for line in f:
+                m_sess = sess_re.search(line)
+                if m_sess:
+                    r_id, s_id = m_sess.group(1), m_sess.group(2)
+                    latest_session_per_run[r_id] = s_id
+
+                m_init = run_init_re.search(line) or run_init_re2.search(line)
+                if m_init:
+                    ts_str, r_id, _, dir_val = m_init.groups()
+                    dir_norm = str(Path(dir_val).resolve()) if dir_val != "/" else "/"
+                    if dir_norm == norm_cwd or dir_val == cwd:
+                        try:
+                            ts_clean = ts_str.rstrip("Z")
+                            if "." in ts_clean:
+                                dt = datetime.strptime(ts_clean[:23], "%Y-%m-%dT%H:%M:%S.%f")
+                            else:
+                                dt = datetime.strptime(ts_clean[:19], "%Y-%m-%dT%H:%M:%S")
+                            log_epoch = dt.replace(tzinfo=timezone.utc).timestamp()
+                            diff = abs(log_epoch - start_epoch)
+                            if diff <= 30.0:
+                                candidate_runs.append((diff, r_id))
+                        except Exception:
+                            pass
+
+        if not candidate_runs:
+            return None
+
+        candidate_runs.sort(key=lambda x: x[0])
+        best_run_id = candidate_runs[0][1]
+        return latest_session_per_run.get(best_run_id)
+    except Exception:
+        return None
+
+
+def _attribute_session(p: dict, *, reliable: bool = False) -> dict:
     """Best-effort session attribution with PROVENANCE (never a fabricated 1:1).
 
-    Order: argv `-s <id>` hint -> DB lookup (label 'launched-with'); else the process
-    cwd's session(s) via db_list_sessions_under_dir (label 'directory'). Returns
-    {id|ids, provenance, cost, ...} or {provenance: 'unknown'}.
+    Order: if reliable=True, try log-correlated active session (_active_session_for_process).
+    If that yields a session, lookup title and directory/project, label 'log-active'.
+    Otherwise fall through to: argv `-s <id>` hint -> DB lookup (label 'launched-with');
+    else cwd session(s) via db_list_sessions_under_dir (label 'directory').
+    Returns {id|ids, provenance, cost, title, ...} or {provenance: 'unknown'}.
     """
+    if reliable and p.get("pid"):
+        try:
+            cwd = p.get("cwd") or ""
+            sid = _active_session_for_process(p["pid"], cwd)
+            if sid:
+                title = db_session_title(sid)
+                found = db_find_session(sid)
+                directory = found[1] if found else cwd
+                project_id = found[2] if found else ""
+                res = {"id": sid, "provenance": "log-active", "directory": directory, "project_id": project_id}
+                if title:
+                    res["title"] = title
+                return res
+        except Exception:
+            pass
+
     m = re.search(r"(?:^|\s)(?:-s|--session)\s+(ses_[A-Za-z0-9_-]+)", p.get("cmdline", ""))
     if m:
         sid = m.group(1)
         found = db_find_session(sid)
+        title = db_session_title(sid)
         if found:
             _id, directory, project_id = found
-            return {"id": sid, "provenance": "launched-with (may be stale)",
-                    "directory": directory, "project_id": project_id}
-        return {"id": sid, "provenance": "argv hint (not in DB)"}
+            res = {"id": sid, "provenance": "launched-with (may be stale)",
+                   "directory": directory, "project_id": project_id}
+            if title:
+                res["title"] = title
+            return res
+        res = {"id": sid, "provenance": "argv hint (not in DB)"}
+        if title:
+            res["title"] = title
+        return res
     cwd = p.get("cwd") or ""
     if cwd:
         try:
@@ -8303,11 +8535,15 @@ def _sess_str(s: dict) -> str:
     (one-to-many), and `unknown`. Shared by `list running --long` and `kill`.
     """
     if s.get("id"):
+        title = s.get("title")
+        if title:
+            clean_title = str(title).strip()
+            if len(clean_title) > 40:
+                clean_title = clean_title[:37] + "..."
+            return f'{s["id"]} "{clean_title}" ({s["provenance"]})'
         return f"{s['id']} ({s['provenance']})"
     if s.get("ids"):
         return f"{s['count']} session(s) for cwd ({s['provenance']})"
-    # No id/ids: surface the provenance verbatim. For the normal attribution this is the plain
-    # word "unknown"; for a kill-by-PID partial target it carries the informative caveat.
     return str(s.get("provenance") or "unknown")
 
 
@@ -10023,6 +10259,27 @@ def db_find_session(session_id: str) -> tuple[str, str, str] | None:
         row = cursor.fetchone()
         if row:
             return row[0], row[1] or "", row[2] or ""
+        return None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def db_session_title(session_id: str) -> str | None:
+    """Find session title by ID. Returns title string or None."""
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("SELECT title FROM session WHERE id = ?", (session_id,))
+        row = cursor.fetchone()
+        if row and row[0]:
+            return str(row[0])
         return None
     except Exception:
         return None
@@ -12884,22 +13141,56 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
     if long_output:
         header.append("Session")
         align.append("l")
-    # Compact borderless table (style='none') to save horizontal space.
+    # Compact borderless table (style='none') with bold header row, no colors.
     table = vistab.Vistab(style="none", padding=0, header=header)
     table.set_color(_color_enabled())
     if _color_enabled():
         table.set_header_style(bold=True)
+
+    from collections import Counter
+    proj_counts = Counter(it.get("cwd") or it.get("project") or "?" for it in instances)
+
     for it in instances:
         listener = ", ".join(it["listeners"]) if it["listeners"] else "none"
         if it["exposed"]:
             listener = f"{listener} (NON-LOOPBACK)"
         # Prefer the actual working directory (recognizable) over the project id-hash.
         proj = it.get("cwd") or it.get("project") or "?"
-        tty_cell = "no tty" if _is_detached(it) else _instance_tty(it)
-        row = [str(it["pid"]), it.get("user", "?"), tty_cell, it["elapsed"], it["kind"],
-               listener, _auth_cell(it["auth"]), proj]
+        is_shared_proj = (_color_enabled() and proj_counts[proj] > 1)
+
+        if is_shared_proj:
+            tty_label = "no tty" if _is_detached(it) else _instance_tty(it)
+            tty_cell = color_yellow(tty_label)
+            pid_cell = color_yellow(str(it["pid"]))
+            user_cell = color_yellow(it.get("user", "?"))
+            uptime_cell = color_yellow(it["elapsed"])
+            kind_cell = color_yellow(it["kind"])
+            listener_cell = color_yellow(listener)
+            auth_raw = "YES" if it["auth"] == "secured" else ("NO" if it["auth"] == "unsecured" else ("???" if it["auth"] == "unknown" else "n/a"))
+            auth_cell = color_yellow(auth_raw)
+            proj_cell = color_yellow(proj)
+        else:
+            if _is_detached(it):
+                tty_label = "no tty"
+                tty_cell = color_red(tty_label) if _color_enabled() else tty_label
+            else:
+                tty_cell = _instance_tty(it)
+            pid_cell = str(it["pid"])
+            user_cell = it.get("user", "?")
+            uptime_cell = it["elapsed"]
+            kind_cell = it["kind"]
+            listener_cell = listener
+            auth_cell = _auth_cell(it["auth"])
+            proj_cell = proj
+
+        row = [pid_cell, user_cell, tty_cell, uptime_cell, kind_cell,
+               listener_cell, auth_cell, proj_cell]
         if long_output:
-            row.append(_sess_str(it["session"]))
+            sess_attr = _attribute_session(it, reliable=True)
+            sess_cell = _sess_str(sess_attr)
+            if is_shared_proj:
+                sess_cell = color_yellow(sess_cell)
+            row.append(sess_cell)
         table.add_row(row)
     table.set_cols_align(align)
     print(table.draw())
