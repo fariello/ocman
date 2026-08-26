@@ -9440,6 +9440,40 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             else:
                 print("No sessions associated with this project.")
 
+        # Query and display sessions to be deleted
+        sessions_info = []
+        if session_ids:
+            chunk_size = 999
+            chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
+            for chunk in chunks:
+                placeholders = ",".join("?" for _ in chunk)
+                cursor.execute(f"""
+                    SELECT id, title, parent_id, time_created
+                    FROM session
+                    WHERE id IN ({placeholders})
+                    ORDER BY time_created ASC, id ASC
+                """, chunk)
+                sessions_info.extend(cursor.fetchall())
+
+        if sessions_info:
+            print()
+            if days is not None:
+                print(color_bold(f"Sessions matching age filter ({days} days) to be deleted:"))
+            else:
+                print(color_bold("Sessions that will be deleted:"))
+            for sid, title, parent_id, time_created in sessions_info:
+                indent = "    - " if parent_id else "  * "
+                role = " [subagent]" if parent_id else ""
+                created_str = ""
+                if time_created:
+                    try:
+                        from datetime import datetime
+                        created_dt = datetime.fromtimestamp(time_created / 1000.0)
+                        created_str = f" (created: {created_dt.strftime('%Y-%m-%d %H:%M:%S')})"
+                    except Exception:
+                        pass
+                print(f"{indent}{sid}: \"{title or '(untitled)'}\"{role}{created_str}")
+
         # Get counts of rows to be deleted
         counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
         if session_ids:

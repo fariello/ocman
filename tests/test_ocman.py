@@ -5903,7 +5903,7 @@ def test_project_delete_age_parsing(monkeypatch):
     assert p2.days == pytest.approx(14.0)
 
 
-def test_project_delete_age_filter_deletes_only_older_sessions(temp_db):
+def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
     import time
     from ocman import db_delete_project_recursive
     import ocman.cli
@@ -5946,6 +5946,12 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db):
 
     # Run project delete with days=5.0
     db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=False, days=5.0)
+
+    out = capsys.readouterr().out
+    assert 'Sessions matching age filter (5.0 days) to be deleted:' in out
+    assert 'sess_old: "Old Session"' in out
+    assert 'sub_old: "Old Subagent" [subagent]' in out
+    assert 'sess_new' not in out.split("Sessions matching age filter")[1].split("Rows that will be deleted")[0]
 
     # Verify project row is PRESERVED
     conn = sqlite3.connect(str(temp_db))
