@@ -5561,7 +5561,7 @@ def test_is_detached_and_instance_tty(monkeypatch):
 
     monkeypatch.setattr(ocman.cli.os.path, "exists", lambda p: True)
     monkeypatch.setattr(ocman.cli.os, "open", lambda *a, **k: 99)
-    monkeypatch.setattr(ocman.cli.os, "tcgetpgrp", lambda fd: 1234)
+    monkeypatch.setattr(ocman.cli.os, "tcgetpgrp", lambda fd: 1234, raising=False)
     monkeypatch.setattr(ocman.cli.os, "close", lambda fd: None)
     assert ocman.cli._is_detached({"tty": "pts/0"}) is False
 
@@ -5833,7 +5833,7 @@ def test_run_id_for_process_and_latest_session(monkeypatch, tmp_path):
 
     orig_stat = ocman.cli.os.stat
     monkeypatch.setattr(ocman.cli, "discover_storage_locations", lambda: {"log_dir": str(log_dir)})
-    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000)
+    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
     monkeypatch.setattr(ocman.cli.os, "stat", lambda p, *a, **k: type("S", (), {"st_uid": 1000})() if str(p).startswith("/proc/") else orig_stat(p, *a, **k))
 
     from datetime import datetime, timezone
