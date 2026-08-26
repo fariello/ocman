@@ -4976,6 +4976,7 @@ _DURATION_UNIT_DAYS: dict[str, float] = {
     "w": 7.0,
     "week": 7.0,
     "weeks": 7.0,
+    "m": 30.0,
     "mo": 30.0,
     "month": 30.0,
     "months": 30.0,
@@ -4984,9 +4985,8 @@ _DURATION_UNIT_DAYS: dict[str, float] = {
     "years": 365.0,
 }
 
-# Units usable as a compact suffix (e.g. "6mo"); excludes bare "m" on purpose to
-# avoid the minutes/months ambiguity.
-_DURATION_COMPACT_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(h|d|w|mo|y)\s*$", re.IGNORECASE)
+# Units usable as a compact suffix (e.g. "6mo", "9m").
+_DURATION_COMPACT_RE = re.compile(r"^\s*([0-9]+(?:\.[0-9]+)?)\s*(mo|m|h|d|w|y)\s*$", re.IGNORECASE)
 
 
 class DurationError(ValueError):
@@ -6452,6 +6452,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = new_action(p_project, pr_sub, "delete", help="Delete a project and all its sessions.")
     sp.add_argument("name", help="Project name, number, ID, or path.")
+    sp.add_argument("--age", "--older-than", dest="age", default=None, metavar="AGE",
+                    help="Delete only sessions older than AGE (e.g. 1h, 3d, 5w, 9m, 1y, or '30 days').")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
     sp.add_argument("--force", action="store_true", help="Bypass process-lock checks.")
     sp.add_argument("-y", "--yes", action="store_true", help="Skip the confirmation prompt.")
@@ -6958,6 +6960,16 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         elif action == "delete":
             out["delete_project"] = True
             out["project"] = g("name")
+            age = g("age")
+            out["age"] = age
+            if age is not None:
+                try:
+                    out["days"] = parse_duration_to_days(age)
+                except DurationError as e:
+                    _die_cli(f"invalid --age value: {e} "
+                             "(accepted: 1h, 3d, 5w, 9m, 1y, or '30 days')")
+            else:
+                out["days"] = None
             out["dry_run"] = bool(g("dry_run", False))
             out["force"] = bool(g("force", False))
             out["yes"] = bool(g("yes", False))
@@ -9323,11 +9335,15 @@ def db_delete_sessions_batch(
 
 def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, verbosity: int, confirm: bool = True,
                                 extracts: bool | None = None, extract_output_dir: str | None = None,
-                                pend_item: dict | None = None, pend: bool = False) -> None:
-    """Recursively delete a project, all its sessions, and all related database and disk data."""
+                                pend_item: dict | None = None, pend: bool = False,
+                                days: float | None = None) -> None:
+    """Recursively delete a project (or sessions older than days within the project), and all related data."""
     clean_pid = str(project_id).strip()
     if "/" in clean_pid or "\\" in clean_pid or ".." in clean_pid:
         raise RecoveryError(f"Unsafe project ID detected: {clean_pid}")
+
+    if days is not None and days < 0:
+        raise RecoveryError("Retention age must be 0 or positive.")
 
     sqlite3 = _get_sqlite()
     if sqlite3 is None:
@@ -9338,8 +9354,21 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
 
     # Check for running opencode (fail-open; --force bypasses only this lock). PA-03: pend_item
     # lets a running OpenCode be added to the pending list instead of refusing.
-    check_opencode_process_lock(force, verbosity, action=f"delete project {clean_pid}",
+    action_desc = (f"clean sessions older than {days}d in project {clean_pid}"
+                   if days is not None else f"delete project {clean_pid}")
+    check_opencode_process_lock(force, verbosity, action=action_desc,
                                 pend_item=pend_item, pend=pend)
+
+    cutoff_time = None
+    cutoff_date_str = None
+    if days is not None:
+        import time
+        cutoff_time = int(time.time() * 1000 - days * 86400000)
+        try:
+            from datetime import datetime
+            cutoff_date_str = datetime.fromtimestamp(cutoff_time / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+        except Exception:
+            cutoff_date_str = str(cutoff_time)
 
     conn = None
     transaction_started = False
@@ -9357,16 +9386,33 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         proj_name = proj_row[0] or "(unnamed)"
         proj_dir = proj_row[1] or "(no worktree)"
 
-        # Get all sessions associated with the project recursively (including subagent sessions)
-        cursor.execute("""
-            WITH RECURSIVE session_tree(id) AS (
-                SELECT id FROM session WHERE project_id = ?
-                UNION
-                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
-            )
-            SELECT id FROM session_tree;
-        """, (project_id,))
+        # Get sessions associated with the project recursively (including subagent sessions)
+        if cutoff_time is not None:
+            cursor.execute("""
+                WITH RECURSIVE session_tree(id) AS (
+                    SELECT id FROM session WHERE project_id = ? AND time_created < ?
+                    UNION
+                    SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                )
+                SELECT id FROM session_tree;
+            """, (project_id, cutoff_time))
+        else:
+            cursor.execute("""
+                WITH RECURSIVE session_tree(id) AS (
+                    SELECT id FROM session WHERE project_id = ?
+                    UNION
+                    SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                )
+                SELECT id FROM session_tree;
+            """, (project_id,))
         session_ids = [row[0] for row in cursor.fetchall()]
+
+        if days is not None and not session_ids:
+            print()
+            print(f"Project:       {proj_name} ({project_id}) at {proj_dir}")
+            print(f"Cutoff Date:   {cutoff_date_str} ({days} days)")
+            print(f"No sessions found in project '{proj_name}' older than {days} days.")
+            return
 
         # Gather metrics of sessions to be deleted
         stats = gather_deletion_metrics(session_ids, conn) if session_ids else {
@@ -9378,15 +9424,21 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             "tokens_output": 0,
             "sessions": []
         }
-        stats["projects_count"] = 1
+        stats["projects_count"] = 0 if days is not None else 1
 
         print()
-        print(color_bold(f"You are about to delete the project {color_bold(proj_name)} at {proj_dir}"))
-        print(f"Project ID: {project_id}")
-        if session_ids:
-            print(f"This will recursively delete {len(session_ids)} sessions and their messages/related data.")
+        if days is not None:
+            print(color_bold(f"You are about to delete sessions older than {days} days in project {color_bold(proj_name)} at {proj_dir}"))
+            print(f"Project ID:    {project_id}")
+            print(f"Cutoff Date:   {cutoff_date_str}")
+            print(f"This will recursively delete {len(session_ids)} session(s) and their messages/related data.")
         else:
-            print("No sessions associated with this project.")
+            print(color_bold(f"You are about to delete the project {color_bold(proj_name)} at {proj_dir}"))
+            print(f"Project ID: {project_id}")
+            if session_ids:
+                print(f"This will recursively delete {len(session_ids)} sessions and their messages/related data.")
+            else:
+                print("No sessions associated with this project.")
 
         # Get counts of rows to be deleted
         counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
@@ -9404,7 +9456,8 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         for table, col in SESSION_RELATIONAL_TABLES:
             count = counts[table]
             print(f"  {table:<25}: {count:,}")
-        print(f"  {'project':<25}: 1")
+        if days is None:
+            print(f"  {'project':<25}: 1")
 
         # Get corresponding storage files
         storage_dir = OPENCODE_STORAGE_DIR
@@ -9446,8 +9499,9 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         # Resolve extract choice as part of this confirmation moment.
         do_extract = resolve_extract_choice(extracts, not confirm, len(session_ids)) if session_ids else False
 
+        action_verb = "session cleanup" if days is not None else "project deletion"
         if not confirm_destructive(
-            None, assume_yes=not confirm, render=False, action_verb="project deletion",
+            None, assume_yes=not confirm, render=False, action_verb=action_verb,
         ):
             return
 
@@ -9500,9 +9554,10 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             for table, _ in SESSION_RELATIONAL_TABLES:
                 print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
 
-        # Delete the project row
-        cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
-        print(f"[-] Deleted 1 project row from project table")
+        # Delete the project row only when deleting the whole project
+        if days is None:
+            cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
+            print(f"[-] Deleted 1 project row from project table")
 
         cursor.execute("COMMIT;")
         transaction_started = False
@@ -9533,7 +9588,10 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         # Save metrics to JSON sidecar
         save_deletion_metrics("delete", stats)
 
-        print(color_green("Project deletion complete!"))
+        if days is not None:
+            print(color_green(f"Project session cleanup complete! (deleted {len(session_ids)} session(s) older than {days} days in '{proj_name}')"))
+        else:
+            print(color_green("Project deletion complete!"))
         print("--------------------------------------------------------")
         print(f"Database size before:  {human_size_local(size_before)}")
         print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
@@ -16257,10 +16315,17 @@ def _run_pending_item(item: dict, *, verbosity: int, assume_yes: bool) -> None:
         found = db_find_project(str(item.get("target")))
         if not found:
             return
+        days = args.get("days")
+        if days is None and args.get("age"):
+            try:
+                days = parse_duration_to_days(args["age"])
+            except Exception:
+                days = None
         db_delete_project_recursive(project_id=found[0], dry_run=False, force=True,
                                     verbosity=verbosity, confirm=not assume_yes,
                                     extracts=args.get("extracts"),
-                                    extract_output_dir=args.get("extract_output_dir"))
+                                    extract_output_dir=args.get("extract_output_dir"),
+                                    days=days)
     elif action in ("db-clean", "db-clean-orphans"):
         days = float(args.get("days", 0) or 0)
         db_run_cleanup(days=days, project_id=None, project_dir=args.get("project"),
@@ -17230,9 +17295,12 @@ def _run_main() -> None:
                 extract_output_dir=getattr(args, "extract_output_dir", None),
                 pend_item=_make_pend_item("project-delete", str(args.project or _project_id),
                                           snapshot={"project": args.project},
-                                          args={"extracts": getattr(args, "extracts", None),
+                                          args={"age": getattr(args, "age", None),
+                                                "days": getattr(args, "days", None),
+                                                "extracts": getattr(args, "extracts", None),
                                                 "extract_output_dir": getattr(args, "extract_output_dir", None)}),
                 pend=bool(getattr(args, "pend", False)),
+                days=getattr(args, "days", None),
             )
         except PendingDeferred:
             return  # added to the pending list.

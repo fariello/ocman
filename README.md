@@ -396,7 +396,7 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | Command | Description |
 |:---|:---|
 | `ocman project list` | List all projects in the database. `--json` for machine output; `--limit N` caps the count. |
-| `ocman project delete NAME` | Recursively delete a project (all its sessions, files, and DB rows). Offers recovery extracts first by default (`--extracts`/`--no-extracts`, `-o DIR`; see `session delete`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation. |
+| `ocman project delete NAME` | Recursively delete a project (all its sessions, files, and DB rows). When `--age AGE` is passed, deletes only sessions in the project that are older than AGE (e.g. 1h, 3d, 5w, 9m, 1y) and preserves the project row. Offers recovery extracts first by default (`--extracts`/`--no-extracts`, `-o DIR`; see `session delete`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation; `--pend` defers while OpenCode is running. |
 | `ocman project move SRC --to DST` | Relocate a project (re-assign the worktree path in the DB and on disk). `--metadata-only` updates DB paths only. |
 
 ### `db` (database info and maintenance)

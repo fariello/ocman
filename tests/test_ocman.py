@@ -1626,6 +1626,8 @@ def test_parse_duration_to_days():
     assert parse_duration_to_days("2h") == 2.0 / 24.0
     assert parse_duration_to_days("6w") == 42.0
     assert parse_duration_to_days("6mo") == 180.0
+    assert parse_duration_to_days("9m") == 270.0
+    assert parse_duration_to_days("1m") == 30.0
     assert parse_duration_to_days("1y") == 365.0
     assert parse_duration_to_days("30 days") == 30.0
     assert parse_duration_to_days("6 weeks") == 42.0
@@ -5875,4 +5877,210 @@ def test_running_subparser_short_l_flag():
     parser = ocman.cli.build_parser()
     args = parser.parse_args(["running", "-l"])
     assert args.running_long is True
+
+
+def test_project_delete_age_parsing(monkeypatch):
+    import ocman.cli
+    for age_str, expected_days in [
+        ("1h", 1.0 / 24.0),
+        ("3d", 3.0),
+        ("5w", 35.0),
+        ("9m", 270.0),
+        ("1y", 365.0),
+        ("30 days", 30.0),
+    ]:
+        p = _parse(monkeypatch, ["project", "delete", "myproj", "--age", age_str])
+        assert p.delete_project is True
+        assert p.project == "myproj"
+        assert p.age == age_str
+        assert p.days == pytest.approx(expected_days)
+
+    # --older-than alias
+    p2 = _parse(monkeypatch, ["project", "delete", "myproj", "--older-than", "2w"])
+    assert p2.delete_project is True
+    assert p2.project == "myproj"
+    assert p2.age == "2w"
+    assert p2.days == pytest.approx(14.0)
+
+
+def test_project_delete_age_filter_deletes_only_older_sessions(temp_db):
+    import time
+    from ocman import db_delete_project_recursive
+    import ocman.cli
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+
+    now_ms = int(time.time() * 1000)
+    ten_days_ago_ms = now_ms - int(10 * 86400 * 1000)
+    one_day_ago_ms = now_ms - int(1 * 86400 * 1000)
+
+    # sess_old: 10 days ago (older than 5d)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_old', 'proj1', NULL, 'Old Session', ?, ?, 0.10, 1000, 500)
+    """, (ten_days_ago_ms, ten_days_ago_ms))
+
+    # sub_old: subagent of sess_old, 10 days ago
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sub_old', 'proj1', 'sess_old', 'Old Subagent', ?, ?, 0.05, 500, 250)
+    """, (ten_days_ago_ms, ten_days_ago_ms))
+
+    # sess_new: 1 day ago (newer than 5d)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_new', 'proj1', NULL, 'New Session', ?, ?, 0.20, 2000, 1000)
+    """, (one_day_ago_ms, one_day_ago_ms))
+
+    conn.commit()
+    conn.close()
+
+    # Create dummy storage diff files
+    storage_dir = ocman.cli.OPENCODE_STORAGE_DIR
+    storage_dir.mkdir(parents=True, exist_ok=True)
+    (storage_dir / "sess_old.json").write_text("{}")
+    (storage_dir / "sub_old.json").write_text("{}")
+    (storage_dir / "sess_new.json").write_text("{}")
+
+    # Run project delete with days=5.0
+    db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=False, days=5.0)
+
+    # Verify project row is PRESERVED
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 1
+
+    # Verify only sess_new remains
+    cursor.execute("SELECT id FROM session")
+    remaining_sessions = [row[0] for row in cursor.fetchall()]
+    assert remaining_sessions == ["sess_new"]
+    conn.close()
+
+    # Verify disk files
+    assert not (storage_dir / "sess_old.json").exists()
+    assert not (storage_dir / "sub_old.json").exists()
+    assert (storage_dir / "sess_new.json").exists()
+
+    # Verify history metrics: projects_deleted == 0, sessions_deleted == 2
+    history = ocman._load_history()
+    c = history["cumulative"]
+    assert c["projects_deleted"] == 0
+    assert c["sessions_deleted"] == 2
+    assert c["cost_deleted"] == pytest.approx(0.15)
+
+
+def test_project_delete_age_filter_no_match(temp_db, capsys):
+    import time
+    from ocman import db_delete_project_recursive
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+
+    now_ms = int(time.time() * 1000)
+    one_day_ago_ms = now_ms - int(1 * 86400 * 1000)
+
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_new', 'proj1', NULL, 'New Session', ?, ?, 0.20, 2000, 1000)
+    """, (one_day_ago_ms, one_day_ago_ms))
+    conn.commit()
+    conn.close()
+
+    # Run with age filter of 30 days (none older)
+    db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=False, days=30.0)
+
+    out = capsys.readouterr().out
+    assert "No sessions found in project 'Test Proj' older than 30.0 days." in out
+
+    # Verify project and session remain
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess_new'")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_project_delete_age_filter_dry_run(temp_db):
+    import time
+    from ocman import db_delete_project_recursive
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+
+    now_ms = int(time.time() * 1000)
+    ten_days_ago_ms = now_ms - int(10 * 86400 * 1000)
+
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_old', 'proj1', NULL, 'Old Session', ?, ?, 0.10, 1000, 500)
+    """, (ten_days_ago_ms, ten_days_ago_ms))
+    conn.commit()
+    conn.close()
+
+    # Dry run with days=5.0
+    db_delete_project_recursive("proj1", dry_run=True, force=True, verbosity=0, confirm=False, days=5.0)
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess_old'")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_project_delete_negative_days_error():
+    from ocman import db_delete_project_recursive, RecoveryError
+    with pytest.raises(RecoveryError, match="Retention age must be 0 or positive"):
+        db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=False, days=-2.0)
+
+
+def test_pending_project_delete_replay_with_age(temp_db):
+    import time
+    import ocman.cli
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+
+    now_ms = int(time.time() * 1000)
+    ten_days_ago_ms = now_ms - int(10 * 86400 * 1000)
+    one_day_ago_ms = now_ms - int(1 * 86400 * 1000)
+
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_old', 'proj1', NULL, 'Old Session', ?, ?, 0.10, 1000, 500)
+    """, (ten_days_ago_ms, ten_days_ago_ms))
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_new', 'proj1', NULL, 'New Session', ?, ?, 0.20, 2000, 1000)
+    """, (one_day_ago_ms, one_day_ago_ms))
+    conn.commit()
+    conn.close()
+
+    item = {
+        "action": "project-delete",
+        "target": "proj1",
+        "args": {"age": "5d"},
+        "queued_at": "2026-08-26 12:00:00",
+    }
+
+    ocman.cli._run_pending_item(item, verbosity=0, assume_yes=True)
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT id FROM session")
+    assert [row[0] for row in cursor.fetchall()] == ["sess_new"]
+    conn.close()
+
+
 
