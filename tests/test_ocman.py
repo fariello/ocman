@@ -5859,12 +5859,15 @@ def test_sess_str_with_title():
     import ocman.cli
     s_title = {"id": "ses_123", "title": "Add TTY column and kill --no-tty", "provenance": "log-active"}
     out = ocman.cli._sess_str(s_title)
-    assert out == 'ses_123 "Add TTY column and kill --no-tty" (log-active)'
+    assert out == 'ses_123 "Add TTY column and kill --no-tty"'
+
+    s_guess = {"id": "ses_123", "title": "Add TTY column and kill --no-tty", "provenance": "launched-with (may be stale)"}
+    out_guess = ocman.cli._sess_str(s_guess)
+    assert out_guess == 'ses_123 "Add TTY column and kill --no-tty" (launched-with (may be stale))'
 
     s_long = {"id": "ses_123", "title": "A" * 50, "provenance": "log-active"}
     out_long = ocman.cli._sess_str(s_long)
-    assert 'ses_123 "' in out_long
-    assert "..." in out_long
+    assert out_long == f'ses_123 "{"A" * 37}..."'
 
 
 def test_running_subparser_short_l_flag():

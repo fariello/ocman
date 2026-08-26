@@ -8575,12 +8575,14 @@ def _sess_str(s: dict) -> str:
     """
     if s.get("id"):
         title = s.get("title")
+        prov = s.get("provenance")
+        prov_str = f" ({prov})" if prov and prov != "log-active" else ""
         if title:
             clean_title = str(title).strip()
             if len(clean_title) > 40:
                 clean_title = clean_title[:37] + "..."
-            return f'{s["id"]} "{clean_title}" ({s["provenance"]})'
-        return f"{s['id']} ({s['provenance']})"
+            return f'{s["id"]} "{clean_title}"{prov_str}'
+        return f"{s['id']}{prov_str}"
     if s.get("ids"):
         return f"{s['count']} session(s) for cwd ({s['provenance']})"
     return str(s.get("provenance") or "unknown")
