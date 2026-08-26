@@ -4641,7 +4641,9 @@ def test_resolve_extract_choice_prompt_yes_and_no(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: "")
     assert ocman.resolve_extract_choice(None, False, 1) is True
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
-    assert ocman.resolve_extract_choice(None, False, 1) is False
+    assert ocman.resolve_extract_choice(None, False, 1) is None
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    assert ocman.resolve_extract_choice(None, False, 1) is None
 
 
 def test_session_delete_writes_extracts(temp_db, tmp_path, monkeypatch):
@@ -6101,6 +6103,39 @@ def test_pending_project_delete_replay_with_age(temp_db):
     cursor.execute("SELECT id FROM session")
     assert [row[0] for row in cursor.fetchall()] == ["sess_new"]
     conn.close()
+
+
+def test_project_delete_extract_choice_cancelled_exits_immediately(temp_db, monkeypatch):
+    import ocman.cli
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess1', 'proj1', NULL, 'Session 1', 1000, 2000, 0.10, 1000, 500)
+    """)
+    conn.commit()
+    conn.close()
+
+    # User answers 'n' to the extract prompt
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
+
+    # If confirm_destructive were called, it would be an error
+    confirm_called = []
+    monkeypatch.setattr(ocman.cli, "confirm_destructive", lambda *a, **k: confirm_called.append(True))
+
+    ocman.cli.db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=True)
+
+    assert not confirm_called
+
+    # Verify session and project are NOT deleted
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess1'")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
 
 
 

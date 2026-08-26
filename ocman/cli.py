@@ -9085,12 +9085,13 @@ def resolve_extract_choice(
     extracts: bool | None,
     assume_yes: bool,
     session_count: int,
-) -> bool:
+) -> bool | None:
     """Resolve whether to write recovery extracts before a delete.
 
     Tri-state input: True (--extracts), False (--no-extracts), None (ask).
     `assume_yes` (-y/--yes) implies extract=yes with no prompt. When None and
     interactive, ask a single combined question; default is yes.
+    Answering no ('n'/'no') or interrupting (Ctrl-C/EOF) cancels the operation (returns None).
     """
     if extracts is not None:
         return extracts
@@ -9103,9 +9104,12 @@ def resolve_extract_choice(
             f"Extract recovery files for {session_count} {noun} before deleting? [Y/n]: "
         ).strip().lower()
     except (EOFError, KeyboardInterrupt):
-        print()
+        print("\nCancelled.")
+        return None
+    if answer in ("", "y", "yes"):
         return True
-    return answer in ("", "y", "yes")
+    print("Cancelled.")
+    return None
 
 
 def resolve_extract_output_dir(explicit: str | None) -> Path:
@@ -9554,6 +9558,8 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         # never `force`.
         # Resolve extract choice as part of this confirmation moment.
         do_extract = resolve_extract_choice(extracts, not confirm, len(session_ids)) if session_ids else False
+        if do_extract is None:
+            return
 
         action_verb = "session cleanup" if days is not None else "project deletion"
         if not confirm_destructive(
@@ -11849,6 +11855,8 @@ def db_run_cleanup(
             resolve_extract_choice(extracts, assume_yes, len(target_session_ids))
             if target_session_ids else False
         )
+        if do_extract is None:
+            return
 
         print()
         if not confirm_destructive(
@@ -17410,6 +17418,8 @@ def _run_main() -> None:
             do_extract = resolve_extract_choice(
                 getattr(args, "extracts", None), args.yes, len(extract_ids)
             )
+            if do_extract is None:
+                return
 
         if not confirm_destructive(
             preview,
