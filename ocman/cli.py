@@ -9416,7 +9416,7 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
         if cutoff_time is not None:
             cursor.execute("""
                 WITH RECURSIVE session_tree(id) AS (
-                    SELECT id FROM session WHERE project_id = ? AND time_created < ?
+                    SELECT id FROM session WHERE project_id = ? AND COALESCE(NULLIF(time_updated, 0), time_created) < ?
                     UNION
                     SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
                 )
@@ -9474,10 +9474,10 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             for chunk in chunks:
                 placeholders = ",".join("?" for _ in chunk)
                 cursor.execute(f"""
-                    SELECT id, title, parent_id, time_created
+                    SELECT id, title, parent_id, time_created, time_updated
                     FROM session
                     WHERE id IN ({placeholders})
-                    ORDER BY time_created ASC, id ASC
+                    ORDER BY COALESCE(NULLIF(time_updated, 0), time_created) ASC, id ASC
                 """, chunk)
                 sessions_info.extend(cursor.fetchall())
 
@@ -9487,18 +9487,29 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
                 print(color_bold(f"Sessions matching age filter ({days} days) to be deleted:"))
             else:
                 print(color_bold("Sessions that will be deleted:"))
-            for sid, title, parent_id, time_created in sessions_info:
-                indent = "    - " if parent_id else "  * "
+            for sid, title, parent_id, time_created, time_updated in sessions_info:
+                bullet = "    - " if parent_id else "  * "
+                indent = "      " if parent_id else "    "
                 role = " [subagent]" if parent_id else ""
-                created_str = ""
+
+                c_str = "(unknown)"
                 if time_created:
                     try:
                         from datetime import datetime
-                        created_dt = datetime.fromtimestamp(time_created / 1000.0)
-                        created_str = f" (created: {created_dt.strftime('%Y-%m-%d %H:%M:%S')})"
+                        c_str = datetime.fromtimestamp(time_created / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
                     except Exception:
-                        pass
-                print(f"{indent}{sid}: \"{title or '(untitled)'}\"{role}{created_str}")
+                        c_str = str(time_created)
+
+                u_str = "(unknown)"
+                if time_updated:
+                    try:
+                        from datetime import datetime
+                        u_str = datetime.fromtimestamp(time_updated / 1000.0).strftime('%Y-%m-%d %H:%M:%S')
+                    except Exception:
+                        u_str = str(time_updated)
+
+                print(f"{bullet}{sid}: \"{title or '(untitled)'}\"{role}")
+                print(f"{indent}Created: {c_str} | Updated: {u_str}")
 
         # Get counts of rows to be deleted
         counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}

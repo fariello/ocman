@@ -5932,7 +5932,7 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
     ten_days_ago_ms = now_ms - int(10 * 86400 * 1000)
     one_day_ago_ms = now_ms - int(1 * 86400 * 1000)
 
-    # sess_old: 10 days ago (older than 5d)
+    # sess_old: created 10 days ago, updated 10 days ago (older than 5d -> deleted)
     cursor.execute("""
         INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
         VALUES ('sess_old', 'proj1', NULL, 'Old Session', ?, ?, 0.10, 1000, 500)
@@ -5944,11 +5944,17 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
         VALUES ('sub_old', 'proj1', 'sess_old', 'Old Subagent', ?, ?, 0.05, 500, 250)
     """, (ten_days_ago_ms, ten_days_ago_ms))
 
-    # sess_new: 1 day ago (newer than 5d)
+    # sess_new: created 1 day ago, updated 1 day ago (newer than 5d -> kept)
     cursor.execute("""
         INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
         VALUES ('sess_new', 'proj1', NULL, 'New Session', ?, ?, 0.20, 2000, 1000)
     """, (one_day_ago_ms, one_day_ago_ms))
+
+    # sess_active: created 10 days ago, but updated 1 day ago (active recently -> kept)
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess_active', 'proj1', NULL, 'Active Session', ?, ?, 0.30, 3000, 1500)
+    """, (ten_days_ago_ms, one_day_ago_ms))
 
     conn.commit()
     conn.close()
@@ -5959,6 +5965,7 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
     (storage_dir / "sess_old.json").write_text("{}")
     (storage_dir / "sub_old.json").write_text("{}")
     (storage_dir / "sess_new.json").write_text("{}")
+    (storage_dir / "sess_active.json").write_text("{}")
 
     # Run project delete with days=5.0
     db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=False, days=5.0)
@@ -5967,7 +5974,9 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
     assert 'Sessions matching age filter (5.0 days) to be deleted:' in out
     assert 'sess_old: "Old Session"' in out
     assert 'sub_old: "Old Subagent" [subagent]' in out
+    assert 'Created:' in out and 'Updated:' in out
     assert 'sess_new' not in out.split("Sessions matching age filter")[1].split("Rows that will be deleted")[0]
+    assert 'sess_active' not in out.split("Sessions matching age filter")[1].split("Rows that will be deleted")[0]
 
     # Verify project row is PRESERVED
     conn = sqlite3.connect(str(temp_db))
@@ -5975,16 +5984,17 @@ def test_project_delete_age_filter_deletes_only_older_sessions(temp_db, capsys):
     cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
     assert cursor.fetchone()[0] == 1
 
-    # Verify only sess_new remains
-    cursor.execute("SELECT id FROM session")
+    # Verify sess_new and sess_active remain
+    cursor.execute("SELECT id FROM session ORDER BY id")
     remaining_sessions = [row[0] for row in cursor.fetchall()]
-    assert remaining_sessions == ["sess_new"]
+    assert remaining_sessions == ["sess_active", "sess_new"]
     conn.close()
 
     # Verify disk files
     assert not (storage_dir / "sess_old.json").exists()
     assert not (storage_dir / "sub_old.json").exists()
     assert (storage_dir / "sess_new.json").exists()
+    assert (storage_dir / "sess_active.json").exists()
 
     # Verify history metrics: projects_deleted == 0, sessions_deleted == 2
     history = ocman._load_history()
