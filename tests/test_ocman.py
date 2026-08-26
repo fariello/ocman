@@ -5549,6 +5549,7 @@ def test_kill_by_pid_dry_run_zero_side_effects(monkeypatch, capsys):
 
 
 def test_is_detached_and_instance_tty(monkeypatch):
+    import sys
     assert ocman.cli._instance_tty({"tty": "pts/3"}) == "pts/3"
     assert ocman.cli._instance_tty({"tty": " ? "}) == "?"
     assert ocman.cli._instance_tty({"tty": None}) == ""
@@ -5559,11 +5560,15 @@ def test_is_detached_and_instance_tty(monkeypatch):
     assert ocman.cli._is_detached({"tty": ""}) is True
     assert ocman.cli._is_detached({"tty": None}) is True
 
-    monkeypatch.setattr(ocman.cli.os.path, "exists", lambda p: True)
-    monkeypatch.setattr(ocman.cli.os, "open", lambda *a, **k: 99)
-    monkeypatch.setattr(ocman.cli.os, "tcgetpgrp", lambda fd: 1234, raising=False)
-    monkeypatch.setattr(ocman.cli.os, "close", lambda fd: None)
-    assert ocman.cli._is_detached({"tty": "pts/0"}) is False
+    if sys.platform == "win32":
+        assert ocman.cli._is_detached({"tty": "detached"}) is True
+        assert ocman.cli._is_detached({"tty": "none"}) is True
+        assert ocman.cli._is_detached({"tty": "pts/0"}) is False
+    else:
+        monkeypatch.setattr(ocman.cli.os.path, "exists", lambda p: True)
+        monkeypatch.setattr(ocman.cli.os, "open", lambda *a, **k: 99)
+        monkeypatch.setattr(ocman.cli.os, "close", lambda fd: None)
+        assert ocman.cli._is_detached({"tty": "pts/0"}) is False
 
 
 @_linux_only
@@ -5833,7 +5838,8 @@ def test_run_id_for_process_and_latest_session(monkeypatch, tmp_path):
 
     orig_stat = ocman.cli.os.stat
     monkeypatch.setattr(ocman.cli, "discover_storage_locations", lambda: {"log_dir": str(log_dir)})
-    monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000, raising=False)
+    if hasattr(ocman.cli.os, "getuid"):
+        monkeypatch.setattr(ocman.cli.os, "getuid", lambda: 1000)
     monkeypatch.setattr(ocman.cli.os, "stat", lambda p, *a, **k: type("S", (), {"st_uid": 1000})() if str(p).startswith("/proc/") else orig_stat(p, *a, **k))
 
     from datetime import datetime, timezone
@@ -6145,6 +6151,27 @@ def test_project_delete_extract_choice_cancelled_exits_immediately(temp_db, monk
     cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess1'")
     assert cursor.fetchone()[0] == 1
     conn.close()
+
+
+def test_ocman_db_lock_exclusive_blocks_concurrent_writer(temp_db):
+    import ocman.cli
+    from ocman import RecoveryError
+
+    with ocman.cli.ocman_db_lock(action="test writer 1", exclusive=True):
+        # A second concurrent writer attempting exclusive lock should fail immediately
+        with pytest.raises(RecoveryError, match="Another ocman process is currently modifying the database"):
+            with ocman.cli.ocman_db_lock(action="test writer 2", exclusive=True):
+                pass
+
+
+def test_ocman_db_lock_shared_concurrent_readers(temp_db):
+    import ocman.cli
+
+    # Multiple shared readers can acquire the lock simultaneously
+    with ocman.cli.ocman_db_lock(action="test reader 1", exclusive=False):
+        with ocman.cli.ocman_db_lock(action="test reader 2", exclusive=False):
+            pass
+
 
 
 

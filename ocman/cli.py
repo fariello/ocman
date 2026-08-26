@@ -4096,6 +4096,111 @@ def _get_sqlite():
         return None
 
 
+@contextmanager
+def ocman_db_lock(action: str = "modify database", *, exclusive: bool = True, timeout: float = 5.0):
+    """Mutual exclusion / concurrency lock across ocman processes.
+
+    - exclusive=True (mutations like delete, clean, reclaim): acquires LOCK_EX non-blocking.
+      If another ocman process is actively mutating, fails immediately with a descriptive RecoveryError.
+    - exclusive=False (read operations like list): acquires LOCK_SH (waiting up to `timeout` seconds
+      if a VACUUM or mutation is active, ensuring readers do not hit SIGBUS on truncated WAL/shm).
+    """
+    lock_path = Path(OPENCODE_DB_PATH).parent / ".ocman_db.lock"
+    try:
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+
+    fd = None
+    try:
+        try:
+            fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o644)
+        except OSError:
+            fd = None
+
+        if fd is not None:
+            if sys.platform == "win32":
+                import msvcrt
+                if exclusive:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBLCK, 1)
+                    except OSError:
+                        os.close(fd)
+                        fd = None
+                        raise RecoveryError(
+                            f"Another ocman process is currently modifying the database ({action}). "
+                            "Please wait for it to complete."
+                        )
+                else:
+                    try:
+                        msvcrt.locking(fd, msvcrt.LK_NBRLCK, 1)
+                    except Exception:
+                        pass
+            else:
+                import fcntl
+                if exclusive:
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    except (BlockingIOError, OSError):
+                        owner_info = ""
+                        try:
+                            with open(str(lock_path), "r") as f:
+                                owner_info = f.read().strip()
+                        except Exception:
+                            pass
+                        os.close(fd)
+                        fd = None
+                        extra = f" ({owner_info})" if owner_info else ""
+                        raise RecoveryError(
+                            f"Another ocman process is currently modifying the database{extra}. "
+                            "Please wait for it to complete."
+                        )
+                    # Record current process metadata
+                    try:
+                        os.ftruncate(fd, 0)
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        os.write(fd, f"PID {os.getpid()}: {action}".encode("utf-8"))
+                    except Exception:
+                        pass
+                else:
+                    import time
+                    start_t = time.time()
+                    acquired = False
+                    while time.time() - start_t < timeout:
+                        try:
+                            fcntl.flock(fd, fcntl.LOCK_SH | fcntl.LOCK_NB)
+                            acquired = True
+                            break
+                        except (BlockingIOError, OSError):
+                            time.sleep(0.05)
+                    if not acquired:
+                        try:
+                            fcntl.flock(fd, fcntl.LOCK_SH)
+                        except Exception:
+                            pass
+
+        yield
+    finally:
+        if fd is not None:
+            try:
+                if sys.platform == "win32":
+                    try:
+                        import msvcrt
+                        os.lseek(fd, 0, os.SEEK_SET)
+                        msvcrt.locking(fd, msvcrt.LK_UNLCK, 1)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        import fcntl
+                        fcntl.flock(fd, fcntl.LOCK_UN)
+                    except Exception:
+                        pass
+                os.close(fd)
+            except Exception:
+                pass
+
+
 def db_list_projects() -> list[dict[str, Any]]:
     """Query all projects with sessions from the opencode database."""
     sqlite3 = _get_sqlite()
@@ -4103,45 +4208,45 @@ def db_list_projects() -> list[dict[str, Any]]:
         return []
 
     conn = None
-    try:
-        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
-        cursor = conn.cursor()
-        cursor.execute("""
-            SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
-                   COALESCE(MAX(s.time_updated), 0) as last_updated,
-                   COALESCE(SUM(s.cost), 0.0) as cost,
-                   COALESCE(SUM(s.tokens_input), 0) as tokens_input,
-                   COALESCE(SUM(s.tokens_output), 0) as tokens_output,
-                   COALESCE(SUM(s.tokens_cache_read), 0) as tokens_cache_read
-            FROM project p
-            LEFT JOIN session s ON s.project_id = p.id
-            GROUP BY p.id
-            HAVING session_count > 0
-            ORDER BY last_updated DESC
-        """)
-        projects = []
-        for row in cursor.fetchall():
-            projects.append({
-                "id": row[0],
-                "directory": row[1] or "/",
-                "name": row[2] or "",
-                "session_count": row[3],
-                "last_updated": row[4],
-                "cost": row[5],
-                "tokens_input": row[6],
-                "tokens_output": row[7],
-                "tokens_cache_read": row[8],
-            })
-        return projects
-    except Exception:
-        return []
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
+    with ocman_db_lock(exclusive=False):
+        try:
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
+                       COALESCE(MAX(s.time_updated), 0) as last_updated,
+                       COALESCE(SUM(s.cost), 0.0) as cost,
+                       COALESCE(SUM(s.tokens_input), 0) as tokens_input,
+                       COALESCE(SUM(s.tokens_output), 0) as tokens_output,
+                       COALESCE(SUM(s.tokens_cache_read), 0) as tokens_cache_read
+                FROM project p
+                LEFT JOIN session s ON s.project_id = p.id
+                GROUP BY p.id
+                HAVING session_count > 0
+                ORDER BY last_updated DESC
+            """)
+            projects = []
+            for row in cursor.fetchall():
+                projects.append({
+                    "id": row[0],
+                    "directory": row[1] or "/",
+                    "name": row[2] or "",
+                    "session_count": row[3],
+                    "last_updated": row[4],
+                    "cost": row[5],
+                    "tokens_input": row[6],
+                    "tokens_output": row[7],
+                    "tokens_cache_read": row[8],
+                })
+            return projects
+        except Exception:
+            return []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
@@ -4156,61 +4261,62 @@ def db_list_sessions(project_id: str | None = None) -> list[dict[str, Any]]:
         return []
 
     conn = None
-    try:
-        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
-        cursor = conn.cursor()
-        if project_id:
-            cursor.execute("""
-                SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
-                       s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
-                       s.summary_additions, s.summary_deletions, s.summary_files,
-                       s.slug, s.model, s.agent, p.worktree, s.parent_id
-                FROM session s
-                LEFT JOIN project p ON p.id = s.project_id
-                WHERE s.project_id = ?
-                ORDER BY s.time_updated DESC
-            """, (project_id,))
-        else:
-            cursor.execute("""
-                SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
-                       s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
-                       s.summary_additions, s.summary_deletions, s.summary_files,
-                       s.slug, s.model, s.agent, p.worktree, s.parent_id
-                FROM session s
-                LEFT JOIN project p ON p.id = s.project_id
-                ORDER BY s.time_updated DESC
-            """)
+    with ocman_db_lock(exclusive=False):
+        try:
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
+            if project_id:
+                cursor.execute("""
+                    SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                           s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                           s.summary_additions, s.summary_deletions, s.summary_files,
+                           s.slug, s.model, s.agent, p.worktree, s.parent_id
+                    FROM session s
+                    LEFT JOIN project p ON p.id = s.project_id
+                    WHERE s.project_id = ?
+                    ORDER BY s.time_updated DESC
+                """, (project_id,))
+            else:
+                cursor.execute("""
+                    SELECT s.id, s.title, s.time_created, s.time_updated, s.directory,
+                           s.cost, s.tokens_input, s.tokens_output, s.tokens_cache_read,
+                           s.summary_additions, s.summary_deletions, s.summary_files,
+                           s.slug, s.model, s.agent, p.worktree, s.parent_id
+                    FROM session s
+                    LEFT JOIN project p ON p.id = s.project_id
+                    ORDER BY s.time_updated DESC
+                """)
 
-        sessions = []
-        for row in cursor.fetchall():
-            sessions.append({
-                "id": row[0],
-                "title": row[1] or "(untitled)",
-                "created": row[2],
-                "updated": row[3],
-                "directory": row[4] or "",
-                "cost": row[5],
-                "tokens_input": row[6],
-                "tokens_output": row[7],
-                "tokens_cache_read": row[8],
-                "additions": row[9],
-                "deletions": row[10],
-                "files": row[11],
-                "slug": row[12] or "",
-                "model": row[13] or "",
-                "agent": row[14] or "",
-                "project_dir": row[15] or "",
-                "parent_id": row[16] or "",
-            })
-        return sessions
-    except Exception:
-        return []
-    finally:
-        if conn:
-            try:
-                conn.close()
-            except Exception:
-                pass
+            sessions = []
+            for row in cursor.fetchall():
+                sessions.append({
+                    "id": row[0],
+                    "title": row[1] or "(untitled)",
+                    "created": row[2],
+                    "updated": row[3],
+                    "directory": row[4] or "",
+                    "cost": row[5],
+                    "tokens_input": row[6],
+                    "tokens_output": row[7],
+                    "tokens_cache_read": row[8],
+                    "additions": row[9],
+                    "deletions": row[10],
+                    "files": row[11],
+                    "slug": row[12] or "",
+                    "model": row[13] or "",
+                    "agent": row[14] or "",
+                    "project_dir": row[15] or "",
+                    "parent_id": row[16] or "",
+                })
+            return sessions
+        except Exception:
+            return []
+        finally:
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
 
 
 def db_get_session_stats() -> dict[str, dict[str, Any]]:
@@ -7958,7 +8064,12 @@ def _current_user() -> str:
         import getpass
         return getpass.getuser()
     except Exception:
-        return os.environ.get("USER") or os.environ.get("LOGNAME") or str(os.getuid())
+        return (
+            os.environ.get("USER")
+            or os.environ.get("USERNAME")
+            or os.environ.get("LOGNAME")
+            or (str(os.getuid()) if hasattr(os, "getuid") else "unknown")
+        )
 
 
 def _cmdline_is_opencode(cmdline: str, *, broad: bool) -> bool:
@@ -8511,7 +8622,7 @@ def _active_session_for_process(pid: int, cwd: str, *, verbosity: int = 0) -> st
 
     try:
         st = os.stat(f"/proc/{pid}")
-        if st.st_uid != os.getuid():
+        if hasattr(os, "getuid") and st.st_uid != os.getuid():
             return None
     except Exception:
         return None
@@ -8742,95 +8853,96 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         ):
             return
 
-        # Create backup directory and backup database file family
-        from datetime import datetime
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
-            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
-            
-            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
-            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
-            if wal_file.exists():
-                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
-            if shm_file.exists():
-                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
-            print("[+] Backup created successfully.")
-        except Exception as e:
-            print(color_red(f"[-] Backup failed: {e}"))
-            print(color_red("    Aborting deletion for safety."))
-            return
-
-        # Perform deletion
-        size_before = get_file_size_local(OPENCODE_DB_PATH)
-        print(f"{info_prefix()} Starting transaction...")
-        cursor.execute("PRAGMA foreign_keys = OFF;")
-        cursor.execute("BEGIN TRANSACTION;")
-        transaction_started = True
-        
-        # Gather metrics of sessions to be deleted
-        stats = gather_deletion_metrics(session_ids, conn)
-
-        deleted_counts = _delete_session_rows(session_ids, cursor=cursor)
-
-        for table, _ in SESSION_RELATIONAL_TABLES:
-            print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
-
-        cursor.execute("COMMIT;")
-        transaction_started = False
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        print("[+] Transaction committed successfully.")
-
-        # Delete disk files
-        files_space_saved = 0
-        for f in files_to_delete:
+        with ocman_db_lock(action=f"delete session {clean_sid}", exclusive=True):
+            # Create backup directory and backup database file family
+            from datetime import datetime
+            backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
             try:
-                if f.exists():
-                    files_space_saved += f.stat().st_size
-                f.unlink()
-                print(f"[-] Deleted file: {f}")
-            except OSError as e:
-                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+                shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+                
+                wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+                shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+                if wal_file.exists():
+                    shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+                if shm_file.exists():
+                    shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+                print("[+] Backup created successfully.")
+            except Exception as e:
+                print(color_red(f"[-] Backup failed: {e}"))
+                print(color_red("    Aborting deletion for safety."))
+                return
 
-        # Vacuum database
-        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
-        conn.execute("VACUUM;")
-        print("[+] VACUUM complete.")
+            # Perform deletion
+            size_before = get_file_size_local(OPENCODE_DB_PATH)
+            print(f"{info_prefix()} Starting transaction...")
+            cursor.execute("PRAGMA foreign_keys = OFF;")
+            cursor.execute("BEGIN TRANSACTION;")
+            transaction_started = True
+            
+            # Gather metrics of sessions to be deleted
+            stats = gather_deletion_metrics(session_ids, conn)
 
-        size_after = OPENCODE_DB_PATH.stat().st_size
-        db_space_saved = max(0, size_before - size_after)
-        total_space_saved = db_space_saved + files_space_saved
-        if stats:
-            stats["space_saved"] = total_space_saved
+            deleted_counts = _delete_session_rows(session_ids, cursor=cursor)
 
-        # Save metrics to JSON sidecar
-        save_deletion_metrics("delete", stats)
+            for table, _ in SESSION_RELATIONAL_TABLES:
+                print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
 
-        print(color_green("Deletion complete!"))
-        print("--------------------------------------------------------")
-        print(f"Database size before:  {human_size_local(size_before)}")
-        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
-        print(f"Database space saved:  {human_size_local(db_space_saved)}")
-        if files_to_delete:
-            print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
-        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
-        print("--------------------------------------------------------")
-        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
-        print()
-        print("Rollback instructions:")
-        print("  1. Close OpenCode if it is running.")
-        print("  2. Restore the database file family:")
-        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
-        if wal_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
-        else:
-            print(f"     rm -f '{wal_file}'")
-        if shm_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
-        else:
-            print(f"     rm -f '{shm_file}'")
-        print("--------------------------------------------------------")
+            cursor.execute("COMMIT;")
+            transaction_started = False
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            print("[+] Transaction committed successfully.")
+
+            # Delete disk files
+            files_space_saved = 0
+            for f in files_to_delete:
+                try:
+                    if f.exists():
+                        files_space_saved += f.stat().st_size
+                    f.unlink()
+                    print(f"[-] Deleted file: {f}")
+                except OSError as e:
+                    print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+            # Vacuum database
+            print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
+            conn.execute("VACUUM;")
+            print("[+] VACUUM complete.")
+
+            size_after = OPENCODE_DB_PATH.stat().st_size
+            db_space_saved = max(0, size_before - size_after)
+            total_space_saved = db_space_saved + files_space_saved
+            if stats:
+                stats["space_saved"] = total_space_saved
+
+            # Save metrics to JSON sidecar
+            save_deletion_metrics("delete", stats)
+
+            print(color_green("Deletion complete!"))
+            print("--------------------------------------------------------")
+            print(f"Database size before:  {human_size_local(size_before)}")
+            print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+            print(f"Database space saved:  {human_size_local(db_space_saved)}")
+            if files_to_delete:
+                print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
+            print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
+            print("--------------------------------------------------------")
+            print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+            print()
+            print("Rollback instructions:")
+            print("  1. Close OpenCode if it is running.")
+            print("  2. Restore the database file family:")
+            print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+            if wal_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+            else:
+                print(f"     rm -f '{wal_file}'")
+            if shm_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+            else:
+                print(f"     rm -f '{shm_file}'")
+            print("--------------------------------------------------------")
 
     except Exception as e:
         if conn and transaction_started:
@@ -9236,110 +9348,111 @@ def db_delete_sessions_batch(
         print()
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
 
-        # 4. ONE rollback family backup for the whole batch.
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
-        wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
-        shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
-            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
-            if wal_file.exists():
-                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
-            if shm_file.exists():
-                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
-            print("[+] Backup created successfully.")
-        except Exception as e:
-            print(color_red(f"[-] Backup failed: {e}"))
-            print(color_red("    Aborting deletion for safety."))
-            return
-
-        # 5. ONE transaction: delete session rows, then any now-empty targeted projects.
-        size_before = get_file_size_local(OPENCODE_DB_PATH)
-        print(f"{info_prefix()} Starting transaction...")
-        cursor.execute("PRAGMA foreign_keys = OFF;")
-        cursor.execute("BEGIN TRANSACTION;")
-        transaction_started = True
-
-        deleted_counts = _delete_session_rows(all_ids, cursor=cursor)
-        total_rows = sum(deleted_counts.values())
-
-        # Empty-project cleanup, gated on explicit project targeting.
-        projects_removed = 0
-        for pid in remove_project_ids:
-            cursor.execute(
-                "SELECT COUNT(*) FROM session WHERE project_id = ?", (pid,)
-            )
-            remaining = cursor.fetchone()[0]
-            if remaining == 0:
-                for table, col in PROJECT_RELATIONAL_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE {col} = ?", (pid,))
-                projects_removed += 1
-
-        cursor.execute("COMMIT;")
-        transaction_started = False
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        print(f"[+] Transaction committed: {total_rows:,} row(s) deleted"
-              + (f", {projects_removed} empty project(s) removed" if projects_removed else "")
-              + ".")
-
-        # 6. Delete disk files.
-        files_space_saved = 0
-        for f in files_to_delete:
+        with ocman_db_lock(action="batch delete sessions", exclusive=True):
+            # 4. ONE rollback family backup for the whole batch.
+            backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
+            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
             try:
-                if f.exists():
-                    files_space_saved += f.stat().st_size
-                f.unlink()
-            except OSError as e:
-                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+                shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+                if wal_file.exists():
+                    shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+                if shm_file.exists():
+                    shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+                print("[+] Backup created successfully.")
+            except Exception as e:
+                print(color_red(f"[-] Backup failed: {e}"))
+                print(color_red("    Aborting deletion for safety."))
+                return
 
-        # 7. ONE VACUUM.
-        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
-        conn.execute("VACUUM;")
-        print("[+] VACUUM complete.")
+            # 5. ONE transaction: delete session rows, then any now-empty targeted projects.
+            size_before = get_file_size_local(OPENCODE_DB_PATH)
+            print(f"{info_prefix()} Starting transaction...")
+            cursor.execute("PRAGMA foreign_keys = OFF;")
+            cursor.execute("BEGIN TRANSACTION;")
+            transaction_started = True
 
-        size_after = OPENCODE_DB_PATH.stat().st_size
-        db_space_saved = max(0, size_before - size_after)
-        total_space_saved = db_space_saved + files_space_saved
+            deleted_counts = _delete_session_rows(all_ids, cursor=cursor)
+            total_rows = sum(deleted_counts.values())
 
-        # 8. ONE metrics write for the whole batch.
-        if stats:
-            stats["space_saved"] = total_space_saved
+            # Empty-project cleanup, gated on explicit project targeting.
+            projects_removed = 0
+            for pid in remove_project_ids:
+                cursor.execute(
+                    "SELECT COUNT(*) FROM session WHERE project_id = ?", (pid,)
+                )
+                remaining = cursor.fetchone()[0]
+                if remaining == 0:
+                    for table, col in PROJECT_RELATIONAL_TABLES:
+                        cursor.execute(f"DELETE FROM {table} WHERE {col} = ?", (pid,))
+                    projects_removed += 1
+
+            cursor.execute("COMMIT;")
+            transaction_started = False
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            print(f"[+] Transaction committed: {total_rows:,} row(s) deleted"
+                  + (f", {projects_removed} empty project(s) removed" if projects_removed else "")
+                  + ".")
+
+            # 6. Delete disk files.
+            files_space_saved = 0
+            for f in files_to_delete:
+                try:
+                    if f.exists():
+                        files_space_saved += f.stat().st_size
+                    f.unlink()
+                except OSError as e:
+                    print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+            # 7. ONE VACUUM.
+            print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
+            conn.execute("VACUUM;")
+            print("[+] VACUUM complete.")
+
+            size_after = OPENCODE_DB_PATH.stat().st_size
+            db_space_saved = max(0, size_before - size_after)
+            total_space_saved = db_space_saved + files_space_saved
+
+            # 8. ONE metrics write for the whole batch.
+            if stats:
+                stats["space_saved"] = total_space_saved
+                if projects_removed:
+                    stats["projects_count"] = projects_removed
+            save_deletion_metrics("delete", stats)
+
+            # 9. ONE consolidated report + ONE rollback stanza.
+            print(color_green("Batch deletion complete!"))
+            print("--------------------------------------------------------")
+            if stats:
+                print(f"Sessions deleted:      {stats['sessions_count']:,} "
+                      f"({stats.get('subagents_count', 0):,} subagent)")
+                print(f"Messages deleted:      {stats['messages_count']:,}")
+            print(f"Rows deleted:          {total_rows:,}")
             if projects_removed:
-                stats["projects_count"] = projects_removed
-        save_deletion_metrics("delete", stats)
-
-        # 9. ONE consolidated report + ONE rollback stanza.
-        print(color_green("Batch deletion complete!"))
-        print("--------------------------------------------------------")
-        if stats:
-            print(f"Sessions deleted:      {stats['sessions_count']:,} "
-                  f"({stats.get('subagents_count', 0):,} subagent)")
-            print(f"Messages deleted:      {stats['messages_count']:,}")
-        print(f"Rows deleted:          {total_rows:,}")
-        if projects_removed:
-            print(f"Empty projects removed:{projects_removed:>3}")
-        print(f"Files removed:         {len(files_to_delete):,} ({human_size_local(files_space_saved)})")
-        print(f"Database size before:  {human_size_local(size_before)}")
-        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
-        print(f"Database space saved:  {human_size_local(db_space_saved)}")
-        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
-        print("--------------------------------------------------------")
-        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
-        print()
-        print("Rollback instructions:")
-        print("  1. Close OpenCode if it is running.")
-        print("  2. Restore the database file family:")
-        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
-        if wal_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
-        else:
-            print(f"     rm -f '{wal_file}'")
-        if shm_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
-        else:
-            print(f"     rm -f '{shm_file}'")
-        print("--------------------------------------------------------")
+                print(f"Empty projects removed:{projects_removed:>3}")
+            print(f"Files removed:         {len(files_to_delete):,} ({human_size_local(files_space_saved)})")
+            print(f"Database size before:  {human_size_local(size_before)}")
+            print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+            print(f"Database space saved:  {human_size_local(db_space_saved)}")
+            print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
+            print("--------------------------------------------------------")
+            print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+            print()
+            print("Rollback instructions:")
+            print("  1. Close OpenCode if it is running.")
+            print("  2. Restore the database file family:")
+            print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+            if wal_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+            else:
+                print(f"     rm -f '{wal_file}'")
+            if shm_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+            else:
+                print(f"     rm -f '{shm_file}'")
+            print("--------------------------------------------------------")
 
     except Exception as e:
         if conn and transaction_started:
@@ -9588,106 +9701,107 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
                 print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
-        # Create backup directory and backup database file family
-        from datetime import datetime
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
-            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
-
-            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
-            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
-            if wal_file.exists():
-                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
-            if shm_file.exists():
-                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
-            print("[+] Backup created successfully.")
-        except Exception as e:
-            print(color_red(f"[-] Backup failed: {e}"))
-            print(color_red("    Aborting deletion for safety."))
-            return
-
-        # Perform deletion
-        size_before = get_file_size_local(OPENCODE_DB_PATH)
-        print(f"{info_prefix()} Starting transaction...")
-        cursor.execute("PRAGMA foreign_keys = OFF;")
-        cursor.execute("BEGIN TRANSACTION;")
-        transaction_started = True
-
-        if session_ids:
-            chunk_size = 999
-            chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
-            deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
-            for chunk in chunks:
-                placeholders = ",".join("?" for _ in chunk)
-                for table, col in SESSION_RELATIONAL_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
-                    deleted_counts[table] += cursor.rowcount
-            for table, _ in SESSION_RELATIONAL_TABLES:
-                print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
-
-        # Delete the project row only when deleting the whole project
-        if days is None:
-            cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
-            print(f"[-] Deleted 1 project row from project table")
-
-        cursor.execute("COMMIT;")
-        transaction_started = False
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        print("[+] Transaction committed successfully.")
-
-        # Delete disk files
-        files_space_saved = 0
-        for f in files_to_delete:
+        with ocman_db_lock(action=f"delete project '{proj_name}'", exclusive=True):
+            # Create backup directory and backup database file family
+            from datetime import datetime
+            backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
             try:
-                if f.exists():
-                    files_space_saved += f.stat().st_size
-                f.unlink()
-                print(f"[-] Deleted file: {f}")
-            except OSError as e:
-                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+                shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
 
-        # Vacuum database
-        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
-        conn.execute("VACUUM;")
-        print("[+] VACUUM complete.")
+                wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+                shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+                if wal_file.exists():
+                    shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+                if shm_file.exists():
+                    shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+                print("[+] Backup created successfully.")
+            except Exception as e:
+                print(color_red(f"[-] Backup failed: {e}"))
+                print(color_red("    Aborting deletion for safety."))
+                return
 
-        size_after = OPENCODE_DB_PATH.stat().st_size
-        db_space_saved = max(0, size_before - size_after)
-        total_space_saved = db_space_saved + files_space_saved
-        stats["space_saved"] = total_space_saved
+            # Perform deletion
+            size_before = get_file_size_local(OPENCODE_DB_PATH)
+            print(f"{info_prefix()} Starting transaction...")
+            cursor.execute("PRAGMA foreign_keys = OFF;")
+            cursor.execute("BEGIN TRANSACTION;")
+            transaction_started = True
 
-        # Save metrics to JSON sidecar
-        save_deletion_metrics("delete", stats)
+            if session_ids:
+                chunk_size = 999
+                chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
+                deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+                for chunk in chunks:
+                    placeholders = ",".join("?" for _ in chunk)
+                    for table, col in SESSION_RELATIONAL_TABLES:
+                        cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                        deleted_counts[table] += cursor.rowcount
+                for table, _ in SESSION_RELATIONAL_TABLES:
+                    print(f"[-] Deleted {deleted_counts[table]} rows from {table}")
 
-        if days is not None:
-            print(color_green(f"Project session cleanup complete! (deleted {len(session_ids)} session(s) older than {days} days in '{proj_name}')"))
-        else:
-            print(color_green("Project deletion complete!"))
-        print("--------------------------------------------------------")
-        print(f"Database size before:  {human_size_local(size_before)}")
-        print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
-        print(f"Database space saved:  {human_size_local(db_space_saved)}")
-        if files_to_delete:
-            print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
-        print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
-        print("--------------------------------------------------------")
-        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
-        print()
-        print("Rollback instructions:")
-        print("  1. Close OpenCode if it is running.")
-        print("  2. Restore the database file family:")
-        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
-        if wal_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
-        else:
-            print(f"     rm -f '{wal_file}'")
-        if shm_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
-        else:
-            print(f"     rm -f '{shm_file}'")
-        print("--------------------------------------------------------")
+            # Delete the project row only when deleting the whole project
+            if days is None:
+                cursor.execute("DELETE FROM project WHERE id = ?", (project_id,))
+                print(f"[-] Deleted 1 project row from project table")
+
+            cursor.execute("COMMIT;")
+            transaction_started = False
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            print("[+] Transaction committed successfully.")
+
+            # Delete disk files
+            files_space_saved = 0
+            for f in files_to_delete:
+                try:
+                    if f.exists():
+                        files_space_saved += f.stat().st_size
+                    f.unlink()
+                    print(f"[-] Deleted file: {f}")
+                except OSError as e:
+                    print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+
+            # Vacuum database
+            print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
+            conn.execute("VACUUM;")
+            print("[+] VACUUM complete.")
+
+            size_after = OPENCODE_DB_PATH.stat().st_size
+            db_space_saved = max(0, size_before - size_after)
+            total_space_saved = db_space_saved + files_space_saved
+            stats["space_saved"] = total_space_saved
+
+            # Save metrics to JSON sidecar
+            save_deletion_metrics("delete", stats)
+
+            if days is not None:
+                print(color_green(f"Project session cleanup complete! (deleted {len(session_ids)} session(s) older than {days} days in '{proj_name}')"))
+            else:
+                print(color_green("Project deletion complete!"))
+            print("--------------------------------------------------------")
+            print(f"Database size before:  {human_size_local(size_before)}")
+            print(f"Database size after:   {human_size_local(size_after)} (after VACUUM)")
+            print(f"Database space saved:  {human_size_local(db_space_saved)}")
+            if files_to_delete:
+                print(f"File space saved:      {human_size_local(files_space_saved)} ({len(files_to_delete)} files)")
+            print(f"Total space reclaimed: {human_size_local(total_space_saved)}")
+            print("--------------------------------------------------------")
+            print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+            print()
+            print("Rollback instructions:")
+            print("  1. Close OpenCode if it is running.")
+            print("  2. Restore the database file family:")
+            print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+            if wal_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+            else:
+                print(f"     rm -f '{wal_file}'")
+            if shm_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+            else:
+                print(f"     rm -f '{shm_file}'")
+            print("--------------------------------------------------------")
 
     except Exception as e:
         if conn and transaction_started:
@@ -11885,113 +11999,114 @@ def db_run_cleanup(
             except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
                 print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
-        # 4. Create database backup family
-        from datetime import datetime
-        backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
-        try:
-            backup_dir.mkdir(parents=True, exist_ok=True)
-            print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
-            shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
-            
-            wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
-            shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
-            if wal_file.exists():
-                shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
-            if shm_file.exists():
-                shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
-            print("[+] Backup created successfully.")
-        except Exception as e:
-            print(color_red(f"[-] Backup failed: {e}"))
-            print(color_red("    Aborting cleanup for safety."))
-            return
-
-        # Measure database size before deletion/vacuum
-        db_size_orig = get_file_size_local(OPENCODE_DB_PATH)
-        print(f"{info_prefix()} Starting transaction...")
-        cursor.execute("PRAGMA foreign_keys = OFF;")
-        cursor.execute("BEGIN TRANSACTION;")
-        transaction_started = True
-        
-        # Gather metrics of sessions to be deleted (age-based)
-        stats = gather_deletion_metrics(target_session_ids, conn) if target_session_ids else None
-
-        # A. Age-based deletes
-        if target_session_ids:
-            chunk_size = 999
-            target_chunks = [target_session_ids[i:i+chunk_size] for i in range(0, len(target_session_ids), chunk_size)]
-            deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
-            for chunk in target_chunks:
-                placeholders = ",".join("?" for _ in chunk)
-                for table, col in SESSION_RELATIONAL_TABLES:
-                    cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
-                    deleted_counts[table] += cursor.rowcount
-            for table, _ in SESSION_RELATIONAL_TABLES:
-                print(f"[-] Deleted {deleted_counts[table]} rows from {table} (age-based)")
-
-        # B. Orphan-based deletes
-        if clean_orphans:
-            for table, col in SESSION_RELATIONAL_TABLES:
-                if table == "session":
-                    continue
-                cursor.execute(f"""
-                    DELETE FROM {table}
-                    WHERE NOT EXISTS (SELECT 1 FROM session s WHERE s.id = {table}.{col})
-                """)
-                if cursor.rowcount > 0:
-                    print(f"[-] Deleted {cursor.rowcount} orphaned rows from {table}")
-
-        cursor.execute("COMMIT;")
-        transaction_started = False
-        cursor.execute("PRAGMA foreign_keys = ON;")
-        print("[+] Transaction committed successfully.")
-
-        # 6. Delete disk files
-        deleted_files_count = 0
-        for f in files_to_delete:
+        with ocman_db_lock(action="db clean", exclusive=True):
+            # 4. Create database backup family
+            from datetime import datetime
+            backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
             try:
-                f.unlink()
-                deleted_files_count += 1
-            except OSError as e:
-                print(color_yellow(f"Warning: could not delete file {f}: {e}"))
-        if deleted_files_count > 0:
-            print(f"[-] Deleted {deleted_files_count} JSON files from disk.")
+                backup_dir.mkdir(parents=True, exist_ok=True)
+                print(f"{info_prefix()} Creating database family backup in {backup_dir} ...")
+                shutil.copy2(OPENCODE_DB_PATH, backup_dir / "opencode.db")
+                
+                wal_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-wal"
+                shm_file = OPENCODE_DB_PATH.parent / f"{OPENCODE_DB_PATH.name}-shm"
+                if wal_file.exists():
+                    shutil.copy2(wal_file, backup_dir / f"{OPENCODE_DB_PATH.name}-wal")
+                if shm_file.exists():
+                    shutil.copy2(shm_file, backup_dir / f"{OPENCODE_DB_PATH.name}-shm")
+                print("[+] Backup created successfully.")
+            except Exception as e:
+                print(color_red(f"[-] Backup failed: {e}"))
+                print(color_red("    Aborting cleanup for safety."))
+                return
 
-        # 7. Reclaim space via VACUUM
-        print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
-        conn.execute("VACUUM;")
-        print("[+] VACUUM complete.")
+            # Measure database size before deletion/vacuum
+            db_size_orig = get_file_size_local(OPENCODE_DB_PATH)
+            print(f"{info_prefix()} Starting transaction...")
+            cursor.execute("PRAGMA foreign_keys = OFF;")
+            cursor.execute("BEGIN TRANSACTION;")
+            transaction_started = True
+            
+            # Gather metrics of sessions to be deleted (age-based)
+            stats = gather_deletion_metrics(target_session_ids, conn) if target_session_ids else None
 
-        # Measure size after VACUUM
-        db_size_after = OPENCODE_DB_PATH.stat().st_size
-        space_saved = max(0, db_size_orig - db_size_after)
-        if stats:
-            stats["space_saved"] = space_saved
-            # Save metrics to JSON sidecar
-            save_deletion_metrics("clean", stats)
+            # A. Age-based deletes
+            if target_session_ids:
+                chunk_size = 999
+                target_chunks = [target_session_ids[i:i+chunk_size] for i in range(0, len(target_session_ids), chunk_size)]
+                deleted_counts = {table: 0 for table, _ in SESSION_RELATIONAL_TABLES}
+                for chunk in target_chunks:
+                    placeholders = ",".join("?" for _ in chunk)
+                    for table, col in SESSION_RELATIONAL_TABLES:
+                        cursor.execute(f"DELETE FROM {table} WHERE {col} IN ({placeholders})", chunk)
+                        deleted_counts[table] += cursor.rowcount
+                for table, _ in SESSION_RELATIONAL_TABLES:
+                    print(f"[-] Deleted {deleted_counts[table]} rows from {table} (age-based)")
 
-        # 8. Report metrics
-        print("--------------------------------------------------------")
-        print(f"New opencode.db file size on disk: {human_size_local(db_size_after)}")
-        print(f"Reclaimed space: {human_size_local(space_saved)}")
-        print("--------------------------------------------------------")
-        print(color_green("Database cleanup complete!"))
-        
-        print("--------------------------------------------------------")
-        print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
-        print()
-        print("Rollback instructions:")
-        print("  1. Close OpenCode if it is running.")
-        print("  2. Restore the database file family:")
-        print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
-        if wal_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
-        else:
-            print(f"     rm -f '{wal_file}'")
-        if shm_file.exists():
-            print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
-        else:
-            print(f"     rm -f '{shm_file}'")
-        print("--------------------------------------------------------")
+            # B. Orphan-based deletes
+            if clean_orphans:
+                for table, col in SESSION_RELATIONAL_TABLES:
+                    if table == "session":
+                        continue
+                    cursor.execute(f"""
+                        DELETE FROM {table}
+                        WHERE NOT EXISTS (SELECT 1 FROM session s WHERE s.id = {table}.{col})
+                    """)
+                    if cursor.rowcount > 0:
+                        print(f"[-] Deleted {cursor.rowcount} orphaned rows from {table}")
+
+            cursor.execute("COMMIT;")
+            transaction_started = False
+            cursor.execute("PRAGMA foreign_keys = ON;")
+            print("[+] Transaction committed successfully.")
+
+            # 6. Delete disk files
+            deleted_files_count = 0
+            for f in files_to_delete:
+                try:
+                    f.unlink()
+                    deleted_files_count += 1
+                except OSError as e:
+                    print(color_yellow(f"Warning: could not delete file {f}: {e}"))
+            if deleted_files_count > 0:
+                print(f"[-] Deleted {deleted_files_count} JSON files from disk.")
+
+            # 7. Reclaim space via VACUUM
+            print(f"{info_prefix()} Executing VACUUM to reclaim disk space...")
+            conn.execute("VACUUM;")
+            print("[+] VACUUM complete.")
+
+            # Measure size after VACUUM
+            db_size_after = OPENCODE_DB_PATH.stat().st_size
+            space_saved = max(0, db_size_orig - db_size_after)
+            if stats:
+                stats["space_saved"] = space_saved
+                # Save metrics to JSON sidecar
+                save_deletion_metrics("clean", stats)
+
+            # 8. Report metrics
+            print("--------------------------------------------------------")
+            print(f"New opencode.db file size on disk: {human_size_local(db_size_after)}")
+            print(f"Reclaimed space: {human_size_local(space_saved)}")
+            print("--------------------------------------------------------")
+            print(color_green("Database cleanup complete!"))
+            
+            print("--------------------------------------------------------")
+            print(f"[!] A safe backup of the original database is kept at:\n    {backup_dir}")
+            print()
+            print("Rollback instructions:")
+            print("  1. Close OpenCode if it is running.")
+            print("  2. Restore the database file family:")
+            print(f"     cp '{backup_dir}/opencode.db' '{OPENCODE_DB_PATH}'")
+            if wal_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-wal' '{wal_file}'")
+            else:
+                print(f"     rm -f '{wal_file}'")
+            if shm_file.exists():
+                print(f"     cp '{backup_dir}/opencode.db-shm' '{shm_file}'")
+            else:
+                print(f"     rm -f '{shm_file}'")
+            print("--------------------------------------------------------")
 
     except Exception as e:
         if conn and transaction_started:
@@ -15945,28 +16060,29 @@ def reclaim_checkpoint_vacuum(loc: dict, *, dry_run: bool, while_running: bool,
     _make_db_family_backup(db_path, verbosity)
 
     conn = None
-    try:
-        conn = sqlite3.connect(str(db_path))
-        # Ensure no implicit transaction is open so VACUUM can run.
+    with ocman_db_lock(action="reclaim checkpoint and vacuum", exclusive=True):
         try:
-            conn.isolation_level = None
-        except Exception:
-            pass
-        cur = conn.cursor()
-        print(f"{info_prefix()} Running PRAGMA wal_checkpoint(TRUNCATE)...")
-        cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
-        cur.fetchall()  # drain the checkpoint result so no statement is in progress
-        cur.close()
-        print(f"{info_prefix()} Running VACUUM...")
-        conn.execute("VACUUM")
-    except Exception as e:
-        raise RecoveryError(f"checkpoint/VACUUM failed: {e}")
-    finally:
-        if conn is not None:
+            conn = sqlite3.connect(str(db_path))
+            # Ensure no implicit transaction is open so VACUUM can run.
             try:
-                conn.close()
+                conn.isolation_level = None
             except Exception:
                 pass
+            cur = conn.cursor()
+            print(f"{info_prefix()} Running PRAGMA wal_checkpoint(TRUNCATE)...")
+            cur.execute("PRAGMA wal_checkpoint(TRUNCATE)")
+            cur.fetchall()  # drain the checkpoint result so no statement is in progress
+            cur.close()
+            print(f"{info_prefix()} Running VACUUM...")
+            conn.execute("VACUUM")
+        except Exception as e:
+            raise RecoveryError(f"checkpoint/VACUUM failed: {e}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     size_after = get_file_size_local(db_path)
     saved = max(0, size_before - size_after)
     print("[+] Checkpoint + VACUUM complete.")
