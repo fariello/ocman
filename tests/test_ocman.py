@@ -2107,6 +2107,20 @@ def test_resolve_project_and_session(temp_db):
     assert p is not None
     assert p["id"] == "proj1"
 
+    # Current working directory path resolution (e.g. "." or full path)
+    from pathlib import Path
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cwd_str = str(Path(".").resolve())
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj_cwd', ?, 'CWD Proj')", (cwd_str,))
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, directory) VALUES ('sess_cwd', 'proj_cwd', 'CWD Sess', 1000, 2000, ?)", (cwd_str,))
+    conn.commit()
+    conn.close()
+
+    p_cwd = resolve_project(".")
+    assert p_cwd is not None
+    assert p_cwd["id"] == "proj_cwd"
+
     # 2. Test Session Resolution
     sessions = db_list_sessions("proj1")
     assert len(sessions) == 1

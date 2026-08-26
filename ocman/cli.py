@@ -5063,10 +5063,21 @@ def resolve_project(spec: str) -> dict[str, Any] | None:
         if p["id"] == spec:
             return p
 
-    # Exact directory match.
+    # Exact directory match (both literal string and resolved filesystem path).
+    try:
+        resolved_spec = str(Path(spec).resolve())
+    except Exception:
+        resolved_spec = None
+
     for p in projects:
-        if p["directory"] == spec:
+        p_dir = p.get("directory") or ""
+        if p_dir == spec or (resolved_spec and p_dir == resolved_spec):
             return p
+        try:
+            if resolved_spec and str(Path(p_dir).resolve()) == resolved_spec:
+                return p
+        except Exception:
+            pass
 
     # Do not allow partial/substring directory matching for pure numeric specifiers
     # to avoid false positive matches on path numbers/dates when index is out of bounds.
@@ -5190,10 +5201,21 @@ def resolve_project_in_list(spec: str, projects: list[dict[str, Any]]) -> dict[s
         if p["id"] == spec:
             return p
 
-    # Exact directory match.
+    # Exact directory match (both literal string and resolved filesystem path).
+    try:
+        resolved_spec = str(Path(spec).resolve())
+    except Exception:
+        resolved_spec = None
+
     for p in projects:
-        if p["directory"] == spec:
+        p_dir = p.get("directory") or ""
+        if p_dir == spec or (resolved_spec and p_dir == resolved_spec):
             return p
+        try:
+            if resolved_spec and str(Path(p_dir).resolve()) == resolved_spec:
+                return p
+        except Exception:
+            pass
 
     # Do not allow partial/substring directory matching for pure numeric specifiers.
     if is_numeric:
