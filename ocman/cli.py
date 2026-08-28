@@ -13934,47 +13934,25 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
             })
             return
 
-        if session_rows:
-            if hist_sessions > 0:
-                print(color_bold(f"Spend for {display_dir} ({len(session_rows)} live sessions, {hist_sessions} deleted):"))
-            else:
-                print(color_bold(f"Spend for {display_dir} ({len(session_rows)} sessions):"))
-            table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
-            for r in session_rows:
-                title = (r["title"] or "")[:40]
-                table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
-                               fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
-                               fmt_int(r["tokens_cache_read"])])
-            table.set_cols_align(["l", "r", "r", "r", "r"])
-            print(table.draw())
-            print(f"Total (live): {fmt_cost(live_cost)}")
-            if hist_cost > 0 or historical:
-                print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
-                      f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache] ({hist_sessions} deleted sessions)")
-                print(f"Grand total (live + historical):  {fmt_cost(grand_cost)}  "
-                      f"[{fmt_int(grand_in)} in / {fmt_int(grand_out)} out / {fmt_int(grand_cache)} cache]")
-            else:
-                print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
-        else:
-            # 0 live sessions
-            if hist_sessions > 0 or hist_cost > 0:
-                print(color_bold(f"Spend for {display_dir} (0 live sessions, {hist_sessions} deleted):"))
-                table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
-                table.set_cols_align(["l", "r", "r", "r", "r"])
-                print(table.draw())
-                print(f"Total (live): {fmt_cost(0.0)}")
-                print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
-                      f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache]")
-                print(f"Grand total (live + historical):  {fmt_cost(grand_cost)}  "
-                      f"[{fmt_int(grand_in)} in / {fmt_int(grand_out)} out / {fmt_int(grand_cache)} cache]")
-            else:
-                print(color_bold(f"Spend for {display_dir} (0 sessions):"))
-                table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
-                table.set_cols_align(["l", "r", "r", "r", "r"])
-                print(table.draw())
-                print(f"Total (live): {fmt_cost(0.0)}")
-                if not historical:
-                    print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
+        print(color_bold(f"Spend for {display_dir}:"))
+        table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+        for r in session_rows:
+            title = (r["title"] or "")[:40]
+            table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
+                           fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
+                           fmt_int(r["tokens_cache_read"])])
+
+        table.add_row([f"Total Current Sessions ({len(session_rows)})", fmt_cost(live_cost),
+                       fmt_int(live_in), fmt_int(live_out), fmt_int(live_cache)])
+
+        if hist_sessions > 0 or hist_cost > 0:
+            table.add_row([f"Deleted Sessions (Historical, {hist_sessions})", fmt_cost(hist_cost),
+                           fmt_int(hist_in), fmt_int(hist_out), fmt_int(hist_cache)])
+            table.add_row([f"Grand Total ({len(session_rows) + hist_sessions})", fmt_cost(grand_cost),
+                           fmt_int(grand_in), fmt_int(grand_out), fmt_int(grand_cache)])
+
+        table.set_cols_align(["l", "r", "r", "r", "r"])
+        print(table.draw())
         return
 
     # Default: per-project spend table.
@@ -13985,9 +13963,17 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
     live_out = data["live_tokens"]["output"]
     live_cache = data["live_tokens"]["cache_read"]
     hist_cost = (data["historical_total"] or 0.0) if historical else 0.0
-    hist_in = (data["historical_tokens"]["input"] if historical and data["historical_tokens"] else 0)
-    hist_out = (data["historical_tokens"]["output"] if historical and data["historical_tokens"] else 0)
-    hist_cache = (data["historical_tokens"]["cache_read"] if historical and data["historical_tokens"] else 0)
+    if not hist_cost:
+        # Check if ledger has historical cost available
+        h_data = _load_history().get("cumulative", {})
+        hist_cost = h_data.get("cost_deleted", 0.0) or 0.0
+        hist_in = h_data.get("tokens_input_deleted", 0) or 0
+        hist_out = h_data.get("tokens_output_deleted", 0) or 0
+        hist_cache = h_data.get("tokens_cache_read_deleted", 0) or 0
+    else:
+        hist_in = (data["historical_tokens"]["input"] if historical and data["historical_tokens"] else 0)
+        hist_out = (data["historical_tokens"]["output"] if historical and data["historical_tokens"] else 0)
+        hist_cache = (data["historical_tokens"]["cache_read"] if historical and data["historical_tokens"] else 0)
 
     if json_output:
         emit_json("spend", data)
@@ -13998,19 +13984,19 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
     for r in proj_rows:
         table.add_row([r["directory"], fmt_cost(r["cost"]), fmt_int(r["tokens_input"]),
                        fmt_int(r["tokens_output"]), fmt_int(r["tokens_cache_read"])])
+
+    table.add_row([f"Total Current Projects ({len(proj_rows)})", fmt_cost(live_total),
+                   fmt_int(live_in), fmt_int(live_out), fmt_int(live_cache)])
+
+    if hist_cost > 0 or historical:
+        table.add_row(["Deleted Sessions (Historical)", fmt_cost(hist_cost),
+                       fmt_int(hist_in), fmt_int(hist_out), fmt_int(hist_cache)])
+        table.add_row(["Grand Total", fmt_cost(live_total + hist_cost),
+                       fmt_int(live_in + hist_in), fmt_int(live_out + hist_out),
+                       fmt_int(live_cache + hist_cache)])
+
     table.set_cols_align(["l", "r", "r", "r", "r"])
     print(table.draw())
-    print(f"Live total (active sessions):     {fmt_cost(live_total)}  "
-          f"[{fmt_int(live_in)} in / {fmt_int(live_out)} out / {fmt_int(live_cache)} cache]")
-    if historical:
-        print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
-              f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache]  "
-              + color_dim("(from deletion ledger)"))
-        print(f"Grand total (live + historical):  {fmt_cost(live_total + hist_cost)}  "
-              f"[{fmt_int(live_in + hist_in)} in / {fmt_int(live_out + hist_out)} out / "
-              f"{fmt_int(live_cache + hist_cache)} cache]")
-    else:
-        print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
 
 
 def _per_project_disk_usage(sqlite3, db_path: Path, storage_dir: Path) -> list[dict]:

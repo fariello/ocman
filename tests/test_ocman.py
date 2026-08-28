@@ -1816,7 +1816,7 @@ def test_spend_per_session(temp_db, capsys, monkeypatch):
     except SystemExit as e:
         assert e.code == 0
     out = capsys.readouterr().out
-    assert "s1" in out and "$12.50" in out and "Total (live): $12.50" in out
+    assert "s1" in out and "$12.50" in out and "Total Current Sessions (1)" in out
 
 
 def test_gather_and_save_deletion_metrics_by_project(temp_db, mock_history_path):
@@ -1879,10 +1879,10 @@ def test_spend_project_when_all_sessions_deleted(temp_db, capsys, monkeypatch, m
     except SystemExit as e:
         assert e.code == 0
     out = capsys.readouterr().out
-    assert "Spend for /path/myrepo (0 live sessions, 1 deleted)" in out
-    assert "Total (live): $0.00" in out
-    assert "Historically saved (deleted):     $8.25" in out
-    assert "Grand total (live + historical):  $8.25" in out
+    assert "Spend for /path/myrepo:" in out
+    assert "Total Current Sessions (0)" in out
+    assert "Deleted Sessions (Historical, 1)" in out and "$8.25" in out
+    assert "Grand Total (1)" in out and "$8.25" in out
 
 
 def test_spend_project_historical_flag_and_json(temp_db, capsys, monkeypatch, mock_history_path):
@@ -1927,10 +1927,10 @@ def test_spend_project_historical_flag_and_json(temp_db, capsys, monkeypatch, mo
     except SystemExit as e:
         assert e.code == 0
     out = capsys.readouterr().out
-    assert "Spend for /path/projX (1 live sessions, 2 deleted):" in out
-    assert "Total (live): $5.00" in out
-    assert "Historically saved (deleted):     $10.00" in out
-    assert "Grand total (live + historical):  $15.00" in out
+    assert "Spend for /path/projX:" in out
+    assert "Total Current Sessions (1)" in out and "$5.00" in out
+    assert "Deleted Sessions (Historical, 2)" in out and "$10.00" in out
+    assert "Grand Total (3)" in out and "$15.00" in out
 
 
 def test_spend_project_lookup_by_history_when_project_row_deleted(temp_db, capsys, monkeypatch, mock_history_path):
@@ -1958,9 +1958,9 @@ def test_spend_project_lookup_by_history_when_project_row_deleted(temp_db, capsy
     except SystemExit as e:
         assert e.code == 0
     out = capsys.readouterr().out
-    assert "Spend for /path/to/purged_repo (0 live sessions, 5 deleted):" in out
-    assert "Historically saved (deleted):     $25.50" in out
-    assert "Grand total (live + historical):  $25.50" in out
+    assert "Spend for /path/to/purged_repo:" in out
+    assert "Deleted Sessions (Historical, 5)" in out and "$25.50" in out
+    assert "Grand Total (5)" in out and "$25.50" in out
 
 
 def test_gather_spend_historical_includes_zero_session_projects(temp_db, mock_history_path):
