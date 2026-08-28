@@ -1819,6 +1819,185 @@ def test_spend_per_session(temp_db, capsys, monkeypatch):
     assert "s1" in out and "$12.50" in out and "Total (live): $12.50" in out
 
 
+def test_gather_and_save_deletion_metrics_by_project(temp_db, mock_history_path):
+    """Deletion metrics gather and record per-project spend and token attribution."""
+    import ocman
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/path/proj1', 'proj1')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'Session 1', 100, 200, '/path/proj1', 4.50, 400, 200, 50, '')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s2', 'p1', 'Session 2', 300, 400, '/path/proj1', 1.50, 100, 50, 20, '')")
+    conn.commit()
+
+    stats = ocman.gather_deletion_metrics(["s1", "s2"], conn)
+    conn.close()
+
+    assert stats is not None
+    assert stats["cost"] == pytest.approx(6.00)
+    assert stats["tokens_input"] == 500
+    assert "by_project" in stats
+    assert "p1" in stats["by_project"]
+    assert stats["by_project"]["p1"]["cost"] == pytest.approx(6.00)
+    assert stats["by_project"]["p1"]["tokens_input"] == 500
+    assert stats["by_project"]["p1"]["sessions_count"] == 2
+
+    ocman.save_deletion_metrics("test_delete", stats)
+    hist = ocman._load_history()
+    assert hist["cumulative"]["cost_deleted"] == pytest.approx(6.00)
+    assert "p1" in hist["cumulative"]["by_project"]
+    p1_entry = hist["cumulative"]["by_project"]["p1"]
+    assert p1_entry["cost_deleted"] == pytest.approx(6.00)
+    assert p1_entry["tokens_input_deleted"] == 500
+    assert p1_entry["sessions_deleted"] == 2
+
+
+def test_spend_project_when_all_sessions_deleted(temp_db, capsys, monkeypatch, mock_history_path):
+    """ocman spend /path/to/repo reports historical cost when all sessions were deleted."""
+    import ocman, sys
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/path/myrepo', 'myrepo')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s1', 'p1', 'Old Session', 100, 200, '/path/myrepo', 8.25, 800, 400, 100, '')")
+    conn.commit()
+
+    # Delete session through ocman
+    stats = ocman.gather_deletion_metrics(["s1"], conn)
+    ocman.save_deletion_metrics("delete", stats)
+    cur.execute("DELETE FROM session WHERE id = 's1'")
+    conn.commit(); conn.close()
+
+    # Query spend for the project path where 0 live sessions exist
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "/path/myrepo"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "Spend for /path/myrepo (0 live sessions, 1 deleted)" in out
+    assert "Total (live): $0.00" in out
+    assert "Historically saved (deleted):     $8.25" in out
+    assert "Grand total (live + historical):  $8.25" in out
+
+
+def test_spend_project_historical_flag_and_json(temp_db, capsys, monkeypatch, mock_history_path):
+    """ocman spend <project> --json and --historical include live and deleted metrics."""
+    import ocman, sys, json
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/path/projX', 'projX')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s_live', 'p1', 'Active Session', 300, 400, '/path/projX', 5.00, 500, 250, 50, '')")
+    conn.commit(); conn.close()
+
+    hist = ocman._load_history()
+    hist["cumulative"]["by_project"]["p1"] = {
+        "project_id": "p1",
+        "worktree": "/path/projX",
+        "cost_deleted": 10.00,
+        "tokens_input_deleted": 1000,
+        "tokens_output_deleted": 500,
+        "tokens_cache_read_deleted": 100,
+        "sessions_deleted": 2,
+    }
+    ocman._save_history(hist)
+
+    # Test JSON output
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "p1", "--json"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    d = json.loads(capsys.readouterr().out)["spend"]
+    assert d["scope"] == "sessions"
+    assert d["project_id"] == "p1"
+    assert d["live_total"] == 5.00
+    assert d["grand_total"] == 15.00
+
+    # Test --historical CLI output
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "p1", "--historical"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "Spend for /path/projX (1 live sessions, 2 deleted):" in out
+    assert "Total (live): $5.00" in out
+    assert "Historically saved (deleted):     $10.00" in out
+    assert "Grand total (live + historical):  $15.00" in out
+
+
+def test_spend_project_lookup_by_history_when_project_row_deleted(temp_db, capsys, monkeypatch, mock_history_path):
+    """ocman spend can resolve a project from the deletion ledger even if project row was deleted."""
+    import ocman, sys
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    conn.commit(); conn.close()
+
+    hist = ocman._load_history()
+    hist["cumulative"]["by_project"]["proj_deleted_id"] = {
+        "project_id": "proj_deleted_id",
+        "worktree": "/path/to/purged_repo",
+        "cost_deleted": 25.50,
+        "tokens_input_deleted": 2000,
+        "tokens_output_deleted": 1000,
+        "tokens_cache_read_deleted": 200,
+        "sessions_deleted": 5,
+    }
+    ocman._save_history(hist)
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "/path/to/purged_repo"])
+    try:
+        ocman.main()
+    except SystemExit as e:
+        assert e.code == 0
+    out = capsys.readouterr().out
+    assert "Spend for /path/to/purged_repo (0 live sessions, 5 deleted):" in out
+    assert "Historically saved (deleted):     $25.50" in out
+    assert "Grand total (live + historical):  $25.50" in out
+
+
+def test_gather_spend_historical_includes_zero_session_projects(temp_db, mock_history_path):
+    """gather_spend(historical=True) includes projects with 0 live sessions from the ledger."""
+    import ocman
+    conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
+    cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p_live', '/path/live', 'live')")
+    cur.execute("INSERT INTO session (id, project_id, title, time_created, time_updated, "
+                "directory, cost, tokens_input, tokens_output, tokens_cache_read, parent_id) "
+                "VALUES ('s_live', 'p_live', 'Live', 1, 2, '/path/live', 3.00, 300, 150, 30, '')")
+    conn.commit(); conn.close()
+
+    hist = ocman._load_history()
+    hist["cumulative"]["cost_deleted"] = 7.00
+    hist["cumulative"]["by_project"]["p_dead"] = {
+        "project_id": "p_dead",
+        "worktree": "/path/dead",
+        "cost_deleted": 7.00,
+        "tokens_input_deleted": 700,
+        "tokens_output_deleted": 350,
+        "tokens_cache_read_deleted": 70,
+        "sessions_deleted": 3,
+    }
+    ocman._save_history(hist)
+
+    d_live = ocman.gather_spend(historical=False)
+    assert len(d_live["projects"]) == 1
+    assert d_live["projects"][0]["id"] == "p_live"
+
+    d_hist = ocman.gather_spend(historical=True)
+    proj_ids = [p["id"] for p in d_hist["projects"]]
+    assert "p_live" in proj_ids and "p_dead" in proj_ids
+    assert d_hist["grand_total"] == pytest.approx(10.00)
+
+
+
 def test_list_projects_json(temp_db, capsys, monkeypatch):
     """F1: project list --json emits a parseable schema envelope; human path unchanged without it."""
     import ocman, sys, json

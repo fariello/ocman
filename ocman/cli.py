@@ -12413,7 +12413,8 @@ def _load_history() -> dict:
             "tokens_input_deleted": 0,
             "tokens_output_deleted": 0,
             "tokens_cache_read_deleted": 0,
-            "space_saved_deleted": 0
+            "space_saved_deleted": 0,
+            "by_project": {},
         },
         "runs": []
     }
@@ -12428,12 +12429,36 @@ def _load_history() -> dict:
             else:
                 for k, v in default_history["cumulative"].items():
                     if k not in data["cumulative"]:
-                        data["cumulative"][k] = v
+                        data["cumulative"][k] = v if not isinstance(v, (dict, list)) else type(v)()
             if "runs" not in data:
                 data["runs"] = []
+
+            by_proj = data["cumulative"].setdefault("by_project", {})
+            if not by_proj and data.get("runs"):
+                for r in data["runs"]:
+                    for pid, pstats in r.get("by_project", {}).items():
+                        if not pid:
+                            continue
+                        entry = by_proj.setdefault(pid, {
+                            "project_id": pstats.get("project_id", pid),
+                            "worktree": pstats.get("worktree", ""),
+                            "cost_deleted": 0.0,
+                            "tokens_input_deleted": 0,
+                            "tokens_output_deleted": 0,
+                            "tokens_cache_read_deleted": 0,
+                            "sessions_deleted": 0,
+                        })
+                        if pstats.get("worktree") and not entry.get("worktree"):
+                            entry["worktree"] = pstats["worktree"]
+                        entry["cost_deleted"] = entry.get("cost_deleted", 0.0) + pstats.get("cost", 0.0)
+                        entry["tokens_input_deleted"] = entry.get("tokens_input_deleted", 0) + pstats.get("tokens_input", 0)
+                        entry["tokens_output_deleted"] = entry.get("tokens_output_deleted", 0) + pstats.get("tokens_output", 0)
+                        entry["tokens_cache_read_deleted"] = entry.get("tokens_cache_read_deleted", 0) + pstats.get("tokens_cache_read", 0)
+                        entry["sessions_deleted"] = entry.get("sessions_deleted", 0) + pstats.get("sessions_count", 0)
             return data
     except Exception:
         return default_history
+
 
 
 def _save_history(data: dict) -> None:
@@ -12602,6 +12627,7 @@ def clear_history_ledger() -> None:
             "tokens_input_deleted": 0,
             "tokens_output_deleted": 0,
             "space_saved_deleted": 0,
+            "by_project": {},
         },
         "runs": [],
     })
@@ -12723,18 +12749,53 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
                 except Exception:
                     pass
 
-            # Query individual session details (name, id, start and end dates)
+            # Query individual session details including project attribution
             cursor.execute(f"""
-                SELECT id, title, time_created, time_updated FROM session
-                WHERE id IN ({placeholders})
+                SELECT s.id, s.title, s.time_created, s.time_updated, s.project_id,
+                       COALESCE(p.worktree, s.directory, ''),
+                       COALESCE(s.cost, 0.0),
+                       COALESCE(s.tokens_input, 0),
+                       COALESCE(s.tokens_output, 0),
+                       COALESCE(s.tokens_cache_read, 0)
+                FROM session s
+                LEFT JOIN project p ON s.project_id = p.id
+                WHERE s.id IN ({placeholders})
             """, chunk)
             for row in cursor.fetchall():
                 sessions_info.append({
                     "id": row[0],
                     "title": row[1] or "(untitled)",
                     "created": row[2],
-                    "updated": row[3]
+                    "updated": row[3],
+                    "project_id": row[4],
+                    "worktree": row[5] or "",
+                    "cost": row[6] or 0.0,
+                    "tokens_input": row[7] or 0,
+                    "tokens_output": row[8] or 0,
+                    "tokens_cache_read": row[9] or 0,
                 })
+
+        by_project: dict[str, dict] = {}
+        for s in sessions_info:
+            pid = s.get("project_id") or "unknown"
+            if pid not in by_project:
+                by_project[pid] = {
+                    "project_id": pid,
+                    "worktree": s.get("worktree", ""),
+                    "cost": 0.0,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "tokens_cache_read": 0,
+                    "sessions_count": 0,
+                }
+            bp = by_project[pid]
+            if s.get("worktree") and not bp.get("worktree"):
+                bp["worktree"] = s["worktree"]
+            bp["cost"] += s.get("cost", 0.0) or 0.0
+            bp["tokens_input"] += s.get("tokens_input", 0) or 0
+            bp["tokens_output"] += s.get("tokens_output", 0) or 0
+            bp["tokens_cache_read"] += s.get("tokens_cache_read", 0) or 0
+            bp["sessions_count"] += 1
 
         return {
             "sessions_count": sessions_cnt,
@@ -12746,7 +12807,8 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
             "tokens_input": tokens_in_sum,
             "tokens_output": tokens_out_sum,
             "tokens_cache_read": tokens_cache_sum,
-            "sessions": sessions_info
+            "sessions": sessions_info,
+            "by_project": by_project,
         }
     except Exception as e:
         print(color_yellow(f"Warning: could not gather deletion metrics: {e}"))
@@ -12773,6 +12835,27 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         c["tokens_cache_read_deleted"] = c.get("tokens_cache_read_deleted", 0) + stats.get("tokens_cache_read", 0)
         c["space_saved_deleted"] = c.get("space_saved_deleted", 0) + stats.get("space_saved", 0)
 
+        by_proj = c.setdefault("by_project", {})
+        for pid, pdata in stats.get("by_project", {}).items():
+            if not pid:
+                continue
+            entry = by_proj.setdefault(pid, {
+                "project_id": pdata.get("project_id", pid),
+                "worktree": pdata.get("worktree", ""),
+                "cost_deleted": 0.0,
+                "tokens_input_deleted": 0,
+                "tokens_output_deleted": 0,
+                "tokens_cache_read_deleted": 0,
+                "sessions_deleted": 0,
+            })
+            if pdata.get("worktree") and not entry.get("worktree"):
+                entry["worktree"] = pdata["worktree"]
+            entry["cost_deleted"] = entry.get("cost_deleted", 0.0) + pdata.get("cost", 0.0)
+            entry["tokens_input_deleted"] = entry.get("tokens_input_deleted", 0) + pdata.get("tokens_input", 0)
+            entry["tokens_output_deleted"] = entry.get("tokens_output_deleted", 0) + pdata.get("tokens_output", 0)
+            entry["tokens_cache_read_deleted"] = entry.get("tokens_cache_read_deleted", 0) + pdata.get("tokens_cache_read", 0)
+            entry["sessions_deleted"] = entry.get("sessions_deleted", 0) + pdata.get("sessions_count", 0)
+
         run_record = {
             "timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "reason": reason,
@@ -12782,6 +12865,62 @@ def save_deletion_metrics(reason: str, stats: dict | None) -> None:
         _save_history(history)
     except Exception as e:
         print(color_yellow(f"Warning: could not save deletion metrics: {e}"))
+
+
+def _get_project_history(target_id_or_path: str, history: dict | None = None) -> dict | None:
+    """Look up cumulative historical deletion metrics for a project by ID, worktree path, or name.
+
+    Matches against ``cumulative.by_project`` in the history ledger sidecar. Returns a dict:
+    ``{"project_id": str, "worktree": str, "cost_deleted": float, "tokens_input_deleted": int,
+       "tokens_output_deleted": int, "tokens_cache_read_deleted": int, "sessions_deleted": int}``
+    or None if no matching historical metrics exist.
+    """
+    if not target_id_or_path:
+        return None
+    if history is None:
+        history = _load_history()
+    by_proj = history.get("cumulative", {}).get("by_project", {})
+    if not by_proj:
+        return None
+
+    # 1. Exact match on key or project_id
+    if target_id_or_path in by_proj:
+        return by_proj[target_id_or_path]
+
+    for pid, entry in by_proj.items():
+        if entry.get("project_id") == target_id_or_path:
+            return entry
+
+    # 2. Exact match on worktree path
+    for pid, entry in by_proj.items():
+        if entry.get("worktree") == target_id_or_path:
+            return entry
+
+    # 3. Normalized / resolved path match
+    try:
+        target_path = Path(target_id_or_path).expanduser().resolve()
+    except Exception:
+        target_path = None
+
+    if target_path:
+        for pid, entry in by_proj.items():
+            wt = entry.get("worktree")
+            if wt:
+                try:
+                    if Path(wt).expanduser().resolve() == target_path:
+                        return entry
+                except Exception:
+                    pass
+
+    # 4. Basename / name match
+    target_str = str(target_id_or_path).rstrip("/").lower()
+    for pid, entry in by_proj.items():
+        wt = entry.get("worktree", "")
+        if wt and Path(wt).name.lower() == target_str:
+            return entry
+
+    return None
+
 
 
 def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
@@ -13525,9 +13664,8 @@ def gather_spend(*, historical: bool = False) -> dict:
          "historical_total": float|None, "historical_tokens": {..}|None,
          "grand_total": float, "grand_tokens": {..}|None}
 
-    Historical (deleted) spend is GLOBAL (the deletion ledger has no project_id), so it is
-    reported as single totals, never fabricated per project. When ``historical`` is False
-    the historical/grand-token fields are None (matching the CLI JSON contract).
+    Historical (deleted) spend is gathered from the deletion ledger. When ``historical``
+    is False the historical/grand-token fields are None (matching the CLI JSON contract).
     """
     projects = db_list_projects()
     proj_rows = [{
@@ -13538,17 +13676,32 @@ def gather_spend(*, historical: bool = False) -> dict:
         "tokens_output": p.get("tokens_output", 0) or 0,
         "tokens_cache_read": p.get("tokens_cache_read", 0) or 0,
     } for p in projects]
+
+    hist_data = _load_history() if historical else {}
+    hist = hist_data.get("cumulative", {}) if historical else {}
+    hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
+    hist_in = hist.get("tokens_input_deleted", 0) if historical else 0
+    hist_out = hist.get("tokens_output_deleted", 0) if historical else 0
+    hist_cache = hist.get("tokens_cache_read_deleted", 0) if historical else 0
+
+    if historical and hist.get("by_project"):
+        live_pids = {p["id"] for p in projects}
+        for pid, pdata in hist["by_project"].items():
+            if pid not in live_pids and (pdata.get("cost_deleted", 0.0) > 0 or pdata.get("sessions_deleted", 0) > 0):
+                proj_rows.append({
+                    "id": pid,
+                    "directory": _display_worktree(pdata.get("worktree", pid)),
+                    "cost": 0.0,
+                    "tokens_input": 0,
+                    "tokens_output": 0,
+                    "tokens_cache_read": 0,
+                })
+
     proj_rows.sort(key=lambda r: r["cost"], reverse=True)
     live_total = sum(r["cost"] for r in proj_rows)
     live_in = sum(r["tokens_input"] for r in proj_rows)
     live_out = sum(r["tokens_output"] for r in proj_rows)
     live_cache = sum(r["tokens_cache_read"] for r in proj_rows)
-
-    hist = _load_history().get("cumulative", {}) if historical else {}
-    hist_cost = hist.get("cost_deleted", 0.0) if historical else 0.0
-    hist_in = hist.get("tokens_input_deleted", 0) if historical else 0
-    hist_out = hist.get("tokens_output_deleted", 0) if historical else 0
-    hist_cache = hist.get("tokens_cache_read_deleted", 0) if historical else 0
 
     return {
         "scope": "projects",
@@ -13570,9 +13723,8 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
 
     Sources: live per-project/per-session cost + split tokens from the session
     rows (via db_list_projects / db_list_sessions). "Historically saved" spend is
-    the deletion ledger's cumulative totals (cost of since-deleted sessions); it is
-    GLOBAL only (the ledger has no project_id), so it is shown as a single line,
-    never fabricated per project.
+    the deletion ledger's cumulative totals (cost of since-deleted sessions),
+    tracked both per-project and globally.
     """
     if project or sessions:
         # Per-session drill-down for one project.
@@ -13580,10 +13732,19 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
         if not target:
             die("'ocman spend --sessions' needs a project (name/number/id/path).")
         found = db_find_project(target)
-        if not found:
+        proj_hist = _get_project_history(target)
+        if not found and not proj_hist:
             die(f"Project '{target}' not found.")
-        proj_id, worktree = found
-        rows = db_list_sessions(proj_id)
+
+        if found:
+            proj_id, worktree = found
+            if not proj_hist:
+                proj_hist = _get_project_history(proj_id) or _get_project_history(worktree)
+        else:
+            proj_id = proj_hist.get("project_id", target)
+            worktree = proj_hist.get("worktree", target)
+
+        rows = db_list_sessions(proj_id) if found else []
         session_rows = [{
             "id": s["id"],
             "title": s["title"],
@@ -13592,24 +13753,81 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
             "tokens_output": s["tokens_output"] or 0,
             "tokens_cache_read": s["tokens_cache_read"] or 0,
         } for s in rows]
-        total_cost = sum(r["cost"] for r in session_rows)
+        live_cost = sum(r["cost"] for r in session_rows)
+        live_in = sum(r["tokens_input"] for r in session_rows)
+        live_out = sum(r["tokens_output"] for r in session_rows)
+        live_cache = sum(r["tokens_cache_read"] for r in session_rows)
+
+        hist_cost = (proj_hist.get("cost_deleted", 0.0) or 0.0) if proj_hist else 0.0
+        hist_in = (proj_hist.get("tokens_input_deleted", 0) or 0) if proj_hist else 0
+        hist_out = (proj_hist.get("tokens_output_deleted", 0) or 0) if proj_hist else 0
+        hist_cache = (proj_hist.get("tokens_cache_read_deleted", 0) or 0) if proj_hist else 0
+        hist_sessions = (proj_hist.get("sessions_deleted", 0) or 0) if proj_hist else 0
+
+        grand_cost = live_cost + hist_cost
+        grand_in = live_in + hist_in
+        grand_out = live_out + hist_out
+        grand_cache = live_cache + hist_cache
+
+        display_dir = _display_worktree(worktree)
+
         if json_output:
             emit_json("spend", {
                 "scope": "sessions", "project_id": proj_id,
-                "directory": _display_worktree(worktree),
-                "total_cost": total_cost, "sessions": session_rows,
+                "directory": display_dir,
+                "total_cost": grand_cost if historical else live_cost,
+                "live_total": live_cost,
+                "live_tokens": {"input": live_in, "output": live_out, "cache_read": live_cache},
+                "historical_total": hist_cost if historical else None,
+                "historical_tokens": ({"input": hist_in, "output": hist_out,
+                                       "cache_read": hist_cache} if historical else None),
+                "grand_total": grand_cost,
+                "grand_tokens": {"input": grand_in, "output": grand_out, "cache_read": grand_cache},
+                "sessions": session_rows,
             })
             return
-        print(color_bold(f"Spend for {_display_worktree(worktree)} ({len(session_rows)} sessions):"))
-        table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
-        for r in session_rows:
-            title = (r["title"] or "")[:40]
-            table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
-                           fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
-                           fmt_int(r["tokens_cache_read"])])
-        table.set_cols_align(["l", "r", "r", "r", "r"])
-        print(table.draw())
-        print(f"Total (live): {fmt_cost(total_cost)}")
+
+        if session_rows:
+            if hist_sessions > 0 and historical:
+                print(color_bold(f"Spend for {display_dir} ({len(session_rows)} live sessions, {hist_sessions} deleted):"))
+            else:
+                print(color_bold(f"Spend for {display_dir} ({len(session_rows)} sessions):"))
+            table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+            for r in session_rows:
+                title = (r["title"] or "")[:40]
+                table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
+                               fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
+                               fmt_int(r["tokens_cache_read"])])
+            table.set_cols_align(["l", "r", "r", "r", "r"])
+            print(table.draw())
+            print(f"Total (live): {fmt_cost(live_cost)}")
+            if historical:
+                print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
+                      f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache] ({hist_sessions} deleted sessions)")
+                print(f"Grand total (live + historical):  {fmt_cost(grand_cost)}  "
+                      f"[{fmt_int(grand_in)} in / {fmt_int(grand_out)} out / {fmt_int(grand_cache)} cache]")
+            elif hist_cost > 0:
+                print(color_dim(f"({hist_sessions} deleted sessions; add --historical to include {fmt_cost(hist_cost)} deleted spend)"))
+        else:
+            # 0 live sessions
+            if hist_sessions > 0 or hist_cost > 0:
+                print(color_bold(f"Spend for {display_dir} (0 live sessions, {hist_sessions} deleted):"))
+                table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+                table.set_cols_align(["l", "r", "r", "r", "r"])
+                print(table.draw())
+                print(f"Total (live): {fmt_cost(0.0)}")
+                print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
+                      f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache]")
+                print(f"Grand total (live + historical):  {fmt_cost(grand_cost)}  "
+                      f"[{fmt_int(grand_in)} in / {fmt_int(grand_out)} out / {fmt_int(grand_cache)} cache]")
+            else:
+                print(color_bold(f"Spend for {display_dir} (0 sessions):"))
+                table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+                table.set_cols_align(["l", "r", "r", "r", "r"])
+                print(table.draw())
+                print(f"Total (live): {fmt_cost(0.0)}")
+                if not historical:
+                    print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
         return
 
     # Default: per-project spend table.
@@ -13640,7 +13858,7 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
     if historical:
         print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
               f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache]  "
-              + color_dim("(global; not attributable per project)"))
+              + color_dim("(from deletion ledger)"))
         print(f"Grand total (live + historical):  {fmt_cost(live_total + hist_cost)}  "
               f"[{fmt_int(live_in + hist_in)} in / {fmt_int(live_out + hist_out)} out / "
               f"{fmt_int(live_cache + hist_cache)} cache]")
