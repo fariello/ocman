@@ -12720,11 +12720,32 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
 
     try:
         cursor = conn.conn.cursor() if hasattr(conn, "conn") else conn.cursor()
-        
+
+        # Introspect table schemas for forward/backward compatibility
+        cursor.execute("PRAGMA table_info(session)")
+        s_cols = {row[1] for row in cursor.fetchall()}
+        cursor.execute("PRAGMA table_info(project)")
+        p_cols = {row[1] for row in cursor.fetchall()}
+
+        c_cost = "s.cost" if "cost" in s_cols else "0.0"
+        c_in = "s.tokens_input" if "tokens_input" in s_cols else "0"
+        c_out = "s.tokens_output" if "tokens_output" in s_cols else "0"
+        c_cache = "s.tokens_cache_read" if "tokens_cache_read" in s_cols else "0"
+        c_reasoning = "s.tokens_reasoning" if "tokens_reasoning" in s_cols else "0"
+        c_cache_write = "s.tokens_cache_write" if "tokens_cache_write" in s_cols else "0"
+        c_parent = "s.parent_id" if "parent_id" in s_cols else "''"
+        c_agent = "s.agent" if "agent" in s_cols else "''"
+        c_model = "s.model" if "model" in s_cols else "''"
+        c_dir = "s.directory" if "directory" in s_cols else "''"
+        c_add = "s.summary_additions" if "summary_additions" in s_cols else "0"
+        c_del = "s.summary_deletions" if "summary_deletions" in s_cols else "0"
+        c_files = "s.summary_files" if "summary_files" in s_cols else "0"
+        p_worktree = "p.worktree" if "worktree" in p_cols else "''"
+
         # Chunk session_ids in groups of 999 to avoid SQLITE_LIMIT_VARIABLE_LIMIT
         chunk_size = 999
         chunks = [session_ids[i:i+chunk_size] for i in range(0, len(session_ids), chunk_size)]
-        
+
         cost_sum = 0.0
         tokens_in_sum = 0
         tokens_out_sum = 0
@@ -12740,10 +12761,10 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
             placeholders = ",".join("?" for _ in chunk)
 
             cursor.execute(f"""
-                SELECT SUM(cost), SUM(tokens_input), SUM(tokens_output),
-                       SUM(tokens_cache_read), COUNT(*)
-                FROM session
-                WHERE id IN ({placeholders})
+                SELECT SUM({c_cost}), SUM({c_in}), SUM({c_out}),
+                       SUM({c_cache}), COUNT(*)
+                FROM session s
+                WHERE s.id IN ({placeholders})
             """, chunk)
             c_sum, t_in, t_out, t_cache, s_cnt = cursor.fetchone()
             cost_sum += c_sum or 0.0
@@ -12752,72 +12773,136 @@ def gather_deletion_metrics(session_ids: list[str], conn) -> dict | None:
             tokens_cache_sum += t_cache or 0
             sessions_cnt += s_cnt or 0
 
-            cursor.execute(f"""
-                SELECT COUNT(*) FROM session
-                WHERE id IN ({placeholders})
-                  AND parent_id IS NOT NULL AND parent_id != ''
-            """, chunk)
-            subagents_cnt += cursor.fetchone()[0] or 0
+            if "parent_id" in s_cols:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM session
+                    WHERE id IN ({placeholders})
+                      AND parent_id IS NOT NULL AND parent_id != ''
+                """, chunk)
+                subagents_cnt += cursor.fetchone()[0] or 0
 
-            cursor.execute(f"""
-                SELECT COUNT(*) FROM message
-                WHERE session_id IN ({placeholders})
-            """, chunk)
-            messages_cnt += cursor.fetchone()[0] or 0
-
-            # DB parts for the deleted sessions (best-effort; table may be absent).
             try:
                 cursor.execute(f"""
-                    SELECT COUNT(*) FROM part WHERE session_id IN ({placeholders})
+                    SELECT COUNT(*) FROM message
+                    WHERE session_id IN ({placeholders})
                 """, chunk)
-                parts_cnt += cursor.fetchone()[0] or 0
+                messages_cnt += cursor.fetchone()[0] or 0
+            except Exception:
+                pass
+
+            # DB subagents per session
+            s_subagents = {}
+            if "parent_id" in s_cols:
+                try:
+                    cursor.execute(f"""
+                        SELECT parent_id, COUNT(*) FROM session
+                        WHERE parent_id IN ({placeholders}) AND parent_id != ''
+                        GROUP BY parent_id
+                    """, chunk)
+                    for pid, cnt in cursor.fetchall():
+                        s_subagents[pid] = cnt
+                except Exception:
+                    pass
+
+            # DB messages per session
+            s_messages = {}
+            try:
+                cursor.execute(f"""
+                    SELECT session_id, COUNT(*) FROM message
+                    WHERE session_id IN ({placeholders})
+                    GROUP BY session_id
+                """, chunk)
+                for sid, cnt in cursor.fetchall():
+                    s_messages[sid] = cnt
+            except Exception:
+                pass
+
+            # DB parts for the deleted sessions (best-effort; table may be absent).
+            s_parts = {}
+            try:
+                cursor.execute(f"""
+                    SELECT session_id, COUNT(*) FROM part
+                    WHERE session_id IN ({placeholders})
+                    GROUP BY session_id
+                """, chunk)
+                for sid, cnt in cursor.fetchall():
+                    s_parts[sid] = cnt
+                parts_cnt += sum(s_parts.values())
             except Exception:
                 pass
 
             # Interactions = user-role messages (same cascade db_get_session_stats uses:
             # json_extract -> LIKE fallback). Best-effort; skip if the shape is unknown.
+            s_interactions = {}
             try:
                 cursor.execute(f"""
-                    SELECT COUNT(*) FROM message
+                    SELECT session_id, COUNT(*) FROM message
                     WHERE session_id IN ({placeholders})
                       AND json_extract(data, '$.role') = 'user'
+                    GROUP BY session_id
                 """, chunk)
-                interactions_cnt += cursor.fetchone()[0] or 0
+                for sid, cnt in cursor.fetchall():
+                    s_interactions[sid] = cnt
+                interactions_cnt += sum(s_interactions.values())
             except Exception:
                 try:
                     cursor.execute(f"""
-                        SELECT COUNT(*) FROM message
+                        SELECT session_id, COUNT(*) FROM message
                         WHERE session_id IN ({placeholders})
                           AND data LIKE '%"role":"user"%'
+                        GROUP BY session_id
                     """, chunk)
-                    interactions_cnt += cursor.fetchone()[0] or 0
+                    for sid, cnt in cursor.fetchall():
+                        s_interactions[sid] = cnt
+                    interactions_cnt += sum(s_interactions.values())
                 except Exception:
                     pass
 
-            # Query individual session details including project attribution
+            # Query comprehensive session details including project attribution and token stats
             cursor.execute(f"""
                 SELECT s.id, s.title, s.time_created, s.time_updated, s.project_id,
-                       COALESCE(p.worktree, s.directory, ''),
-                       COALESCE(s.cost, 0.0),
-                       COALESCE(s.tokens_input, 0),
-                       COALESCE(s.tokens_output, 0),
-                       COALESCE(s.tokens_cache_read, 0)
+                       COALESCE({p_worktree}, {c_dir}, ''),
+                       COALESCE({c_parent}, ''),
+                       COALESCE({c_agent}, ''),
+                       COALESCE({c_model}, ''),
+                       COALESCE({c_cost}, 0.0),
+                       COALESCE({c_in}, 0),
+                       COALESCE({c_out}, 0),
+                       COALESCE({c_reasoning}, 0),
+                       COALESCE({c_cache}, 0),
+                       COALESCE({c_cache_write}, 0),
+                       COALESCE({c_add}, 0),
+                       COALESCE({c_del}, 0),
+                       COALESCE({c_files}, 0)
                 FROM session s
                 LEFT JOIN project p ON s.project_id = p.id
                 WHERE s.id IN ({placeholders})
             """, chunk)
             for row in cursor.fetchall():
+                sid = row[0]
                 sessions_info.append({
-                    "id": row[0],
+                    "id": sid,
                     "title": row[1] or "(untitled)",
                     "created": row[2],
                     "updated": row[3],
                     "project_id": row[4],
                     "worktree": row[5] or "",
-                    "cost": row[6] or 0.0,
-                    "tokens_input": row[7] or 0,
-                    "tokens_output": row[8] or 0,
-                    "tokens_cache_read": row[9] or 0,
+                    "parent_id": row[6] or "",
+                    "agent": row[7] or "",
+                    "model": row[8] or "",
+                    "cost": row[9] or 0.0,
+                    "tokens_input": row[10] or 0,
+                    "tokens_output": row[11] or 0,
+                    "tokens_reasoning": row[12] or 0,
+                    "tokens_cache_read": row[13] or 0,
+                    "tokens_cache_write": row[14] or 0,
+                    "summary_additions": row[15] or 0,
+                    "summary_deletions": row[16] or 0,
+                    "summary_files": row[17] or 0,
+                    "messages_count": s_messages.get(sid, 0),
+                    "interactions_count": s_interactions.get(sid, 0),
+                    "parts_count": s_parts.get(sid, 0),
+                    "subagents_count": s_subagents.get(sid, 0),
                 })
 
         by_project: dict[str, dict] = {}
@@ -13019,8 +13104,25 @@ def cli_show_logs(limit: int | None = None, json_output: bool = False) -> None:
                     sid = s.get("id", "unknown")
                     created_str = _fmt_ts(s.get("created")) if s.get("created") else "N/A"
                     updated_str = _fmt_ts(s.get("updated")) if s.get("updated") else "N/A"
+                    s_cost = s.get("cost")
+                    s_in = s.get("tokens_input", 0)
+                    s_out = s.get("tokens_output", 0)
+                    s_cache = s.get("tokens_cache_read", 0)
+                    s_msgs = s.get("messages_count")
+                    s_inter = s.get("interactions_count")
                     print(f"    - {title} (ID: {sid[:8]}...)")
                     print(f"      Start: {created_str} | End: {updated_str}")
+                    extra = []
+                    if s_cost is not None and s_cost > 0:
+                        extra.append(f"Cost: {fmt_cost(s_cost)}")
+                    if s_inter is not None and s_inter > 0:
+                        extra.append(f"Interactions: {s_inter}")
+                    elif s_msgs is not None and s_msgs > 0:
+                        extra.append(f"Messages: {s_msgs}")
+                    if s_in or s_out or s_cache:
+                        extra.append(f"Tokens: {fmt_int(s_in)} in / {fmt_int(s_out)} out / {fmt_int(s_cache)} cache")
+                    if extra:
+                        print(f"      {' | '.join(extra)}")
             else:
                 print(f"  - Deleted Sessions Count: {sess_cnt}")
 
