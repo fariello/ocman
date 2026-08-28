@@ -12399,6 +12399,32 @@ def confirm_destructive(
     return True
 
 
+def _infer_legacy_run_project(run: dict) -> tuple[str, str] | None:
+    """Infer (project_id, worktree) for legacy deletion runs that predate by_project tracking."""
+    sessions = run.get("sessions", [])
+    for s in sessions:
+        if isinstance(s, dict) and (s.get("project_id") or s.get("worktree")):
+            return s.get("project_id") or s.get("worktree", ""), s.get("worktree") or s.get("project_id", "")
+    titles = [s.get("title", "") for s in sessions if isinstance(s, dict)]
+    if not titles:
+        return None
+    if any(t.startswith("aw-") or "agent-workflows" in t.lower() or "lane l" in t.lower()
+           or "plan-vs-scripts" in t.lower() or "validation scripts" in t.lower()
+           or "plans 09-12" in t.lower() or "topic 02" in t.lower()
+           or "check_engine" in t.lower() or "driverwire" in t.lower()
+           or "driverfin" in t.lower() or "tabcomp" in t.lower()
+           or "selfcommit" in t.lower() or "bklggrad" in t.lower() for t in titles):
+        return "449edf331178f4340ef9a39c043dc8b88beeda08", str(Path.home() / "VC" / "agent-workflows")
+    if any("ocman" in t.lower() or "de-monolith" in t.lower() or "state split" in t.lower()
+           or "discovery machinery" in t.lower() for t in titles):
+        return "0f04be4483b9785efd8b6b3b0ba2c5a55f299f6f", str(Path.home() / "VC" / "ocman")
+    if any("hermes" in t.lower() for t in titles):
+        return "1f2bb6204c8ea2042d234eb8e0048be824897450", str(Path.home() / "VC" / "hermes-agent-legacy")
+    if any("uri" in t.lower() for t in titles):
+        return "4a349768b9e2d5d18ee113b9f1e60559fc3fba2f", str(Path.home() / "VC" / "uri-ai-info")
+    return None
+
+
 def _load_history() -> dict:
     """Load the historical metrics JSON sidecar safely."""
     default_history = {
@@ -12436,25 +12462,44 @@ def _load_history() -> dict:
             by_proj = data["cumulative"].setdefault("by_project", {})
             if not by_proj and data.get("runs"):
                 for r in data["runs"]:
-                    for pid, pstats in r.get("by_project", {}).items():
-                        if not pid:
-                            continue
-                        entry = by_proj.setdefault(pid, {
-                            "project_id": pstats.get("project_id", pid),
-                            "worktree": pstats.get("worktree", ""),
-                            "cost_deleted": 0.0,
-                            "tokens_input_deleted": 0,
-                            "tokens_output_deleted": 0,
-                            "tokens_cache_read_deleted": 0,
-                            "sessions_deleted": 0,
-                        })
-                        if pstats.get("worktree") and not entry.get("worktree"):
-                            entry["worktree"] = pstats["worktree"]
-                        entry["cost_deleted"] = entry.get("cost_deleted", 0.0) + pstats.get("cost", 0.0)
-                        entry["tokens_input_deleted"] = entry.get("tokens_input_deleted", 0) + pstats.get("tokens_input", 0)
-                        entry["tokens_output_deleted"] = entry.get("tokens_output_deleted", 0) + pstats.get("tokens_output", 0)
-                        entry["tokens_cache_read_deleted"] = entry.get("tokens_cache_read_deleted", 0) + pstats.get("tokens_cache_read", 0)
-                        entry["sessions_deleted"] = entry.get("sessions_deleted", 0) + pstats.get("sessions_count", 0)
+                    if r.get("by_project"):
+                        for pid, pstats in r.get("by_project", {}).items():
+                            if not pid:
+                                continue
+                            entry = by_proj.setdefault(pid, {
+                                "project_id": pstats.get("project_id", pid),
+                                "worktree": pstats.get("worktree", ""),
+                                "cost_deleted": 0.0,
+                                "tokens_input_deleted": 0,
+                                "tokens_output_deleted": 0,
+                                "tokens_cache_read_deleted": 0,
+                                "sessions_deleted": 0,
+                            })
+                            if pstats.get("worktree") and not entry.get("worktree"):
+                                entry["worktree"] = pstats["worktree"]
+                            entry["cost_deleted"] = entry.get("cost_deleted", 0.0) + pstats.get("cost", 0.0)
+                            entry["tokens_input_deleted"] = entry.get("tokens_input_deleted", 0) + pstats.get("tokens_input", 0)
+                            entry["tokens_output_deleted"] = entry.get("tokens_output_deleted", 0) + pstats.get("tokens_output", 0)
+                            entry["tokens_cache_read_deleted"] = entry.get("tokens_cache_read_deleted", 0) + pstats.get("tokens_cache_read", 0)
+                            entry["sessions_deleted"] = entry.get("sessions_deleted", 0) + pstats.get("sessions_count", 0)
+                    else:
+                        inferred = _infer_legacy_run_project(r)
+                        if inferred:
+                            pid, wt = inferred
+                            entry = by_proj.setdefault(pid, {
+                                "project_id": pid,
+                                "worktree": wt,
+                                "cost_deleted": 0.0,
+                                "tokens_input_deleted": 0,
+                                "tokens_output_deleted": 0,
+                                "tokens_cache_read_deleted": 0,
+                                "sessions_deleted": 0,
+                            })
+                            entry["cost_deleted"] = entry.get("cost_deleted", 0.0) + r.get("cost", 0.0)
+                            entry["tokens_input_deleted"] = entry.get("tokens_input_deleted", 0) + r.get("tokens_input", 0)
+                            entry["tokens_output_deleted"] = entry.get("tokens_output_deleted", 0) + r.get("tokens_output", 0)
+                            entry["tokens_cache_read_deleted"] = entry.get("tokens_cache_read_deleted", 0) + r.get("tokens_cache_read", 0)
+                            entry["sessions_deleted"] = entry.get("sessions_deleted", 0) + len(r.get("sessions", []))
             return data
     except Exception:
         return default_history
@@ -13788,7 +13833,7 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
             return
 
         if session_rows:
-            if hist_sessions > 0 and historical:
+            if hist_sessions > 0:
                 print(color_bold(f"Spend for {display_dir} ({len(session_rows)} live sessions, {hist_sessions} deleted):"))
             else:
                 print(color_bold(f"Spend for {display_dir} ({len(session_rows)} sessions):"))
@@ -13801,13 +13846,13 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
             table.set_cols_align(["l", "r", "r", "r", "r"])
             print(table.draw())
             print(f"Total (live): {fmt_cost(live_cost)}")
-            if historical:
+            if hist_cost > 0 or historical:
                 print(f"Historically saved (deleted):     {fmt_cost(hist_cost)}  "
                       f"[{fmt_int(hist_in)} in / {fmt_int(hist_out)} out / {fmt_int(hist_cache)} cache] ({hist_sessions} deleted sessions)")
                 print(f"Grand total (live + historical):  {fmt_cost(grand_cost)}  "
                       f"[{fmt_int(grand_in)} in / {fmt_int(grand_out)} out / {fmt_int(grand_cache)} cache]")
-            elif hist_cost > 0:
-                print(color_dim(f"({hist_sessions} deleted sessions; add --historical to include {fmt_cost(hist_cost)} deleted spend)"))
+            else:
+                print(color_dim("(add --historical to include spend + tokens on since-deleted sessions)"))
         else:
             # 0 live sessions
             if hist_sessions > 0 or hist_cost > 0:
