@@ -13936,20 +13936,25 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
 
         print(color_bold(f"Spend for {display_dir}:"))
         table = vistab.Vistab(header=["Session", "Cost", "Tokens In", "Tokens Out", "Cache"])
+        table.set_header_style(bold=True)
         for r in session_rows:
             title = (r["title"] or "")[:40]
             table.add_row([f"{r['id']}  {title}", fmt_cost(r["cost"]),
                            fmt_int(r["tokens_input"]), fmt_int(r["tokens_output"]),
                            fmt_int(r["tokens_cache_read"])])
 
+        total_row_idx = len(session_rows)
         table.add_row([f"Total Current Sessions ({len(session_rows)})", fmt_cost(live_cost),
                        fmt_int(live_in), fmt_int(live_out), fmt_int(live_cache)])
+        table.set_row_style(total_row_idx, bold=True)
 
         if hist_sessions > 0 or hist_cost > 0:
             table.add_row([f"Deleted Sessions (Historical, {hist_sessions})", fmt_cost(hist_cost),
                            fmt_int(hist_in), fmt_int(hist_out), fmt_int(hist_cache)])
+            grand_row_idx = total_row_idx + 2
             table.add_row([f"Grand Total ({len(session_rows) + hist_sessions})", fmt_cost(grand_cost),
                            fmt_int(grand_in), fmt_int(grand_out), fmt_int(grand_cache)])
+            table.set_row_style(grand_row_idx, bold=True)
 
         table.set_cols_align(["l", "r", "r", "r", "r"])
         print(table.draw())
@@ -13981,19 +13986,24 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
 
     print(color_bold(f"LLM spend by project ({len(proj_rows)} projects):"))
     table = vistab.Vistab(header=["Project", "Cost", "Tokens In", "Tokens Out", "Cache"])
+    table.set_header_style(bold=True)
     for r in proj_rows:
         table.add_row([r["directory"], fmt_cost(r["cost"]), fmt_int(r["tokens_input"]),
                        fmt_int(r["tokens_output"]), fmt_int(r["tokens_cache_read"])])
 
+    total_row_idx = len(proj_rows)
     table.add_row([f"Total Current Projects ({len(proj_rows)})", fmt_cost(live_total),
                    fmt_int(live_in), fmt_int(live_out), fmt_int(live_cache)])
+    table.set_row_style(total_row_idx, bold=True)
 
     if hist_cost > 0 or historical:
         table.add_row(["Deleted Sessions (Historical)", fmt_cost(hist_cost),
                        fmt_int(hist_in), fmt_int(hist_out), fmt_int(hist_cache)])
+        grand_row_idx = total_row_idx + 2
         table.add_row(["Grand Total", fmt_cost(live_total + hist_cost),
                        fmt_int(live_in + hist_in), fmt_int(live_out + hist_out),
                        fmt_int(live_cache + hist_cache)])
+        table.set_row_style(grand_row_idx, bold=True)
 
     table.set_cols_align(["l", "r", "r", "r", "r"])
     print(table.draw())
