@@ -257,10 +257,9 @@
   confirms auth via a read-only `GET /app` on your OWN loopback listeners; `--json`
   for machine output. Fails loud (never a false "all clear") if it cannot enumerate.
 - **`ocman spend`**: LLM spend reporting. Default is a per-project table (cost + split
-  tokens, sorted by cost) with a live total; `ocman spend <project> --sessions` drills
-  into per-session spend; `--historical` adds the deletion ledger's saved (deleted)
-  spend as a single global line (not attributable per project) and a grand total;
-  `--json` emits the machine-readable form.
+  tokens, sorted by cost) with live, historical (deleted), and grand totals;
+  `ocman spend <project> --sessions` drills into per-session spend; `--json` emits
+  the machine-readable form.
 - **`--json` machine-readable output** on `session list`, `project list`, and
   `history show`, via a shared emitter with a `schema_version` field (a documented,
   semi-stable contract; breaking shape changes bump the version and are noted here).

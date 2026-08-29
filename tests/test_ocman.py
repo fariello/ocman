@@ -1694,7 +1694,7 @@ def test_preprocess_list_word_order():
 
 
 def test_spend_per_project_default(temp_db, capsys, monkeypatch, mock_history_path):
-    """F2: `ocman spend` shows a per-project table with a live total; --historical adds the ledger."""
+    """F2: `ocman spend` shows a per-project table with live, historical, and grand totals."""
     import ocman, sys
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
@@ -1711,7 +1711,7 @@ def test_spend_per_project_default(temp_db, capsys, monkeypatch, mock_history_pa
     import json as _json
     mock_history_path.write_text(_json.dumps({"cumulative": {"cost_deleted": 7.0}, "runs": []}))
 
-    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "--historical"])
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend"])
     try:
         ocman.main()
     except SystemExit as e:
@@ -1765,7 +1765,7 @@ def test_gather_spend_shape_matches_json(temp_db, monkeypatch, mock_history_path
     # Historical seeds add global deleted spend.
     hist = ocman._load_history()
     hist["cumulative"].update({"cost_deleted": 5.0, "tokens_input_deleted": 300,
-                               "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
+                                "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
     ocman._save_history(hist)
     dh = ocman.gather_spend(historical=True)
     assert dh["historical_total"] == pytest.approx(5.0)
@@ -1774,7 +1774,7 @@ def test_gather_spend_shape_matches_json(temp_db, monkeypatch, mock_history_path
 
 
 def test_spend_historical_sums_tokens(temp_db, capsys, monkeypatch, mock_history_path):
-    """--historical now sums deleted TOKENS (in/out/cache), not just cost."""
+    """Spend sums deleted TOKENS (in/out/cache), not just cost."""
     import ocman, sys, json
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
@@ -1786,10 +1786,9 @@ def test_spend_historical_sums_tokens(temp_db, capsys, monkeypatch, mock_history
     # Seed a cumulative deletion ledger with historical tokens.
     hist = ocman._load_history()
     hist["cumulative"].update({"cost_deleted": 5.0, "tokens_input_deleted": 300,
-                               "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
+                                "tokens_output_deleted": 200, "tokens_cache_read_deleted": 50})
     ocman._save_history(hist)
-    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend",
-                                      "--historical", "--json"])
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "--json"])
     try:
         ocman.main()
     except SystemExit as e:
@@ -1885,8 +1884,8 @@ def test_spend_project_when_all_sessions_deleted(temp_db, capsys, monkeypatch, m
     assert "Grand Total (1)" in out and "$8.25" in out
 
 
-def test_spend_project_historical_flag_and_json(temp_db, capsys, monkeypatch, mock_history_path):
-    """ocman spend <project> --json and --historical include live and deleted metrics."""
+def test_spend_project_ledger_attribution_and_json(temp_db, capsys, monkeypatch, mock_history_path):
+    """ocman spend <project> and --json include live and deleted metrics."""
     import ocman, sys, json
     conn = sqlite3.connect(str(temp_db)); cur = conn.cursor()
     cur.execute("DELETE FROM session"); cur.execute("DELETE FROM project")
@@ -1920,8 +1919,8 @@ def test_spend_project_historical_flag_and_json(temp_db, capsys, monkeypatch, mo
     assert d["live_total"] == 5.00
     assert d["grand_total"] == 15.00
 
-    # Test --historical CLI output
-    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "p1", "--historical"])
+    # Test CLI output without any flags
+    monkeypatch.setattr(sys, "argv", ["ocman", "--db", str(temp_db), "spend", "p1"])
     try:
         ocman.main()
     except SystemExit as e:

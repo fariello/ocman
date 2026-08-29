@@ -5757,7 +5757,7 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} session show ID", "Show session details"),
         (f"{prog} db info", "Show database and storage usage"),
         (f"{prog} disk", "Per-project on-disk usage breakdown"),
-        (f"{prog} spend", "LLM spend by project (--sessions, --historical)"),
+        (f"{prog} spend", "LLM spend by project (--sessions)"),
         (f"{prog} list running [PATTERN]", "Running OpenCode instances; PATTERN filters by project/session (alias: 'lr')"),
         (f"{prog} logs", "Show historical cleanup/recovery activity"),
         (f"{prog} ui", "Launch the interactive terminal dashboard"),
@@ -5912,8 +5912,7 @@ def build_help_reference() -> str:
             ("reclaim [--dry-run --while-running -y]", "Preview / bypass the running guard / skip the normal confirm"),
         ]),
         ("spend / running", [
-            ("spend [PROJECT] [--sessions]", "LLM spend by project, or per-session for one project"),
-            ("spend --historical [--json]", "Include spend + tokens on since-deleted sessions"),
+            ("spend [PROJECT] [--sessions] [--json]", "LLM spend by project, or per-session for one project"),
             ("list running [PATTERN] [--long --all-users --probe --json]", "Running OpenCode instances; PATTERN filters by project/session; flag insecure control servers"),
         ]),
         ("history / config", [
@@ -6753,8 +6752,6 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Optional project (name/number/id/path) to drill into per-session spend.")
     sp.add_argument("--sessions", action="store_true",
                     help="Show per-session spend for the given project.")
-    sp.add_argument("--historical", action="store_true",
-                    help="Also include historically-saved (deleted) spend from the ledger.")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
     sp = new_sub("focus",
@@ -7235,7 +7232,6 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
         out["show_spend"] = True
         out["project"] = g("project")
         out["spend_sessions"] = bool(g("sessions", False))
-        out["spend_historical"] = bool(g("historical", False))
         out["json_output"] = bool(g("json", False))
 
     elif group == "focus":
@@ -12682,7 +12678,7 @@ def prune_history_runs_older_than(days: float) -> int:
     """Drop activity-log run records older than ``days`` days; keep newer runs.
 
     The all-time ``cumulative`` totals are DELIBERATELY left untouched (historical spend and
-    deletion metadata are kept in perpetuity, so ``spend --historical`` is unchanged); only the
+    deletion metadata are kept in perpetuity, so ``ocman spend`` is unchanged); only the
     displayed ``runs[]`` action log is pruned. Run timestamps are the ``%Y-%m-%d %H:%M:%S``
     local-time strings written by the cleanup recorder; a run whose timestamp cannot be parsed is
     KEPT (never dropped on ambiguity). Returns the number of run records removed.
@@ -13798,7 +13794,7 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
               "never to other users').")
 
 
-def gather_spend(*, historical: bool = False) -> dict:
+def gather_spend(*, historical: bool = True) -> dict:
     """Compute the per-project LLM spend report as a data dict (no printing).
 
     Single source of the per-project spend aggregation, shared by `cli_spend`'s default
@@ -13811,8 +13807,7 @@ def gather_spend(*, historical: bool = False) -> dict:
          "historical_total": float|None, "historical_tokens": {..}|None,
          "grand_total": float, "grand_tokens": {..}|None}
 
-    Historical (deleted) spend is gathered from the deletion ledger. When ``historical``
-    is False the historical/grand-token fields are None (matching the CLI JSON contract).
+    Historical (deleted) spend is gathered from the deletion ledger.
     """
     projects = db_list_projects()
     proj_rows = [{
@@ -13865,8 +13860,8 @@ def gather_spend(*, historical: bool = False) -> dict:
 
 
 def cli_spend(project: str | None = None, *, sessions: bool = False,
-              historical: bool = False, json_output: bool = False) -> None:
-    """Show per-project (default) or per-session LLM spend (F2).
+              json_output: bool = False) -> None:
+    """Show per-project (default) or per-session LLM spend.
 
     Sources: live per-project/per-session cost + split tokens from the session
     rows (via db_list_projects / db_list_sessions). "Historically saved" spend is
@@ -13922,12 +13917,11 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
             emit_json("spend", {
                 "scope": "sessions", "project_id": proj_id,
                 "directory": display_dir,
-                "total_cost": grand_cost if historical else live_cost,
+                "total_cost": grand_cost,
                 "live_total": live_cost,
                 "live_tokens": {"input": live_in, "output": live_out, "cache_read": live_cache},
-                "historical_total": hist_cost if historical else None,
-                "historical_tokens": ({"input": hist_in, "output": hist_out,
-                                       "cache_read": hist_cache} if historical else None),
+                "historical_total": hist_cost,
+                "historical_tokens": {"input": hist_in, "output": hist_out, "cache_read": hist_cache},
                 "grand_total": grand_cost,
                 "grand_tokens": {"input": grand_in, "output": grand_out, "cache_read": grand_cache},
                 "sessions": session_rows,
@@ -13961,24 +13955,16 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
         return
 
     # Default: per-project spend table.
-    data = gather_spend(historical=historical)
+    data = gather_spend()
     proj_rows = data["projects"]
     live_total = data["live_total"]
     live_in = data["live_tokens"]["input"]
     live_out = data["live_tokens"]["output"]
     live_cache = data["live_tokens"]["cache_read"]
-    hist_cost = (data["historical_total"] or 0.0) if historical else 0.0
-    if not hist_cost:
-        # Check if ledger has historical cost available
-        h_data = _load_history().get("cumulative", {})
-        hist_cost = h_data.get("cost_deleted", 0.0) or 0.0
-        hist_in = h_data.get("tokens_input_deleted", 0) or 0
-        hist_out = h_data.get("tokens_output_deleted", 0) or 0
-        hist_cache = h_data.get("tokens_cache_read_deleted", 0) or 0
-    else:
-        hist_in = (data["historical_tokens"]["input"] if historical and data["historical_tokens"] else 0)
-        hist_out = (data["historical_tokens"]["output"] if historical and data["historical_tokens"] else 0)
-        hist_cache = (data["historical_tokens"]["cache_read"] if historical and data["historical_tokens"] else 0)
+    hist_cost = data["historical_total"] or 0.0
+    hist_in = data["historical_tokens"]["input"] if data["historical_tokens"] else 0
+    hist_out = data["historical_tokens"]["output"] if data["historical_tokens"] else 0
+    hist_cache = data["historical_tokens"]["cache_read"] if data["historical_tokens"] else 0
 
     if json_output:
         emit_json("spend", data)
@@ -13996,7 +13982,7 @@ def cli_spend(project: str | None = None, *, sessions: bool = False,
                    fmt_int(live_in), fmt_int(live_out), fmt_int(live_cache)])
     table.set_row_style(total_row_idx, bold=True)
 
-    if hist_cost > 0 or historical:
+    if hist_cost > 0:
         table.add_row(["Deleted Sessions (Historical)", fmt_cost(hist_cost),
                        fmt_int(hist_in), fmt_int(hist_out), fmt_int(hist_cache)])
         grand_row_idx = total_row_idx + 2
@@ -17380,7 +17366,6 @@ def _run_main() -> None:
             cli_spend(
                 getattr(args, "project", None),
                 sessions=getattr(args, "spend_sessions", False),
-                historical=getattr(args, "spend_historical", False),
                 json_output=getattr(args, "json_output", False),
             )
         except RecoveryError as e:
