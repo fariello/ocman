@@ -6660,6 +6660,42 @@ def test_cli_project_delete_multiple_with_age(temp_db, monkeypatch, capsys):
     conn.close()
 
 
+def test_cli_project_delete_multiple_creates_only_one_backup(temp_db, monkeypatch, capsys):
+    """Test ocman project delete across multiple projects creates only a single backup."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_b1', 'B1')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s1', 'p1', 'S1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/tmp/ocman_b2', 'B2')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s2', 'p2', 'S2')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p3', '/tmp/ocman_b3', 'B3')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s3', 'p3', 'S3')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_b*", "-y", "--force"])
+    ocman.main()
+
+    out = capsys.readouterr().out
+    assert "Successfully processed 3 project(s)." in out
+
+    # Check backups directory: must contain EXACTLY ONE backup folder
+    backups_dir = ocman.Path.home() / ".local" / "share" / "opencode" / "backups"
+    backup_folders = [d for d in backups_dir.iterdir() if d.is_dir() and d.name.startswith("opencode-db-cleanup-")]
+    assert len(backup_folders) == 1, f"Expected 1 backup folder, found {len(backup_folders)}: {backup_folders}"
+
+    # Verify all 3 projects were deleted
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id IN ('p1', 'p2', 'p3')")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
+
+
 def test_lp_dirs_flag_parses(monkeypatch):
     """'ocman lp --dirs', 'ocman project list --dirs', and '--dir' parse dirs_only."""
     import sys
