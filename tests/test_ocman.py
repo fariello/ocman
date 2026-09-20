@@ -6433,6 +6433,234 @@ def test_ocman_db_lock_shared_concurrent_readers(temp_db):
             pass
 
 
+def test_project_delete_parses_multiple(monkeypatch):
+    """'project delete' accepts multiple targets."""
+    import sys
+    from ocman import parse_args
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "p1", "p2", "/tmp/*", "-y", "--force"])
+    args = parse_args()
+    assert args.delete_project is True
+    assert args.projects == ["p1", "p2", "/tmp/*"]
+    assert args.yes is True
+    assert args.force is True
+
+
+def test_resolve_project_targets(temp_db):
+    """Test resolve_project_targets with exact paths, names, IDs, indices, and globs."""
+    import sqlite3
+    from ocman.cli import resolve_project_targets
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/tmp/opencode/sess-alpha', 'alpha')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj2', '/tmp/opencode/sess-beta', 'beta')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj3', '/tmp/other/sess-gamma', 'gamma')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj4', '/home/user/myproject', 'myproj')")
+    conn.commit()
+    conn.close()
+
+    # Exact paths
+    matched, unmatched = resolve_project_targets(["/tmp/opencode/sess-alpha", "/tmp/opencode/sess-beta"])
+    assert [p["id"] for p in matched] == ["proj1", "proj2"]
+    assert unmatched == []
+
+    # Quoted/unexpanded glob on directory
+    matched, unmatched = resolve_project_targets(["/tmp/opencode/*"])
+    assert set(p["id"] for p in matched) == {"proj1", "proj2"}
+    assert unmatched == []
+
+    # Wider glob on directory
+    matched, unmatched = resolve_project_targets(["/tmp/*"])
+    assert set(p["id"] for p in matched) == {"proj1", "proj2", "proj3"}
+    assert unmatched == []
+
+    # Glob on basename
+    matched, unmatched = resolve_project_targets(["sess-*"])
+    assert set(p["id"] for p in matched) == {"proj1", "proj2", "proj3"}
+    assert unmatched == []
+
+    # Glob on name
+    matched, unmatched = resolve_project_targets(["my*"])
+    assert [p["id"] for p in matched] == ["proj4"]
+    assert unmatched == []
+
+    # Glob on ID
+    matched, unmatched = resolve_project_targets(["proj[12]"])
+    assert set(p["id"] for p in matched) == {"proj1", "proj2"}
+    assert unmatched == []
+
+    # Unmatched specs
+    matched, unmatched = resolve_project_targets(["/nonexistent/*", "unknown_proj"])
+    assert matched == []
+    assert unmatched == ["/nonexistent/*", "unknown_proj"]
+
+
+def test_cli_project_delete_multiple_directories(temp_db, monkeypatch, capsys):
+    """Test ocman project delete with multiple directories."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_p1', 'P1')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s1', 'p1', 'Sess 1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/tmp/ocman_p2', 'P2')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s2', 'p2', 'Sess 2')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_p1", "/tmp/ocman_p2", "-y", "--force"])
+    ocman.main()
+
+    out = capsys.readouterr().out
+    assert "Successfully processed 2 project(s)." in out
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id IN ('p1', 'p2')")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id IN ('s1', 's2')")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
+
+
+def test_cli_project_delete_glob(temp_db, monkeypatch, capsys):
+    """Test ocman project delete with a glob pattern."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_glob/sess1', 'Sess 1')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s1', 'p1', 'S1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/tmp/ocman_glob/sess2', 'Sess 2')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s2', 'p2', 'S2')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p3', '/tmp/ocman_keep/other', 'Keep')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s3', 'p3', 'S3')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_glob/*", "-y", "--force"])
+    ocman.main()
+
+    out = capsys.readouterr().out
+    assert "Successfully processed 2 project(s)." in out
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id IN ('p1', 'p2')")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'p3'")
+    assert cursor.fetchone()[0] == 1
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id = 's3'")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_cli_project_delete_unmatched_aborts_safely(temp_db, monkeypatch, capsys):
+    """Test unmatched project delete target aborts without deleting matched projects."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_safe', 'P1')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s1', 'p1', 'S1')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_safe", "/tmp/nonexistent*", "-y", "--force"])
+    with pytest.raises(SystemExit) as excinfo:
+        ocman.main()
+    assert excinfo.value.code == 1
+
+    err = capsys.readouterr().err
+    assert "No matches found for '/tmp/nonexistent*'" in err
+
+    # Ensure p1 was NOT deleted
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'p1'")
+    assert cursor.fetchone()[0] == 1
+    conn.close()
+
+
+def test_cli_project_delete_multiple_dry_run(temp_db, monkeypatch, capsys):
+    """Test ocman project delete with multiple projects and --dry-run."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_dry1', 'D1')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s1', 'p1', 'S1')")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/tmp/ocman_dry2', 'D2')")
+    cursor.execute("INSERT INTO session (id, project_id, title) VALUES ('s2', 'p2', 'S2')")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_dry1", "/tmp/ocman_dry2", "--dry-run", "--force"])
+    ocman.main()
+
+    out = capsys.readouterr().out
+    assert "Dry run complete. No database changes were made." in out
+
+    # Verify both projects and sessions still exist
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id IN ('p1', 'p2')")
+    assert cursor.fetchone()[0] == 2
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id IN ('s1', 's2')")
+    assert cursor.fetchone()[0] == 2
+    conn.close()
+
+
+def test_cli_project_delete_multiple_with_age(temp_db, monkeypatch, capsys):
+    """Test ocman project delete across multiple projects with --age filter."""
+    import sys
+    import time
+    import sqlite3
+    import ocman
+
+    now_ms = int(time.time() * 1000)
+    old_time_ms = now_ms - (10 * 86400000)  # 10 days ago
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/tmp/ocman_age1', 'A1')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1_old', 'p1', 'S1 Old', ?, ?)", (old_time_ms, old_time_ms))
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s1_new', 'p1', 'S1 New', ?, ?)", (now_ms, now_ms))
+
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/tmp/ocman_age2', 'A2')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s2_old', 'p2', 'S2 Old', ?, ?)", (old_time_ms, old_time_ms))
+    cursor.execute("INSERT INTO session (id, project_id, title, time_created, time_updated) VALUES ('s2_new', 'p2', 'S2 New', ?, ?)", (now_ms, now_ms))
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "delete", "/tmp/ocman_age*", "--age", "5d", "-y", "--force"])
+    ocman.main()
+
+    out = capsys.readouterr().out
+    assert "Successfully processed 2 project(s)." in out
+
+    # Projects should still exist because --age preserves project rows
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id IN ('p1', 'p2')")
+    assert cursor.fetchone()[0] == 2
+
+    # Old sessions deleted, new sessions kept
+    cursor.execute("SELECT id FROM session ORDER BY id")
+    remaining = [row[0] for row in cursor.fetchall()]
+    assert remaining == ["s1_new", "s2_new"]
+    conn.close()
+
+
+
 
 
 

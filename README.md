@@ -192,7 +192,7 @@ you jump to a matching session.
 `ocman` uses a noun-based, git/kubectl-style grammar: `ocman <group> <action> [options]`. The groups
 are `session`, `project`, `db`, `backup`, `history`, and `config`. For example:
 *   `ocman session list` lists sessions; `ocman session recover ID` recovers one.
-*   `ocman project list` / `ocman project delete NAME` manage projects.
+*   `ocman project list` / `ocman project delete NAME...` manage projects.
 *   `ocman db info` / `ocman db clean` / `ocman db clean-orphans` maintain the database.
 *   `ocman backup create` / `ocman backup restore PATH` handle backups.
 
@@ -396,7 +396,7 @@ Interactions value of `n/a` means that session lacks reliable role data.
 | Command | Description |
 |:---|:---|
 | `ocman project list` | List all projects in the database. `--json` for machine output; `--limit N` caps the count. |
-| `ocman project delete NAME` | Recursively delete a project (all its sessions, files, and DB rows). When `--age AGE` is passed, deletes only sessions in the project that are older than AGE (e.g. 1h, 3d, 5w, 9m, 1y) and preserves the project row. Offers recovery extracts first by default (`--extracts`/`--no-extracts`, `-o DIR`; see `session delete`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips the confirmation; `--pend` defers while OpenCode is running. |
+| `ocman project delete NAME...` | Recursively delete one or more projects (all their sessions, files, and DB rows). Accepts multiple project directories, names, IDs, or glob patterns (e.g. `/tmp/*`, `/tmp/opencode/sess*`). When `--age AGE` is passed, deletes only sessions in the matched projects that are older than AGE (e.g. 1h, 3d, 5w, 9m, 1y) and preserves the project rows. Offers recovery extracts first by default (`--extracts`/`--no-extracts`, `-o DIR`; see `session delete`). `--dry-run` previews; `--force` bypasses process-lock checks; `-y/--yes` skips confirmation; `--pend` defers while OpenCode is running. |
 | `ocman project move SRC --to DST` | Relocate a project (re-assign the worktree path in the DB and on disk). `--metadata-only` updates DB paths only. |
 
 ### `db` (database info and maintenance)

@@ -4201,8 +4201,8 @@ def ocman_db_lock(action: str = "modify database", *, exclusive: bool = True, ti
                 pass
 
 
-def db_list_projects() -> list[dict[str, Any]]:
-    """Query all projects with sessions from the opencode database."""
+def db_list_projects(include_empty: bool = False) -> list[dict[str, Any]]:
+    """Query all projects with sessions from the opencode database (or all projects if include_empty=True)."""
     sqlite3 = _get_sqlite()
     if sqlite3 is None or not OPENCODE_DB_PATH.exists():
         return []
@@ -4212,7 +4212,8 @@ def db_list_projects() -> list[dict[str, Any]]:
         try:
             conn = sqlite3.connect(str(OPENCODE_DB_PATH))
             cursor = conn.cursor()
-            cursor.execute("""
+            having_clause = "" if include_empty else "HAVING session_count > 0"
+            cursor.execute(f"""
                 SELECT p.id, p.worktree, p.name, COUNT(s.id) as session_count,
                        COALESCE(MAX(s.time_updated), 0) as last_updated,
                        COALESCE(SUM(s.cost), 0.0) as cost,
@@ -4222,7 +4223,7 @@ def db_list_projects() -> list[dict[str, Any]]:
                 FROM project p
                 LEFT JOIN session s ON s.project_id = p.id
                 GROUP BY p.id
-                HAVING session_count > 0
+                {having_clause}
                 ORDER BY last_updated DESC
             """)
             projects = []
@@ -5366,6 +5367,109 @@ def resolve_project_in_list(spec: str, projects: list[dict[str, Any]]) -> dict[s
     return None
 
 
+def resolve_project_targets(specs: list[str]) -> tuple[list[dict[str, Any]], list[str]]:
+    """Resolve project specifiers (paths, IDs, names, numeric indices, or globs) to projects.
+
+    Returns (matched_projects, unmatched_specs).
+    matched_projects is deduplicated by project ID.
+    """
+    import fnmatch
+    import glob
+
+    projects = db_list_projects(include_empty=True)
+    if not projects:
+        return [], list(specs)
+
+    matched_by_id: dict[str, dict[str, Any]] = {}
+    unmatched: list[str] = []
+
+    for raw_spec in specs:
+        spec_str = str(raw_spec).strip()
+        if not spec_str:
+            continue
+
+        # Strip optional "project:" prefix if supplied
+        if spec_str.lower().startswith("project:"):
+            spec_str = spec_str[8:].strip()
+        elif spec_str.lower().startswith("session:"):
+            unmatched.append(raw_spec)
+            continue
+
+        has_glob = any(c in spec_str for c in "*?[]")
+        spec_matches: list[dict[str, Any]] = []
+
+        if has_glob:
+            exp_spec = os.path.expanduser(spec_str)
+            abs_spec = str(Path(exp_spec).resolve()) if not os.path.isabs(exp_spec) else exp_spec
+            disk_paths = set()
+            try:
+                for dp in glob.glob(exp_spec):
+                    disk_paths.add(dp)
+                    try:
+                        disk_paths.add(str(Path(dp).resolve()))
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+            for p in projects:
+                p_dir = p.get("directory") or ""
+                p_name = p.get("name") or ""
+                p_id = p.get("id") or ""
+                p_base = os.path.basename(p_dir.rstrip("/")) if p_dir else ""
+                try:
+                    p_res = str(Path(p_dir).resolve())
+                except Exception:
+                    p_res = p_dir
+
+                # 1. Directory pattern match
+                if (fnmatch.fnmatch(p_dir, spec_str) or
+                    fnmatch.fnmatch(p_dir, exp_spec) or
+                    fnmatch.fnmatch(p_dir.rstrip("/"), spec_str.rstrip("/")) or
+                    fnmatch.fnmatch(p_dir.rstrip("/"), exp_spec.rstrip("/")) or
+                    fnmatch.fnmatch(p_dir, abs_spec) or
+                    fnmatch.fnmatch(p_dir.rstrip("/"), abs_spec.rstrip("/")) or
+                    fnmatch.fnmatch(p_res, abs_spec) or
+                    fnmatch.fnmatch(p_res.rstrip("/"), abs_spec.rstrip("/")) or
+                    (p_base and fnmatch.fnmatch(p_base, spec_str)) or
+                    (p_base and fnmatch.fnmatch(p_base.lower(), spec_str.lower())) or
+                    p_dir in disk_paths or
+                    p_res in disk_paths or
+                    p_dir.rstrip("/") in disk_paths or
+                    p_res.rstrip("/") in disk_paths):
+                    spec_matches.append(p)
+                    continue
+
+                # 2. Name pattern match
+                if p_name and (fnmatch.fnmatch(p_name, spec_str) or fnmatch.fnmatch(p_name.lower(), spec_str.lower())):
+                    spec_matches.append(p)
+                    continue
+
+                # 3. ID pattern match
+                if p_id and fnmatch.fnmatch(p_id, spec_str):
+                    spec_matches.append(p)
+                    continue
+        else:
+            # Single project resolution
+            resolved = resolve_project_in_list(spec_str, projects)
+            if resolved:
+                spec_matches.append(resolved)
+            else:
+                found = db_find_project(spec_str)
+                if found:
+                    found_p = next((p for p in projects if p["id"] == found[0]), None)
+                    if found_p:
+                        spec_matches.append(found_p)
+
+        if not spec_matches:
+            unmatched.append(raw_spec)
+        else:
+            for p in spec_matches:
+                matched_by_id[p["id"]] = p
+
+    return list(matched_by_id.values()), unmatched
+
+
 def resolve_targets(
     specs: list[str],
     *,
@@ -5809,7 +5913,7 @@ def build_help(topic: str | None = None) -> str:
         (f"{prog} db clean-orphans", "Remove orphaned DB records and sidecar diffs"),
         (f"{prog} backup clean 30 days", "Prune old backup archives"),
         (f"{prog} session delete ID", "Delete a single session (with confirmation)"),
-        (f"{prog} project delete NAME", "Delete a project and all its sessions"),
+        (f"{prog} project delete NAME...", "Delete project(s) and all their sessions (supports globs)"),
         (f"{prog} db clean --dry-run", "Preview any clean/delete without changing data"),
         (f"{prog} <delete> --pend", "If OpenCode is running, add the action to the pending list"),
         (f"{prog} pending", "List/run/clear actions you added while OpenCode was running"),
@@ -6208,6 +6312,7 @@ def _legacy_defaults(config: dict) -> dict:
         # browse / search
         "list_projects": False,
         "project": None,
+        "projects": [],
         "list_sessions": False,
         "brief_list": False,
         "all_sessions": False,
@@ -6603,8 +6708,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Show at most N projects (a truncation note reports the rest).")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
 
-    sp = new_action(p_project, pr_sub, "delete", help="Delete a project and all its sessions.")
-    sp.add_argument("name", help="Project name, number, ID, or path.")
+    sp = new_action(p_project, pr_sub, "delete", help="Delete projects and all their sessions.")
+    sp.add_argument("name", nargs="+", help="Project names, numbers, IDs, paths, or globs.")
     sp.add_argument("--age", "--older-than", dest="age", default=None, metavar="AGE",
                     help="Delete only sessions older than AGE (e.g. 1h, 3d, 5w, 9m, 1y, or '30 days').")
     sp.add_argument("--dry-run", action="store_true", help="Preview without deleting.")
@@ -7110,7 +7215,16 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
             out["projects_filter"] = g("pattern", None)
         elif action == "delete":
             out["delete_project"] = True
-            out["project"] = g("name")
+            raw_names = g("name")
+            if isinstance(raw_names, list):
+                out["projects"] = raw_names
+                out["project"] = raw_names[0] if len(raw_names) == 1 else " ".join(raw_names)
+            elif raw_names is not None:
+                out["projects"] = [raw_names]
+                out["project"] = raw_names
+            else:
+                out["projects"] = []
+                out["project"] = None
             age = g("age")
             out["age"] = age
             if age is not None:
@@ -17580,7 +17694,10 @@ def _run_main() -> None:
     # keep those whose title/directory/project match ARG (case-insensitive).
     _session_filter: str | None = None
 
-    if args.project:
+    if getattr(args, "delete_project", False):
+        # Dedicated multi-project and glob resolution is handled in the delete_project dispatch.
+        pass
+    elif args.project:
         # For `list sessions <ARG>`, apply project-scope PRECEDENCE non-fatally: if ARG
         # resolves to exactly one project use it (unchanged behavior); otherwise fall
         # back to a case-insensitive session filter instead of the fatal "no match" exit.
@@ -17906,34 +18023,196 @@ def _run_main() -> None:
             die(str(e))
         return
 
-    # Handle --delete-project (requires --project).
+    # Handle --delete-project (supports multiple projects and globs).
     if getattr(args, "delete_project", False):
-        if not _project_id:
+        raw_specs = getattr(args, "projects", None) or ([args.project] if getattr(args, "project", None) else [])
+        if not raw_specs:
             die("Error: 'ocman project delete' needs a project to identify.\n"
                 "Run 'ocman list projects' to see available projects.")
 
+        matched_projects, unmatched = resolve_project_targets(raw_specs)
+
+        if unmatched:
+            for spec in unmatched:
+                print(f"ocman: No matches found for {spec!r}.", file=sys.stderr)
+            print("Suggestions:", file=sys.stderr)
+            print("  - Run 'ocman list projects' to see valid targets", file=sys.stderr)
+            sys.exit(1)
+
+        if not matched_projects:
+            die("No projects found matching the specified criteria.")
+
+        days = getattr(args, "days", None)
+
+        if len(matched_projects) == 1:
+            proj = matched_projects[0]
+            _proj_id = proj["id"]
+            try:
+                db_delete_project_recursive(
+                    project_id=_proj_id,
+                    dry_run=args.dry_run,
+                    force=args.force,
+                    verbosity=verbosity,
+                    confirm=not getattr(args, "yes", False),
+                    extracts=getattr(args, "extracts", None),
+                    extract_output_dir=getattr(args, "extract_output_dir", None),
+                    pend_item=_make_pend_item("project-delete", str(proj.get("directory") or _proj_id),
+                                              snapshot={"project": proj.get("name") or _proj_id},
+                                              args={"age": getattr(args, "age", None),
+                                                    "days": days,
+                                                    "extracts": getattr(args, "extracts", None),
+                                                    "extract_output_dir": getattr(args, "extract_output_dir", None)}),
+                    pend=bool(getattr(args, "pend", False)),
+                    days=days,
+                )
+            except PendingDeferred:
+                return  # added to the pending list.
+            except Exception as e:
+                die(str(e))
+            return
+
+        # Multiple projects matched
+        action_desc = (f"clean sessions older than {days}d in {len(matched_projects)} projects"
+                       if days is not None else f"delete {len(matched_projects)} projects")
+
+        # Process lock check for the batch
         try:
-            db_delete_project_recursive(
-                project_id=_project_id,
-                dry_run=args.dry_run,
-                force=args.force,
-                verbosity=verbosity,
-                confirm=not getattr(args, "yes", False),
-                extracts=getattr(args, "extracts", None),
-                extract_output_dir=getattr(args, "extract_output_dir", None),
-                pend_item=_make_pend_item("project-delete", str(args.project or _project_id),
-                                          snapshot={"project": args.project},
-                                          args={"age": getattr(args, "age", None),
-                                                "days": getattr(args, "days", None),
-                                                "extracts": getattr(args, "extracts", None),
-                                                "extract_output_dir": getattr(args, "extract_output_dir", None)}),
-                pend=bool(getattr(args, "pend", False)),
-                days=getattr(args, "days", None),
+            pend_items = [
+                _make_pend_item(
+                    "project-delete",
+                    p["id"],
+                    snapshot={"project": p.get("name") or p["id"], "directory": p.get("directory")},
+                    args={
+                        "age": getattr(args, "age", None),
+                        "days": days,
+                        "extracts": getattr(args, "extracts", None),
+                        "extract_output_dir": getattr(args, "extract_output_dir", None),
+                    },
+                )
+                for p in matched_projects
+            ]
+            if getattr(args, "pend", False):
+                is_running = bool(detect_running_opencode(verbosity=0, broad=True))
+                if is_running:
+                    count = 0
+                    for item in pend_items:
+                        count = add_pending_item(item)
+                    print(color_yellow(f"{notice_prefix()} Added {len(pend_items)} action(s) to the pending list ({count} pending). "
+                                       "Run later with 'ocman pending run'."))
+                    return
+            check_opencode_process_lock(
+                args.force,
+                verbosity,
+                action=action_desc,
+                pend_item=pend_items[0] if len(pend_items) == 1 else None,
             )
         except PendingDeferred:
-            return  # added to the pending list.
-        except Exception as e:
-            die(str(e))
+            for item in pend_items:
+                add_pending_item(item)
+            return
+
+        # Query sessions and metrics for each project
+        import time as _time
+        total_sessions = 0
+        all_session_ids: list[str] = []
+        projects_summary = []
+
+        conn = None
+        sqlite3 = _get_sqlite()
+        if sqlite3 and OPENCODE_DB_PATH.exists():
+            try:
+                conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+                cursor = conn.cursor()
+                cutoff_time = int(_time.time() * 1000 - days * 86400000) if days is not None else None
+                for p in matched_projects:
+                    pid = p["id"]
+                    if cutoff_time is not None:
+                        cursor.execute("""
+                            WITH RECURSIVE session_tree(id) AS (
+                                SELECT id FROM session WHERE project_id = ? AND COALESCE(NULLIF(time_updated, 0), time_created) < ?
+                                UNION
+                                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                            )
+                            SELECT id FROM session_tree;
+                        """, (pid, cutoff_time))
+                    else:
+                        cursor.execute("""
+                            WITH RECURSIVE session_tree(id) AS (
+                                SELECT id FROM session WHERE project_id = ?
+                                UNION
+                                SELECT s.id FROM session s JOIN session_tree st ON s.parent_id = st.id
+                            )
+                            SELECT id FROM session_tree;
+                        """, (pid,))
+                    s_ids = [row[0] for row in cursor.fetchall()]
+                    all_session_ids.extend(s_ids)
+                    total_sessions += len(s_ids)
+                    projects_summary.append((p, s_ids))
+            finally:
+                if conn:
+                    conn.close()
+        else:
+            for p in matched_projects:
+                projects_summary.append((p, []))
+
+        print()
+        if days is not None:
+            print(color_bold(f"You are about to delete sessions older than {days} days across {len(matched_projects)} projects:"))
+        else:
+            print(color_bold(f"You are about to delete {len(matched_projects)} projects:"))
+
+        for p, s_ids in projects_summary:
+            p_name = p.get("name") or "(unnamed)"
+            p_dir = p.get("directory") or "(no worktree)"
+            print(f"  * {color_bold(p_name)} ({p['id']}) at {p_dir}: {len(s_ids)} session(s)")
+
+        print()
+        if days is not None:
+            print(f"Total: {total_sessions} session(s) across {len(matched_projects)} project(s).")
+        else:
+            print(f"Total: {len(matched_projects)} project(s), {total_sessions} session(s) and their messages/related data.")
+
+        if args.dry_run:
+            print()
+            print(f"{info_prefix()} Dry run complete. No database changes were made.")
+            return
+
+        print()
+        print(color_red("  THIS ACTION IS IRREVERSIBLE."))
+        print()
+
+        confirm = not getattr(args, "yes", False)
+        do_extract = resolve_extract_choice(
+            getattr(args, "extracts", None), not confirm, total_sessions
+        ) if total_sessions > 0 else False
+        if do_extract is None:
+            return
+
+        action_verb = "session cleanup" if days is not None else "project deletion"
+        if confirm:
+            if not confirm_destructive(
+                None, assume_yes=False, render=False, action_verb=action_verb
+            ):
+                return
+
+        for p in matched_projects:
+            try:
+                db_delete_project_recursive(
+                    project_id=p["id"],
+                    dry_run=False,
+                    force=True,
+                    verbosity=verbosity,
+                    confirm=False,
+                    extracts=do_extract,
+                    extract_output_dir=getattr(args, "extract_output_dir", None),
+                    pend=False,
+                    days=days,
+                )
+            except Exception as e:
+                print(color_yellow(f"Warning: failed to delete project {p['id']}: {e}"))
+
+        print()
+        print(color_green(f"[+] Successfully processed {len(matched_projects)} project(s)."))
         return
 
     # Handle --delete.
