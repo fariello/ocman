@@ -6311,6 +6311,7 @@ def _legacy_defaults(config: dict) -> dict:
         "yes": False,
         # browse / search
         "list_projects": False,
+        "dirs_only": False,
         "project": None,
         "projects": [],
         "list_sessions": False,
@@ -6707,6 +6708,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--limit", type=int, default=None, metavar="N",
                     help="Show at most N projects (a truncation note reports the rest).")
     sp.add_argument("--json", action="store_true", help="Emit machine-readable JSON.")
+    sp.add_argument("--dirs", "--dir", dest="dirs_only", action="store_true",
+                    help="Print only the project directories, one per line.")
 
     sp = new_action(p_project, pr_sub, "delete", help="Delete projects and all their sessions.")
     sp.add_argument("name", nargs="+", help="Project names, numbers, IDs, paths, or globs.")
@@ -7210,6 +7213,7 @@ def _normalize(ns: argparse.Namespace, config: dict) -> argparse.Namespace:
     elif group == "project":
         if action == "list":
             out["list_projects"] = True
+            out["dirs_only"] = bool(g("dirs_only", False))
             out["limit"] = g("limit", None)
             out["json_output"] = bool(g("json", False))
             out["projects_filter"] = g("pattern", None)
@@ -17654,6 +17658,24 @@ def _run_main() -> None:
                     emit_json("projects", {"count": 0, "withheld": 0, "projects": []})
                     return
                 die(f"No projects match filter: {_proj_filter!r}")
+        if getattr(args, "dirs_only", False):
+            withheld = 0
+            rows = projects
+            if _proj_limit is not None and _proj_limit >= 0 and len(rows) > _proj_limit:
+                withheld = len(rows) - _proj_limit
+                rows = rows[:_proj_limit]
+            if getattr(args, "json_output", False):
+                emit_json("projects", {
+                    "count": len(rows),
+                    "withheld": withheld,
+                    "directories": [p["directory"] for p in rows if p.get("directory")],
+                })
+                return
+            for p in rows:
+                d = p.get("directory")
+                if d:
+                    print(d)
+            return
         if getattr(args, "json_output", False):
             withheld = 0
             rows = projects

@@ -6660,6 +6660,106 @@ def test_cli_project_delete_multiple_with_age(temp_db, monkeypatch, capsys):
     conn.close()
 
 
+def test_lp_dirs_flag_parses(monkeypatch):
+    """'ocman lp --dirs', 'ocman project list --dirs', and '--dir' parse dirs_only."""
+    import sys
+    from ocman import parse_args
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "lp", "--dirs"])
+    args = parse_args()
+    assert args.list_projects is True
+    assert args.dirs_only is True
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "project", "list", "--dirs"])
+    args = parse_args()
+    assert args.list_projects is True
+    assert args.dirs_only is True
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "list", "projects", "--dir"])
+    args = parse_args()
+    assert args.list_projects is True
+    assert args.dirs_only is True
+
+
+def test_cli_lp_dirs_output(temp_db, monkeypatch, capsys):
+    """'ocman lp --dirs' outputs only project directories, one per line."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/user/proj_a', 'A')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s1', 'p1', 'S1', 1000)")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/home/user/proj_b', 'B')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s2', 'p2', 'S2', 2000)")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p3', '/home/user/proj_c', 'C')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s3', 'p3', 'S3', 3000)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "lp", "--dirs"])
+    ocman.main()
+
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines == ["/home/user/proj_c", "/home/user/proj_b", "/home/user/proj_a"]
+
+
+def test_cli_lp_dirs_with_pattern_and_limit(temp_db, monkeypatch, capsys):
+    """'ocman lp --dirs' works with pattern filtering and limit."""
+    import sys
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/user/alpha', 'Alpha')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s1', 'p1', 'S1', 1000)")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/home/user/beta', 'Beta')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s2', 'p2', 'S2', 2000)")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p3', '/home/user/gamma', 'Gamma')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s3', 'p3', 'S3', 3000)")
+    conn.commit()
+    conn.close()
+
+    # Pattern filter
+    monkeypatch.setattr(sys, "argv", ["ocman", "lp", "beta", "--dirs"])
+    ocman.main()
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines == ["/home/user/beta"]
+
+    # Limit
+    monkeypatch.setattr(sys, "argv", ["ocman", "lp", "--dirs", "--limit", "2"])
+    ocman.main()
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines == ["/home/user/gamma", "/home/user/beta"]
+
+
+def test_cli_lp_dirs_with_json(temp_db, monkeypatch, capsys):
+    """'ocman lp --dirs --json' outputs json with directories array."""
+    import sys
+    import json
+    import sqlite3
+    import ocman
+
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p1', '/home/user/repo1', 'R1')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s1', 'p1', 'S1', 1000)")
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('p2', '/home/user/repo2', 'R2')")
+    cursor.execute("INSERT INTO session (id, project_id, title, time_updated) VALUES ('s2', 'p2', 'S2', 2000)")
+    conn.commit()
+    conn.close()
+
+    monkeypatch.setattr(sys, "argv", ["ocman", "lp", "--dirs", "--json"])
+    ocman.main()
+
+    data = json.loads(capsys.readouterr().out)
+    assert data["projects"]["count"] == 2
+    assert data["projects"]["directories"] == ["/home/user/repo2", "/home/user/repo1"]
+
+
+
 
 
 
