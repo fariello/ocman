@@ -4838,6 +4838,32 @@ def _fmt_time_since(epoch_ms) -> str:
         return "-"
 
 
+def _fmt_relative_time(epoch_ms) -> str:
+    """Format an epoch-ms timestamp as a concise relative time (e.g. '2m ago', '1h5m ago', '1d ago')."""
+    if not epoch_ms:
+        return "-"
+    try:
+        import time
+        now_s = time.time()
+        start_s = int(epoch_ms) / 1000.0
+        diff_s = int(now_s - start_s)
+        if diff_s < 0:
+            return "just now"
+        if diff_s < 60:
+            return f"{diff_s}s ago"
+        if diff_s < 3600:
+            return f"{diff_s // 60}m ago"
+        if diff_s < 86400:
+            h = diff_s // 3600
+            m = (diff_s % 3600) // 60
+            return f"{h}h{m}m ago" if m else f"{h}h ago"
+        d = diff_s // 86400
+        h = (diff_s % 86400) // 3600
+        return f"{d}d{h}h ago" if h else f"{d}d ago"
+    except (TypeError, ValueError, OSError, OverflowError):
+        return "-"
+
+
 def _display_worktree(worktree: str) -> str:
     """
     Human-friendly label for a project worktree.
@@ -8499,10 +8525,15 @@ def detect_running_instances(*, all_users: bool = False, probe: bool = False,
             auth = "n/a"  # no listener -> not an auth surface
         exposed = any(not _bind_is_loopback(b) for b in binds)
         vulnerable = bool(binds) and auth == "unsecured"
+        sess = _attribute_session(p)
+        last_act = sess.get("last_active")
         out.append({
             **p, "kind": kind, "listeners": binds, "auth": auth,
             "exposed": exposed, "vulnerable": vulnerable,
-            "session": _attribute_session(p),
+            "session": sess,
+            "last_active": last_act,
+            "last_active_str": _fmt_relative_time(last_act) if last_act else None,
+            "last_active_ts": _fmt_ts(last_act) if last_act else None,
         })
     return out
 
@@ -8658,10 +8689,10 @@ def _attribute_session(p: dict, *, reliable: bool = False) -> dict:
     """Best-effort session attribution with PROVENANCE (never a fabricated 1:1).
 
     Order: if reliable=True, try log-correlated active session (_active_session_for_process).
-    If that yields a session, lookup title and directory/project, label 'log-active'.
+    If that yields a session, lookup title, directory/project, and last activity, label 'log-active'.
     Otherwise fall through to: argv `-s <id>` hint -> DB lookup (label 'launched-with');
     else cwd session(s) via db_list_sessions_under_dir (label 'directory').
-    Returns {id|ids, provenance, cost, title, ...} or {provenance: 'unknown'}.
+    Returns {id|ids, provenance, cost, title, last_active, ...} or {provenance: 'unknown'}.
     """
     if reliable and p.get("pid"):
         try:
@@ -8672,9 +8703,12 @@ def _attribute_session(p: dict, *, reliable: bool = False) -> dict:
                 found = db_find_session(sid)
                 directory = found[1] if found else cwd
                 project_id = found[2] if found else ""
+                last_active = db_session_last_activity(sid)
                 res = {"id": sid, "provenance": "log-active", "directory": directory, "project_id": project_id}
                 if title:
                     res["title"] = title
+                if last_active:
+                    res["last_active"] = last_active
                 return res
         except Exception:
             pass
@@ -8684,16 +8718,21 @@ def _attribute_session(p: dict, *, reliable: bool = False) -> dict:
         sid = m.group(1)
         found = db_find_session(sid)
         title = db_session_title(sid)
+        last_active = db_session_last_activity(sid)
         if found:
             _id, directory, project_id = found
             res = {"id": sid, "provenance": "launched-with (may be stale)",
                    "directory": directory, "project_id": project_id}
             if title:
                 res["title"] = title
+            if last_active:
+                res["last_active"] = last_active
             return res
         res = {"id": sid, "provenance": "argv hint (not in DB)"}
         if title:
             res["title"] = title
+        if last_active:
+            res["last_active"] = last_active
         return res
     cwd = p.get("cwd") or ""
     if cwd:
@@ -8703,8 +8742,12 @@ def _attribute_session(p: dict, *, reliable: bool = False) -> dict:
             sess = []
         if sess:
             total_cost = sum((s.get("cost") or 0.0) for s in sess)
-            return {"ids": [s["id"] for s in sess][:5], "count": len(sess),
-                    "provenance": "directory (one-to-many)", "cost": total_cost}
+            last_active = max([(s.get("time_updated") or s.get("time_created") or 0) for s in sess] or [0])
+            res = {"ids": [s["id"] for s in sess][:5], "count": len(sess),
+                   "provenance": "directory (one-to-many)", "cost": total_cost}
+            if last_active:
+                res["last_active"] = last_active
+            return res
     return {"provenance": "unknown"}
 
 
@@ -10563,6 +10606,42 @@ def db_session_title(session_id: str) -> str | None:
         if row and row[0]:
             return str(row[0])
         return None
+    except Exception:
+        return None
+    finally:
+        if conn:
+            conn.close()
+
+
+def db_session_last_activity(session_id: str) -> int | None:
+    """Find latest activity timestamp (epoch ms) for a session ID.
+
+    Checks session (time_updated, time_created) and message table.
+    Returns epoch ms (int) or None.
+    """
+    sqlite3 = _get_sqlite()
+    if sqlite3 is None or not OPENCODE_DB_PATH.exists():
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+        cursor = conn.cursor()
+        cursor.execute("SELECT time_created, time_updated FROM session WHERE id = ?", (session_id,))
+        s_row = cursor.fetchone()
+        if not s_row:
+            return None
+        t_created, t_updated = s_row
+        try:
+            cursor.execute(
+                "SELECT MAX(COALESCE(time_updated, time_created)) FROM message WHERE session_id = ?",
+                (session_id,),
+            )
+            m_row = cursor.fetchone()
+            m_time = m_row[0] if m_row and m_row[0] else None
+        except Exception:
+            m_time = None
+        candidates = [t for t in (t_updated, m_time, t_created) if t is not None and t > 0]
+        return max(candidates) if candidates else None
     except Exception:
         return None
     finally:
@@ -13705,13 +13784,13 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
         return
 
     print(color_bold(f"Running OpenCode instances ({len(instances)}, {scope}):"))
-    # The Session column is speculative (a TUI's -s ses_... argv can be stale), and it
-    # makes the row very wide, so it is shown only with --long.
-    header = ["PID", "User", "TTY", "Uptime", "Kind", "Listener", "Auth?", "Project"]
-    align = ["r", "l", "l", "r", "l", "l", "l", "l"]
+    # Two-line layout with session and last activity is shown with --long.
     if long_output:
-        header.append("Session")
-        align.append("l")
+        header = ["PID", "User", "TTY", "Uptime", "Kind", "Listener", "Auth?", "Last Active", "Project / Session"]
+        align = ["r", "l", "l", "r", "l", "l", "l", "l", "l"]
+    else:
+        header = ["PID", "User", "TTY", "Uptime", "Kind", "Listener", "Auth?", "Project"]
+        align = ["r", "l", "l", "r", "l", "l", "l", "l"]
     # Compact borderless table (style='none') with bold header row, no colors.
     table = vistab.Vistab(style="none", padding=0, header=header)
     table.set_color(_color_enabled())
@@ -13754,20 +13833,32 @@ def cli_list_running(*, all_users: bool = False, probe: bool = False,
             auth_cell = _auth_cell(it["auth"])
             proj_cell = proj
 
-        row = [pid_cell, user_cell, tty_cell, uptime_cell, kind_cell,
-               listener_cell, auth_cell, proj_cell]
         if long_output:
             sess_attr = _attribute_session(it, reliable=True)
+            last_act = sess_attr.get("last_active") or it.get("last_active")
+            rel_time = _fmt_relative_time(last_act) if last_act else "-"
+            abs_time = _fmt_ts(last_act) if last_act else "-"
             sess_cell = _sess_str(sess_attr)
             if is_shared_proj:
                 sess_cell = color_yellow(sess_cell)
-            row.append(sess_cell)
-        table.add_row(row)
+                rel_time = color_yellow(rel_time)
+                abs_time = color_yellow(abs_time)
+
+            row1 = [pid_cell, user_cell, tty_cell, uptime_cell, kind_cell,
+                    listener_cell, auth_cell, rel_time, proj_cell]
+            row2 = ["", "", "", "", "",
+                    "", "", abs_time, sess_cell]
+            table.add_row(row1)
+            table.add_row(row2)
+        else:
+            row = [pid_cell, user_cell, tty_cell, uptime_cell, kind_cell,
+                   listener_cell, auth_cell, proj_cell]
+            table.add_row(row)
     table.set_cols_align(align)
     print(table.draw())
     if not long_output:
-        print(color_dim("  (Session column hidden; re-run with --long to show best-guess "
-                        "session ids.)"))
+        print(color_dim("  (Session and last activity details hidden; re-run with --long to show "
+                        "session and activity details.)"))
 
     # Loud banner for vulnerable / exposed listeners.
     vulns = [it for it in instances if it["vulnerable"]]

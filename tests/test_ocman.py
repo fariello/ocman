@@ -5777,6 +5777,88 @@ def test_list_running_tty_column_and_borderless(monkeypatch, capsys):
 
 
 @_linux_only
+def test_list_running_long_two_line_layout_and_last_activity(monkeypatch, capsys):
+    """`list running --long` renders a 2-line layout per running instance including Last Activity."""
+    import time
+    now_ms = int(time.time() * 1000)
+    inst = {
+        "pid": 555,
+        "user": "alice",
+        "tty": "pts/1",
+        "elapsed": "25m",
+        "kind": "tui",
+        "listeners": [],
+        "exposed": False,
+        "auth": "secured",
+        "vulnerable": False,
+        "cwd": "/path/to/myproj",
+        "project": "proj_xyz",
+        "session": {
+            "id": "ses_active123",
+            "title": "Working on feature X",
+            "provenance": "log-active",
+            "last_active": now_ms - 120000,  # 2m ago
+        },
+        "last_active": now_ms - 120000,
+    }
+    monkeypatch.setattr(ocman.cli, "detect_running_instances", lambda **k: [inst])
+    monkeypatch.setattr(ocman.cli, "_is_detached", lambda it: False)
+    monkeypatch.setattr(ocman.cli, "_attribute_session", lambda it, reliable=False: it["session"])
+
+    ocman.cli.cli_list_running(long_output=True)
+    out = capsys.readouterr().out
+
+    assert "Last Active" in out
+    assert "Project / Session" in out
+    assert "555" in out
+    assert "2m ago" in out
+    assert "/path/to/myproj" in out
+    assert "ses_active123" in out
+    assert "Working on feature X" in out
+
+    # Verify 2 rows for this process
+    lines = [line for line in out.splitlines() if line.strip()]
+    header_line = next(l for l in lines if "PID" in l)
+    data_lines = [l for l in lines if "555" in l or "ses_active123" in l]
+    assert len(data_lines) == 2
+    # Line 1 contains PID and Project
+    assert "555" in data_lines[0] and "/path/to/myproj" in data_lines[0]
+    # Line 2 contains Session ID & Title
+    assert "ses_active123" in data_lines[1] and "Working on feature X" in data_lines[1]
+
+
+@_linux_only
+def test_db_session_last_activity(temp_db, monkeypatch):
+    """db_session_last_activity resolves the latest timestamp from session and message tables."""
+    conn = sqlite3.connect(str(temp_db))
+    cur = conn.cursor()
+    cur.execute("INSERT INTO project (id, worktree, name) VALUES ('p_test', '/p_test', 'Test')")
+    cur.execute(
+        "INSERT INTO session (id, project_id, title, time_created, time_updated, directory) "
+        "VALUES ('ses_act', 'p_test', 'Act Title', 1000, 2000, '/p_test')"
+    )
+    conn.commit()
+
+    # With session table only:
+    monkeypatch.setattr(ocman.cli, "OPENCODE_DB_PATH", temp_db)
+    last_act = ocman.cli.db_session_last_activity("ses_act")
+    assert last_act == 2000
+
+    # With message table columns:
+    cur.execute("ALTER TABLE message ADD COLUMN time_created INTEGER")
+    cur.execute("ALTER TABLE message ADD COLUMN time_updated INTEGER")
+    cur.execute(
+        "INSERT INTO message (id, session_id, time_created, time_updated) "
+        "VALUES ('m1', 'ses_act', 2500, 3000)"
+    )
+    conn.commit()
+    conn.close()
+
+    last_act_msg = ocman.cli.db_session_last_activity("ses_act")
+    assert last_act_msg == 3000
+
+
+@_linux_only
 def test_kill_no_tty_batch_kills_detached(monkeypatch, capsys):
     inst_att = {"pid": 201, "user": "me", "tty": "pts/2", "elapsed": "1h", "kind": "tui",
                 "listeners": [], "exposed": False, "auth": "secured", "cwd": "/p1", "project": "p1", "session": {}}
