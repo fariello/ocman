@@ -4819,8 +4819,12 @@ def test_resolve_extract_choice_prompt_yes_and_no(monkeypatch):
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: "")
     assert ocman.resolve_extract_choice(None, False, 1) is True
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
-    assert ocman.resolve_extract_choice(None, False, 1) is None
+    assert ocman.resolve_extract_choice(None, False, 1) is False
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "no")
+    assert ocman.resolve_extract_choice(None, False, 1) is False
     monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()))
+    assert ocman.resolve_extract_choice(None, False, 1) is None
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "unrecognized")
     assert ocman.resolve_extract_choice(None, False, 1) is None
 
 
@@ -6393,9 +6397,9 @@ def test_project_delete_extract_choice_cancelled_exits_immediately(temp_db, monk
     conn.commit()
     conn.close()
 
-    # User answers 'n' to the extract prompt
+    # User interrupts the extract prompt
     monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
-    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: (_ for _ in ()).throw(KeyboardInterrupt()))
 
     # If confirm_destructive were called, it would be an error
     confirm_called = []
@@ -6411,6 +6415,60 @@ def test_project_delete_extract_choice_cancelled_exits_immediately(temp_db, monk
     cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess1'")
     assert cursor.fetchone()[0] == 1
     conn.close()
+
+
+def test_project_delete_extract_choice_no_proceeds_to_confirm_and_deletes_without_extract(temp_db, monkeypatch):
+    import ocman.cli
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("INSERT INTO project (id, worktree, name) VALUES ('proj1', '/path/to/proj', 'Test Proj')")
+    cursor.execute("""
+        INSERT INTO session (id, project_id, parent_id, title, time_created, time_updated, cost, tokens_input, tokens_output)
+        VALUES ('sess1', 'proj1', NULL, 'Session 1', 1000, 2000, 0.10, 1000, 500)
+    """)
+    conn.commit()
+    conn.close()
+
+    # User answers 'n' to the extract prompt
+    monkeypatch.setattr(ocman.sys.stdin, "isatty", lambda: True)
+    monkeypatch.setattr("builtins.input", lambda *_a, **_k: "n")
+
+    confirm_called = []
+    monkeypatch.setattr(ocman.cli, "confirm_destructive", lambda *a, **k: confirm_called.append(True) or True)
+
+    extracted_called = []
+    monkeypatch.setattr(ocman.cli, "extract_sessions_before_delete", lambda *a, **k: extracted_called.append(True) or [])
+
+    ocman.cli.db_delete_project_recursive("proj1", dry_run=False, force=True, verbosity=0, confirm=True)
+
+    # confirm_destructive must have been called
+    assert confirm_called == [True]
+    # recovery extraction must NOT have been called
+    assert not extracted_called
+
+    # Verify session and project ARE deleted
+    conn = sqlite3.connect(str(temp_db))
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM session WHERE id = 'sess1'")
+    assert cursor.fetchone()[0] == 0
+    cursor.execute("SELECT COUNT(*) FROM project WHERE id = 'proj1'")
+    assert cursor.fetchone()[0] == 0
+    conn.close()
+
+
+def test_project_delete_no_backup_flag_skips_extract(temp_db, tmp_path, monkeypatch):
+    import sys
+    _seed_extract_db(temp_db)
+    monkeypatch.setattr(ocman, "confirm_destructive", lambda *a, **k: True)
+    out = tmp_path / "recovery"
+    orig_argv = sys.argv
+    sys.argv = ["ocman", "--db", str(temp_db), "project", "delete", "P1",
+                "--no-backup", "-o", str(out), "--force", "-y"]
+    try:
+        ocman.main()
+    finally:
+        sys.argv = orig_argv
+    assert not out.exists()
 
 
 def test_ocman_db_lock_exclusive_blocks_concurrent_writer(temp_db):

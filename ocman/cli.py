@@ -6524,7 +6524,7 @@ def _add_extract_opts(p: argparse.ArgumentParser) -> None:
     grp = p.add_mutually_exclusive_group()
     grp.add_argument("--extracts", dest="extracts", action="store_true", default=None,
                      help="Write recovery files before deleting (skips the extract prompt).")
-    grp.add_argument("--no-extracts", dest="extracts", action="store_false",
+    grp.add_argument("--no-extracts", "--no-backup", dest="extracts", action="store_false",
                      help="Do not write recovery files before deleting (skips the extract prompt).")
     p.add_argument("-o", "--output-dir", dest="extract_output_dir", default=None, metavar="DIR",
                    help="Directory for delete-time recovery extracts (default: ./opencode-recovery).")
@@ -9010,6 +9010,14 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
         ):
             return
 
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            cursor = None
+
         with ocman_db_lock(action=f"delete session {clean_sid}", exclusive=True):
             # Create backup directory and backup database file family
             from datetime import datetime
@@ -9031,7 +9039,9 @@ def db_delete_session_recursive(session_id: str, dry_run: bool, force: bool, ver
                 print(color_red("    Aborting deletion for safety."))
                 return
 
-            # Perform deletion
+            # Perform deletion on a fresh connection
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
             size_before = get_file_size_local(OPENCODE_DB_PATH)
             print(f"{info_prefix()} Starting transaction...")
             cursor.execute("PRAGMA foreign_keys = OFF;")
@@ -9360,7 +9370,8 @@ def resolve_extract_choice(
     Tri-state input: True (--extracts), False (--no-extracts), None (ask).
     `assume_yes` (-y/--yes) implies extract=yes with no prompt. When None and
     interactive, ask a single combined question; default is yes.
-    Answering no ('n'/'no') or interrupting (Ctrl-C/EOF) cancels the operation (returns None).
+    Answering no ('n'/'no') declines extraction and proceeds with deletion (returns False).
+    Interrupting (Ctrl-C/EOF) or entering an unrecognized response cancels the operation (returns None).
     """
     if extracts is not None:
         return extracts
@@ -9377,6 +9388,8 @@ def resolve_extract_choice(
         return None
     if answer in ("", "y", "yes"):
         return True
+    if answer in ("n", "no"):
+        return False
     print("Cancelled.")
     return None
 
@@ -9505,6 +9518,14 @@ def db_delete_sessions_batch(
         print()
         print(color_red("  THIS ACTION IS IRREVERSIBLE."))
 
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            cursor = None
+
         with ocman_db_lock(action="batch delete sessions", exclusive=True):
             # 4. ONE rollback family backup for the whole batch.
             backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
@@ -9524,7 +9545,9 @@ def db_delete_sessions_batch(
                 print(color_red("    Aborting deletion for safety."))
                 return
 
-            # 5. ONE transaction: delete session rows, then any now-empty targeted projects.
+            # 5. ONE transaction on a fresh connection: delete session rows, then any now-empty targeted projects.
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
             size_before = get_file_size_local(OPENCODE_DB_PATH)
             print(f"{info_prefix()} Starting transaction...")
             cursor.execute("PRAGMA foreign_keys = OFF;")
@@ -9858,6 +9881,14 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
             except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
                 print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            cursor = None
+
         with ocman_db_lock(action=f"delete project '{proj_name}'", exclusive=True):
             # Create backup directory and backup database file family
             from datetime import datetime
@@ -9879,7 +9910,9 @@ def db_delete_project_recursive(project_id: str, dry_run: bool, force: bool, ver
                 print(color_red("    Aborting deletion for safety."))
                 return
 
-            # Perform deletion
+            # Perform deletion on a fresh connection
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
             size_before = get_file_size_local(OPENCODE_DB_PATH)
             print(f"{info_prefix()} Starting transaction...")
             cursor.execute("PRAGMA foreign_keys = OFF;")
@@ -10170,6 +10203,14 @@ def db_delete_projects_batch(
                         "sessions_count": 0,
                     }
 
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            cursor = None
+
         with ocman_db_lock(action=f"delete {len(projects)} projects", exclusive=True):
             # 1. Single database family backup
             backup_dir = Path.home() / ".local" / "share" / "opencode" / "backups" / f"opencode-db-cleanup-{get_startup_timestamp_local()}"
@@ -10190,7 +10231,9 @@ def db_delete_projects_batch(
                 print(color_red("    Aborting deletion for safety."))
                 return
 
-            # 2. Deletion transaction
+            # 2. Deletion transaction on a fresh connection
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
             size_before = get_file_size_local(OPENCODE_DB_PATH)
             print(f"{info_prefix()} Starting transaction...")
             cursor.execute("PRAGMA foreign_keys = OFF;")
@@ -12510,6 +12553,14 @@ def db_run_cleanup(
             except Exception as exc:  # noqa: BLE001 - extraction must never block a delete
                 print(color_yellow(f"Warning: recovery extraction failed: {exc}"))
 
+        if conn is not None:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            conn = None
+            cursor = None
+
         with ocman_db_lock(action="db clean", exclusive=True):
             # 4. Create database backup family
             from datetime import datetime
@@ -12531,7 +12582,9 @@ def db_run_cleanup(
                 print(color_red("    Aborting cleanup for safety."))
                 return
 
-            # Measure database size before deletion/vacuum
+            # Measure database size before deletion/vacuum on a fresh connection
+            conn = sqlite3.connect(str(OPENCODE_DB_PATH))
+            cursor = conn.cursor()
             db_size_orig = get_file_size_local(OPENCODE_DB_PATH)
             print(f"{info_prefix()} Starting transaction...")
             cursor.execute("PRAGMA foreign_keys = OFF;")
